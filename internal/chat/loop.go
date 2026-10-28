@@ -71,13 +71,13 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			continue
 		}
 		if message == "/ovh" {
-			if err := runOVHSetup(ctx, scanner, w, store); err != nil {
+			if err := runOVHSetup(ctx, scanner, w, store, picker); err != nil {
 				return err
 			}
 			continue
 		}
 		if message == "/env" {
-			if err := runEnvironmentFileSetup(scanner, w, store, picker); err != nil {
+			if err := runEnvironmentFileSetup(scanner, w, store, picker, "Next command: /ovh to run the preflight and review the provisioning confirmation."); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -103,7 +103,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 	}
 }
 
-func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker) error {
+func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, next string) error {
 	fmt.Fprintln(output, ovhEnvironmentFileGuidance)
 	if err := output.Flush(); err != nil {
 		return err
@@ -127,10 +127,10 @@ func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store
 		fmt.Fprintf(output, "Environment file rejected: %v\n", err)
 		return nil
 	}
-	return reviewEnvironmentValues(scanner, output, store, values)
+	return reviewEnvironmentValues(scanner, output, store, values, next)
 }
 
-func reviewEnvironmentValues(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, values map[string]string) error {
+func reviewEnvironmentValues(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, values map[string]string, next string) error {
 	fmt.Fprintln(output, "Review environment values (values are masked):")
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -159,7 +159,10 @@ func reviewEnvironmentValues(scanner *bufio.Scanner, output *bufio.Writer, store
 		return err
 	}
 	fmt.Fprintln(output, "Environment values saved locally.")
-	fmt.Fprintln(output, "Next command: /ovh to run the preflight and review the provisioning confirmation.")
+	fmt.Fprintln(output, "The imported file replaces the previous saved set.")
+	if next != "" {
+		fmt.Fprintln(output, next)
+	}
 	return nil
 }
 

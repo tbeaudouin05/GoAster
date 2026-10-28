@@ -9,12 +9,13 @@ import (
 
 	"goaster/internal/localenv"
 	"goaster/internal/ovh"
+	"goaster/internal/telegram"
 )
 
 // runOVHSetup is local-only: no settings are passed to the chat provider.
-func runOVHSetup(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store) error {
+func runOVHSetup(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker) error {
 	ssh := ovh.OpenSSH{}
-	return runOVHSetupWithDependencies(ctx, scanner, out, store, ovh.DefaultHTTPClient(), ssh, ssh)
+	return runOVHSetupWithOptionsAndPicker(ctx, scanner, out, store, ovh.DefaultHTTPClient(), ssh, ssh, ovh.EnsureLocalKeyPair, ovh.ResolveGoasterCommit, picker)
 }
 
 func runOVHSetupWithDependencies(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, httpClient ovh.HTTPClient, ssh ovh.SSHRunner, remote ovh.RemoteRunner) error {
@@ -22,6 +23,10 @@ func runOVHSetupWithDependencies(ctx context.Context, scanner *bufio.Scanner, ou
 }
 
 func runOVHSetupWithDependenciesAndOptions(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, httpClient ovh.HTTPClient, ssh ovh.SSHRunner, remote ovh.RemoteRunner, keyPair func() (ovh.KeyPair, error), commit func() (string, error)) error {
+	return runOVHSetupWithOptionsAndPicker(ctx, scanner, out, store, httpClient, ssh, remote, keyPair, commit, nativeEnvironmentFilePicker{})
+}
+
+func runOVHSetupWithOptionsAndPicker(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, httpClient ovh.HTTPClient, ssh ovh.SSHRunner, remote ovh.RemoteRunner, keyPair func() (ovh.KeyPair, error), commit func() (string, error), picker EnvironmentFilePicker) error {
 	if store == nil {
 		fmt.Fprintln(out, "OVH configuration rejected: environment settings store is unavailable.")
 		return out.Flush()
@@ -88,7 +93,73 @@ func runOVHSetupWithDependenciesAndOptions(ctx context.Context, scanner *bufio.S
 	}
 	fmt.Fprintf(out, "OVH onboarding complete: project=%s region=%s image_id=%s flavor_id=%s ssh_key_id=%s server_id=%s public_ip=%s commit=%s service=%s\n", result.Plan.ProjectID, result.Plan.Region, result.Plan.ImageID, result.Plan.FlavorID, result.Plan.SSHKeyID, result.ServerID, result.IP, result.Commit, result.ServiceStatus)
 	fmt.Fprintln(out, "The service is running; authenticate the remote GoAster account separately before using chat.")
-	return out.Flush()
+	return offerTelegramSetup(ctx, scanner, out, store, picker, remote, ovh.Target{IP: result.IP, User: result.Plan.SSHUser, PrivateKey: pair.PrivateKeyPath})
+}
+
+type telegramSetupRunner interface {
+	SetupTelegram(context.Context, ovh.Target, string, string) error
+}
+
+// The target exists only while this post-provisioning prompt is running.
+func offerTelegramSetup(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, remote ovh.RemoteRunner, target ovh.Target) error {
+	fmt.Fprintln(out, "Optional Telegram setup transfers only TELEGRAM_BOT_TOKEN over SSH and starts a private, outbound-only adapter.")
+	fmt.Fprintln(out, "Create a bot with @BotFather and import its token with the OVH settings using /env. The target is retained only during this workflow.")
+	var code, hash string
+	for {
+		fmt.Fprint(out, "Type SETUP TELEGRAM to confirm, /env to import settings, or anything else to skip: ")
+		if err := out.Flush(); err != nil {
+			return err
+		}
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				return fmt.Errorf("read Telegram setup confirmation: %w", err)
+			}
+			fmt.Fprintln(out, "\nTelegram setup skipped.")
+			return out.Flush()
+		}
+		answer := strings.TrimSpace(scanner.Text())
+		if answer == "/env" {
+			if err := runEnvironmentFileSetup(scanner, out, store, picker, ""); err != nil {
+				return err
+			}
+			fmt.Fprintln(out, "Back in Telegram setup for the server just provisioned.")
+			continue
+		}
+		if answer != "SETUP TELEGRAM" {
+			fmt.Fprintln(out, "Telegram setup skipped.")
+			return out.Flush()
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		token := store.Values()["TELEGRAM_BOT_TOKEN"]
+		if err := telegram.ValidateToken(token); err != nil {
+			fmt.Fprintln(out, "Telegram token is missing or invalid. Use /env with the token and all OVH variables; the import replaces the saved set.")
+			continue
+		}
+		runner, ok := remote.(telegramSetupRunner)
+		if !ok {
+			fmt.Fprintln(out, "Telegram setup is unavailable for this SSH runner.")
+			return out.Flush()
+		}
+		if code == "" {
+			var err error
+			code, hash, err = telegram.PairingCode()
+			if err != nil {
+				fmt.Fprintln(out, "Telegram pairing code could not be generated.")
+				return out.Flush()
+			}
+		}
+		if err := runner.SetupTelegram(ctx, target, token, hash); err != nil {
+			// SSH errors can contain command output or URLs; never print them.
+			fmt.Fprintln(out, "Telegram setup or service verification failed; remote setup may be incomplete. Check the bot token, outbound access and webhook settings, then retry or skip.")
+			continue
+		}
+		fmt.Fprintln(out, "Telegram service is active and polling. Pair exactly one Telegram account in a private chat with your bot:")
+		fmt.Fprintf(out, "  /start %s\n", code)
+		fmt.Fprintln(out, "Keep this one-time code private. Authenticate the remote GoAster account separately before asking questions.")
+		return out.Flush()
+	}
 }
 
 func chooseOVHOption(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, kind string, choices []ovh.Choice) (string, error) {

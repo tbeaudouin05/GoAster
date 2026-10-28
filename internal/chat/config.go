@@ -31,6 +31,12 @@ func ParseRuntimeConfig(args []string, output io.Writer) (RuntimeConfig, error) 
 	var config RuntimeConfig
 	flags := flag.NewFlagSet("goaster", flag.ContinueOnError)
 	flags.SetOutput(output)
+	flags.Usage = func() {
+		fmt.Fprintln(output, "Usage: goaster [options]")
+		flags.PrintDefaults()
+		fmt.Fprintln(output, "For Telegram, create a bot with @BotFather and save TELEGRAM_BOT_TOKEN in the local /env file alongside all OVH variables; /env replaces the saved set.")
+		fmt.Fprintln(output, "After /ovh succeeds, type SETUP TELEGRAM at its separate confirmation prompt to transfer the token and pair one private account.")
+	}
 	flags.StringVar(&config.PrimaryModel, "primary-model", DefaultPrimaryModel, "primary model name")
 	flags.StringVar(&config.FallbackModel, "fallback-model", DefaultFallbackModel, "fallback model name")
 	flags.StringVar(&config.AuthFile, "auth-file", "", "path for the local OpenAI subscription credentials")

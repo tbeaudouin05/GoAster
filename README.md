@@ -62,15 +62,18 @@ permission to list projects, regions, images, flavors, and SSH keys, to create a
 project SSH key, and to create and read instances. It never deletes an
 instance.
 
-Prepare a local text file with one `KEY=VALUE` pair per line. Only the OVH API
-settings below are needed; `OVH_ENDPOINT` accepts `ovh-eu`, `ovh-ca`, or
-`ovh-us`.
+For Telegram, create a new bot by talking to [@BotFather](https://t.me/BotFather)
+in Telegram and following its instructions. Keep the bot token private. Prepare
+a local text file with one `KEY=VALUE` pair per line. The four OVH settings are
+needed for provisioning; add `TELEGRAM_BOT_TOKEN` if you want the optional
+Telegram setup. `OVH_ENDPOINT` accepts `ovh-eu`, `ovh-ca`, or `ovh-us`.
 
 ```text
 OVH_ENDPOINT=replace-with-your-ovh-endpoint
 OVH_APPLICATION_KEY=replace-with-your-application-key
 OVH_APPLICATION_SECRET=replace-with-your-application-secret
 OVH_CONSUMER_KEY=replace-with-your-consumer-key
+TELEGRAM_BOT_TOKEN=replace-with-your-bot-token
 ```
 
 On `/ovh`, GoAster creates or reuses an Ed25519 pair at
@@ -90,7 +93,9 @@ non-regular file leaves saved settings unchanged. The file must contain one
 pair per line and be no larger than 1 MiB. On Linux, the desktop must provide a
 Zenity-compatible helper such as `zenity`, `qarma`, or `matedialog`. Confirmed
 settings replace the previous set at `~/.goaster/env`, with `0600` permissions
-inside a `0700` directory. The importer also accepts other valid names.
+inside a `0700` directory. **Each `/env` import replaces the entire saved set**:
+when adding a bot token, include all four OVH variables in the same file. The
+importer also accepts other valid names; Telegram needs no other local secret.
 
 When you are ready, enter `/ovh`. GoAster validates the stored settings and
 local key, contacts the OVH API to discover and validate the target, and
@@ -98,8 +103,9 @@ displays the proposed IDs, names, repository, commit, and hourly billing. Type
 exactly `CREATE` to authorize the key upload if needed, server creation, and
 subsequent SSH installation; any other response cancels. The workflow waits
 for an active instance and public IP, checks SSH as `goaster`, clones the
-public repository at the derived commit, installs required packages and both
-GoAster binaries, and enables and checks `goaster-agent.service`. The image must support
+public repository at the derived commit, installs required packages and the
+GoAster, agent, and Telegram adapter binaries, and enables and checks
+`goaster-agent.service`. The image must support
 passwordless `sudo`, `apt`, and systemd, and have outbound access to Ubuntu
 package sources, GitHub, and Go module sources. The local machine needs
 OpenSSH; `StrictHostKeyChecking=accept-new` trusts an unseen host key on first
@@ -113,17 +119,51 @@ can inspect or delete it yourself. A failed create request can have an unknown
 outcome even when no ID is returned; check the OVH project before retrying to
 avoid creating a second billable server.
 
+After successful provisioning, GoAster offers a separate optional Telegram
+prompt. Type exactly `SETUP TELEGRAM` to authorize sending the bot token to the
+new server and starting the adapter; any other answer skips it. You can also
+enter `/env` at this prompt to import or correct the local file before
+confirming. The SSH target is retained only during this provisioning workflow;
+skipping or ending it discards the target. Running `/ovh` again creates another
+billable server after its own confirmation.
+
+Only the bot token and a verifier for an independently generated one-time
+pairing code are sent over SSH stdin. OVH credentials, OpenAI credentials, and
+the SSH private key are not transferred. The token is stored on the server in
+`/etc/goaster/telegram-token`, owned by root with `0600` permissions; neither
+the token nor the Telegram API URL is placed in a command, systemd unit, or
+log. `goaster-telegram.service` runs only after the separate confirmation and
+is verified after its first successful polling request. Use a fresh bot without
+a webhook; a webhook prevents polling. The server needs outbound HTTPS access
+to Telegram. The adapter uses long polling and opens no inbound port.
+
+When startup succeeds, GoAster displays a one-time pairing command. In a
+**private** Telegram chat with your new bot, send the displayed command:
+
+```text
+/start YOUR-ONE-TIME-CODE
+```
+
+Keep the code private: the first account to submit it becomes the sole paired
+user. Sending `/start` without the code explains how to pair but grants no
+access. The paired numeric user ID is stored in a root-owned `0600` file on
+the server, and the verifier is removed after pairing. Other accounts, group
+messages, and non-text messages cannot reach the model. Only private text chat
+is supported; there are no Telegram administration, history, or clear
+commands. Each message starts a separate conversation.
+
 The agent listens only on `127.0.0.1:8765` on the server; its health check
-verifies the process, not subscription login or a successful chat. No local
-credentials are copied to it. Before using chat, sign in separately on the
-server as `goaster`:
+verifies the process, not subscription login or a successful chat. Telegram
+startup likewise verifies polling, not OpenAI login. Before using chat, sign in
+separately on the server as `goaster`:
 
 ```sh
 ssh -i ~/.goaster/ovh_ed25519 goaster@SERVER_IP /usr/local/bin/goaster
 ```
 
-Complete the displayed device-code flow and exit that interactive session.
-To use the remote agent, forward its loopback port over SSH and make a local
+Complete the displayed device-code flow and exit that interactive session. You
+can then send your paired bot a private text message. You can also use the
+remote agent directly: forward its loopback port over SSH and make a local
 request in another terminal:
 
 ```sh
