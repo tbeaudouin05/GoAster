@@ -635,17 +635,42 @@ type CodexProvider struct {
 	webSearchClient *http.Client
 	webSearchURL    string
 	webFetchClient  *http.Client
+	tools           toolRegistry
 }
 
 func NewCodexProvider(store CredentialStore) *CodexProvider {
 	authenticator := NewOpenAIAuthenticator(store)
-	return &CodexProvider{
+	provider := &CodexProvider{
 		auth:            authenticator,
 		httpClient:      authenticator.HTTPClient,
 		backendURL:      openAICodexURL,
 		webSearchClient: newWebSearchHTTPClient(),
 		webSearchURL:    duckDuckGoHTMLURL,
 		webFetchClient:  newWebFetchHTTPClient(),
+	}
+	provider.registerBuiltInTools()
+	return provider
+}
+
+// RegisterTool adds a model-callable capability to this provider. Skills can
+// use the ToolRegistrar interface to register optional tools during startup;
+// there is no user-facing configuration involved.
+func (p *CodexProvider) RegisterTool(tool Tool) error {
+	if p == nil {
+		return fmt.Errorf("chat provider is nil")
+	}
+	return p.tools.registerTool(tool)
+}
+
+func (p *CodexProvider) registerBuiltInTools() {
+	p.mustRegisterBuiltInTool(webSearchCodexTool, p.executeWebSearchTool)
+	p.mustRegisterBuiltInTool(webFetchCodexTool, p.executeWebFetchTool)
+	p.mustRegisterBuiltInTool(shellExecuteCodexTool, executeShell)
+}
+
+func (p *CodexProvider) mustRegisterBuiltInTool(definition codexTool, handler ToolHandler) {
+	if err := p.tools.register(definition, handler); err != nil {
+		panic(fmt.Sprintf("register built-in tool %q: %v", definition.Name, err))
 	}
 }
 
@@ -867,6 +892,30 @@ func formatShellExecuteResult(result command.Result, executionErr error) string 
 	return output.String()
 }
 
+func (p *CodexProvider) executeWebSearchTool(ctx context.Context, arguments string) (string, error) {
+	parsed, err := parseWebSearchArguments(arguments)
+	if err != nil {
+		return "", fmt.Errorf("malformed web_search call: %w", err)
+	}
+	result, err := searchDuckDuckGo(ctx, p.webSearchHTTPClient(), p.webSearchEndpoint(), parsed)
+	if err != nil {
+		return "", fmt.Errorf("execute web_search: %w", err)
+	}
+	return result, nil
+}
+
+func (p *CodexProvider) executeWebFetchTool(ctx context.Context, arguments string) (string, error) {
+	parsed, err := parseWebFetchArguments(arguments)
+	if err == nil {
+		result, fetchErr := fetchWebPage(ctx, p.webFetchHTTPClient(), parsed)
+		if fetchErr == nil {
+			return result, nil
+		}
+		err = fetchErr
+	}
+	return fmt.Sprintf("web_fetch error: %v", err), nil
+}
+
 func (p *CodexProvider) requestReply(ctx context.Context, credential Credential, model, message string) (string, int, error) {
 	input := []codexInputItem{{
 		Type:    "message",
@@ -903,34 +952,19 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 		callItems := make([]codexInputItem, 0, len(response.ToolCalls))
 		outputItems := make([]codexInputItem, 0, len(response.ToolCalls))
 		for _, call := range response.ToolCalls {
-			var result string
-			switch call.Name {
-			case webSearchCodexTool.Name:
-				arguments, err := parseWebSearchArguments(call.Arguments)
-				if err != nil {
-					return "", status, fmt.Errorf("malformed web_search call: %w", err)
-				}
-				result, err = searchDuckDuckGo(ctx, p.webSearchHTTPClient(), p.webSearchEndpoint(), arguments)
-				if err != nil {
-					return "", status, fmt.Errorf("execute web_search: %w", err)
-				}
-				webSearchCallCount++
-			case webFetchCodexTool.Name:
-				arguments, fetchErr := parseWebFetchArguments(call.Arguments)
-				if fetchErr == nil {
-					result, fetchErr = fetchWebPage(ctx, p.webFetchHTTPClient(), arguments)
-				}
-				if fetchErr != nil {
-					result = fmt.Sprintf("web_fetch error: %v", fetchErr)
-				}
-				webFetchCallCount++
-			case shellExecuteCodexTool.Name:
-				result, err = executeShell(ctx, call.Arguments)
-				if err != nil {
-					return "", status, err
-				}
-			default:
+			handler, ok := p.tools.handler(call.Name)
+			if !ok {
 				return "", status, fmt.Errorf("Codex requested unsupported tool %q", call.Name)
+			}
+			result, err := handler(ctx, call.Arguments)
+			if err != nil {
+				return "", status, err
+			}
+			if call.Name == webSearchCodexTool.Name {
+				webSearchCallCount++
+			}
+			if call.Name == webFetchCodexTool.Name {
+				webFetchCallCount++
 			}
 			callItems = append(callItems, codexInputItem{
 				Type:      "function_call",
@@ -954,7 +988,7 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 		Model:        model,
 		Instructions: openAIInstructions,
 		Input:        input,
-		Tools:        []codexTool{webSearchCodexTool, webFetchCodexTool, shellExecuteCodexTool},
+		Tools:        p.tools.definitions(),
 		Stream:       true,
 		Store:        false,
 	})
