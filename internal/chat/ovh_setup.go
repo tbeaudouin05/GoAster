@@ -39,12 +39,13 @@ The first four are the OVH API credential settings; the project and region are
 needed to identify a Public Cloud target as applicable. /env also accepts
 other valid KEY=VALUE names.
 
-GoAster currently has no OVH API client, remote shell, or live web browsing.
-Do not claim to browse OVH pages, access local environment values, provision
-resources, or verify cloud state. Give general guidance, ask the user to check
-current details in their OVH account or official documentation, and clearly
-label commands or configuration as instructions for the user to run and
-review themselves.`
+GoAster has a fixed built-in web_search tool that can search current public
+information and returns result titles, URLs, and snippets. It does not fetch
+web pages, access local environment values, provision resources, or verify cloud
+state. Use web_search when current OVH credential or control-panel details are
+needed, prefer official OVH sources, and include the returned URLs in the
+explanation. Clearly label commands or configuration as instructions for the
+user to run and review themselves.`
 
 const ovhStartupGuidance = `OVH onboarding:
 1. Create an OVHcloud account.

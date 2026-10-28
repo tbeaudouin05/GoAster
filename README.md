@@ -2,7 +2,10 @@
 
 A small standalone terminal chat app, built with Go and a native file-picker
 integration. Requires Go 1.22+. Normal chat uses an OpenAI ChatGPT/Codex
-subscription through the Codex backend; it does not use an OpenAI API key.
+subscription through the Codex backend; it does not use an OpenAI API key. A
+fixed built-in `web_search` tool uses no-key DuckDuckGo HTML search and returns
+search-result titles, URLs, and snippets. It has no provider, API-key, or
+web-search flag configuration and does not fetch web pages.
 
 ## Build and run
 
@@ -43,8 +46,9 @@ configuration flag:
 At chat startup, GoAster prompts you to create an OVHcloud account, ask the
 assistant to guide you through creating a remote agent, and then import a local
 environment file with `/env`. You can ask the assistant for details on
-obtaining OVH credentials. GoAster currently provides guidance only: it does
-not browse the web, call the OVH API, or provision OVH resources.
+obtaining OVH credentials. The fixed built-in web search does not fetch OVH
+pages. GoAster's OVH support provides guidance only: it does not call the OVH
+API or provision OVH resources.
 
 The OVH API credential names supported by `/env` are `OVH_ENDPOINT`,
 `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, and `OVH_CONSUMER_KEY`. For a

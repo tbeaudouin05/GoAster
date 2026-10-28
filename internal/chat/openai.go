@@ -27,10 +27,11 @@ const (
 	credentialDirectory = ".goaster"
 	credentialFilename  = "auth.json"
 
-	tokenRefreshSkew  = 5 * time.Minute
-	deviceCodeTimeout = 15 * time.Minute
-	defaultPollDelay  = 5 * time.Second
-	maxResponseBody   = 8 << 20
+	tokenRefreshSkew       = 5 * time.Minute
+	deviceCodeTimeout      = 15 * time.Minute
+	defaultPollDelay       = 5 * time.Second
+	maxResponseBody        = 8 << 20
+	maxCodexWebSearchCalls = 3
 )
 
 var ErrLoginRequired = errors.New("OpenAI subscription authentication required")
@@ -625,17 +626,21 @@ func tokenExpiry(token string) time.Time {
 }
 
 type CodexProvider struct {
-	auth       *OpenAIAuthenticator
-	httpClient *http.Client
-	backendURL string
+	auth            *OpenAIAuthenticator
+	httpClient      *http.Client
+	backendURL      string
+	webSearchClient *http.Client
+	webSearchURL    string
 }
 
 func NewCodexProvider(store CredentialStore) *CodexProvider {
 	authenticator := NewOpenAIAuthenticator(store)
 	return &CodexProvider{
-		auth:       authenticator,
-		httpClient: authenticator.HTTPClient,
-		backendURL: openAICodexURL,
+		auth:            authenticator,
+		httpClient:      authenticator.HTTPClient,
+		backendURL:      openAICodexURL,
+		webSearchClient: newWebSearchHTTPClient(),
+		webSearchURL:    duckDuckGoHTMLURL,
 	}
 }
 
@@ -691,14 +696,19 @@ type codexRequest struct {
 	Model        string           `json:"model"`
 	Instructions string           `json:"instructions"`
 	Input        []codexInputItem `json:"input"`
+	Tools        []codexTool      `json:"tools"`
 	Stream       bool             `json:"stream"`
 	Store        bool             `json:"store"`
 }
 
 type codexInputItem struct {
-	Type    string              `json:"type"`
-	Role    string              `json:"role"`
-	Content []codexInputContent `json:"content"`
+	Type      string              `json:"type"`
+	Role      string              `json:"role,omitempty"`
+	Content   []codexInputContent `json:"content,omitempty"`
+	CallID    string              `json:"call_id,omitempty"`
+	Name      string              `json:"name,omitempty"`
+	Arguments string              `json:"arguments,omitempty"`
+	Output    string              `json:"output,omitempty"`
 }
 
 type codexInputContent struct {
@@ -706,24 +716,107 @@ type codexInputContent struct {
 	Text string `json:"text"`
 }
 
+type codexTool struct {
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+var webSearchCodexTool = codexTool{
+	Type:        "function",
+	Name:        "web_search",
+	Description: "Search the web for current information using DuckDuckGo. Returns result titles, URLs, and snippets; it does not fetch web pages.",
+	Parameters: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{
+				"type":        "string",
+				"description": "Search query",
+			},
+			"count": map[string]any{
+				"type":        "integer",
+				"description": "Number of results (default: 10, maximum: 10)",
+				"minimum":     1,
+				"maximum":     webSearchMaxCount,
+			},
+			"range": map[string]any{
+				"type":        "string",
+				"description": "Optional time filter: d (day), w (week), m (month), y (year)",
+				"enum":        []string{"d", "w", "m", "y"},
+			},
+		},
+		"required":             []string{"query"},
+		"additionalProperties": false,
+	},
+}
+
 func (p *CodexProvider) requestReply(ctx context.Context, credential Credential, model, message string) (string, int, error) {
+	input := []codexInputItem{{
+		Type:    "message",
+		Role:    "user",
+		Content: []codexInputContent{{Type: "input_text", Text: message}},
+	}}
+	toolCallCount := 0
+	for {
+		response, status, err := p.requestCodex(ctx, credential, model, input)
+		if err != nil {
+			return "", status, err
+		}
+		if len(response.ToolCalls) == 0 {
+			return response.Text, status, nil
+		}
+		if toolCallCount+len(response.ToolCalls) > maxCodexWebSearchCalls {
+			return "", status, fmt.Errorf("Codex requested too many web_search calls (maximum %d)", maxCodexWebSearchCalls)
+		}
+
+		callItems := make([]codexInputItem, 0, len(response.ToolCalls))
+		outputItems := make([]codexInputItem, 0, len(response.ToolCalls))
+		for _, call := range response.ToolCalls {
+			if call.Name != webSearchCodexTool.Name {
+				return "", status, fmt.Errorf("Codex requested unsupported tool %q", call.Name)
+			}
+			arguments, err := parseWebSearchArguments(call.Arguments)
+			if err != nil {
+				return "", status, fmt.Errorf("malformed web_search call: %w", err)
+			}
+			result, err := searchDuckDuckGo(ctx, p.webSearchHTTPClient(), p.webSearchEndpoint(), arguments)
+			if err != nil {
+				return "", status, fmt.Errorf("execute web_search: %w", err)
+			}
+			callItems = append(callItems, codexInputItem{
+				Type:      "function_call",
+				CallID:    call.CallID,
+				Name:      call.Name,
+				Arguments: call.Arguments,
+			})
+			outputItems = append(outputItems, codexInputItem{
+				Type:   "function_call_output",
+				CallID: call.CallID,
+				Output: result,
+			})
+		}
+		input = append(input, callItems...)
+		input = append(input, outputItems...)
+		toolCallCount += len(response.ToolCalls)
+	}
+}
+
+func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential, model string, input []codexInputItem) (codexParsedResponse, int, error) {
 	payload, err := json.Marshal(codexRequest{
 		Model:        model,
 		Instructions: openAIInstructions,
-		Input: []codexInputItem{{
-			Type:    "message",
-			Role:    "user",
-			Content: []codexInputContent{{Type: "input_text", Text: message}},
-		}},
-		Stream: true,
-		Store:  false,
+		Input:        input,
+		Tools:        []codexTool{webSearchCodexTool},
+		Stream:       true,
+		Store:        false,
 	})
 	if err != nil {
-		return "", 0, fmt.Errorf("encode Codex request: %w", err)
+		return codexParsedResponse{}, 0, fmt.Errorf("encode Codex request: %w", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.backendURL, bytes.NewReader(payload))
 	if err != nil {
-		return "", 0, fmt.Errorf("build Codex request: %w", err)
+		return codexParsedResponse{}, 0, fmt.Errorf("build Codex request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+credential.AccessToken)
 	if credential.AccountID != "" {
@@ -736,21 +829,35 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 	request.Header.Set("OpenAI-Beta", "responses=experimental")
 	response, err := p.client().Do(request)
 	if err != nil {
-		return "", 0, fmt.Errorf("Codex request: %w", err)
+		return codexParsedResponse{}, 0, fmt.Errorf("Codex request: %w", err)
 	}
 	defer response.Body.Close()
 	body, err := readLimited(response.Body)
 	if err != nil {
-		return "", response.StatusCode, fmt.Errorf("read Codex response: %w", err)
+		return codexParsedResponse{}, response.StatusCode, fmt.Errorf("read Codex response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", response.StatusCode, fmt.Errorf("Codex backend request failed with status %s", response.Status)
+		return codexParsedResponse{}, response.StatusCode, fmt.Errorf("Codex backend request failed with status %s", response.Status)
 	}
-	reply, err := parseCodexResponse(body)
+	parsed, err := parseCodexResponseResult(body)
 	if err != nil {
-		return "", response.StatusCode, err
+		return codexParsedResponse{}, response.StatusCode, err
 	}
-	return reply, response.StatusCode, nil
+	return parsed, response.StatusCode, nil
+}
+
+func (p *CodexProvider) webSearchHTTPClient() *http.Client {
+	if p.webSearchClient == nil {
+		return newWebSearchHTTPClient()
+	}
+	return p.webSearchClient
+}
+
+func (p *CodexProvider) webSearchEndpoint() string {
+	if strings.TrimSpace(p.webSearchURL) == "" {
+		return duckDuckGoHTMLURL
+	}
+	return p.webSearchURL
 }
 
 func (p *CodexProvider) client() *http.Client {
@@ -766,9 +873,13 @@ type codexResponse struct {
 }
 
 type codexOutputItem struct {
-	Type    string               `json:"type"`
-	Text    string               `json:"text"`
-	Content []codexOutputContent `json:"content"`
+	ID        string               `json:"id"`
+	Type      string               `json:"type"`
+	Text      string               `json:"text"`
+	Content   []codexOutputContent `json:"content"`
+	CallID    string               `json:"call_id"`
+	Name      string               `json:"name"`
+	Arguments json.RawMessage      `json:"arguments"`
 }
 
 type codexOutputContent struct {
@@ -777,35 +888,200 @@ type codexOutputContent struct {
 }
 
 type codexStreamEvent struct {
-	Type     string           `json:"type"`
-	Delta    string           `json:"delta"`
-	Text     string           `json:"text"`
-	Error    *codexEventError `json:"error"`
-	Response *codexResponse   `json:"response"`
-	Item     *codexOutputItem `json:"item"`
+	Type      string           `json:"type"`
+	Delta     string           `json:"delta"`
+	Text      string           `json:"text"`
+	ItemID    string           `json:"item_id"`
+	CallID    string           `json:"call_id"`
+	Name      string           `json:"name"`
+	Arguments json.RawMessage  `json:"arguments"`
+	Error     *codexEventError `json:"error"`
+	Response  *codexResponse   `json:"response"`
+	Item      *codexOutputItem `json:"item"`
 }
 
 type codexEventError struct {
 	Message string `json:"message"`
 }
 
+type codexFunctionCall struct {
+	CallID    string
+	Name      string
+	Arguments string
+}
+
+type codexParsedResponse struct {
+	Text      string
+	ToolCalls []codexFunctionCall
+}
+
+type codexPendingFunctionCall struct {
+	ID          string
+	CallID      string
+	Name        string
+	Arguments   string
+	HasArgument bool
+	Completed   bool
+}
+
 func parseCodexResponse(body []byte) (string, error) {
+	parsed, err := parseCodexResponseResult(body)
+	if err != nil {
+		return "", err
+	}
+	if len(parsed.ToolCalls) > 0 {
+		return "", fmt.Errorf("Codex response requested tool calls")
+	}
+	return parsed.Text, nil
+}
+
+func parseCodexResponseResult(body []byte) (codexParsedResponse, error) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
-		return "", fmt.Errorf("Codex response contained no output")
+		return codexParsedResponse{}, fmt.Errorf("Codex response contained no output")
 	}
 	if trimmed[0] == '{' {
 		var response codexResponse
 		if err := json.Unmarshal(trimmed, &response); err == nil {
-			if text := responseText(response); text != "" {
-				return text, nil
+			parsed, parseErr := parsedCodexResponse(response)
+			if parseErr != nil {
+				return codexParsedResponse{}, parseErr
+			}
+			if parsed.Text != "" || len(parsed.ToolCalls) > 0 || bytes.Contains(trimmed, []byte(`"output"`)) {
+				if parsed.Text == "" && len(parsed.ToolCalls) == 0 {
+					return codexParsedResponse{}, fmt.Errorf("Codex response contained no output")
+				}
+				return parsed, nil
 			}
 		}
 	}
+	var event codexStreamEvent
+	if err := json.Unmarshal(trimmed, &event); err == nil && (strings.HasPrefix(event.Type, "response.") || event.Type == "error") {
+		streamBody := append([]byte("data: "), trimmed...)
+		streamBody = append(streamBody, '\n', '\n')
+		return parseCodexStreamResponse(streamBody)
+	}
 
+	return parseCodexStreamResponse(body)
+}
+
+func parsedCodexResponse(response codexResponse) (codexParsedResponse, error) {
+	parsed := codexParsedResponse{Text: responseText(response)}
+	seen := make(map[string]struct{})
+	for _, item := range response.Output {
+		if item.Type != "function_call" {
+			if isUnsupportedCodexCallType(item.Type) {
+				return codexParsedResponse{}, fmt.Errorf("Codex response contained unsupported tool call type %q", item.Type)
+			}
+			continue
+		}
+		call, err := codexFunctionCallFromItem(item)
+		if err != nil {
+			return codexParsedResponse{}, err
+		}
+		if _, exists := seen[call.CallID]; exists {
+			continue
+		}
+		seen[call.CallID] = struct{}{}
+		parsed.ToolCalls = append(parsed.ToolCalls, call)
+	}
+	return parsed, nil
+}
+
+func parseCodexStreamResponse(body []byte) (codexParsedResponse, error) {
 	var output strings.Builder
 	sawDelta := false
 	sawItem := false
+	var toolCalls []codexFunctionCall
+	seenCalls := make(map[string]struct{})
+	pendingCalls := make(map[string]*codexPendingFunctionCall)
+
+	addCall := func(call codexFunctionCall) error {
+		if err := validateCodexFunctionCall(call); err != nil {
+			return err
+		}
+		if _, exists := seenCalls[call.CallID]; exists {
+			return nil
+		}
+		seenCalls[call.CallID] = struct{}{}
+		toolCalls = append(toolCalls, call)
+		return nil
+	}
+	addPendingCall := func(pending *codexPendingFunctionCall) error {
+		if pending == nil {
+			return fmt.Errorf("Codex function call is missing its item")
+		}
+		return addCall(codexFunctionCall{
+			CallID:    pending.CallID,
+			Name:      pending.Name,
+			Arguments: pending.Arguments,
+		})
+	}
+	mergeItem := func(item codexOutputItem) (*codexPendingFunctionCall, error) {
+		if item.Type != "function_call" {
+			return nil, nil
+		}
+		key := strings.TrimSpace(item.ID)
+		if key == "" {
+			key = strings.TrimSpace(item.CallID)
+		}
+		if key == "" {
+			key = "call-" + strconv.Itoa(len(pendingCalls)+len(toolCalls)+1)
+		}
+		pending := pendingCalls[key]
+		if pending == nil {
+			pending = &codexPendingFunctionCall{ID: key}
+			pendingCalls[key] = pending
+		}
+		if strings.TrimSpace(item.CallID) != "" {
+			pending.CallID = strings.TrimSpace(item.CallID)
+		}
+		if strings.TrimSpace(item.Name) != "" {
+			pending.Name = strings.TrimSpace(item.Name)
+		}
+		if len(item.Arguments) > 0 && string(item.Arguments) != "null" {
+			arguments, err := codexArgumentsString(item.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			if arguments != "" {
+				pending.Arguments = arguments
+				pending.HasArgument = true
+			}
+		}
+		return pending, nil
+	}
+	processResponse := func(response *codexResponse) error {
+		if response == nil {
+			return nil
+		}
+		for _, item := range response.Output {
+			if item.Type != "function_call" {
+				if isUnsupportedCodexCallType(item.Type) {
+					return fmt.Errorf("Codex response contained unsupported tool call type %q", item.Type)
+				}
+				continue
+			}
+			pending, err := mergeItem(item)
+			if err != nil {
+				return err
+			}
+			if pending.HasArgument {
+				if err := addPendingCall(pending); err != nil {
+					return err
+				}
+				pending.Completed = true
+			}
+		}
+		if !sawDelta && !sawItem {
+			if text := responseText(*response); text != "" {
+				output.WriteString(text)
+				sawItem = true
+			}
+		}
+		return nil
+	}
+
 	process := func(data string) error {
 		data = strings.TrimSpace(data)
 		if data == "" || data == "[DONE]" {
@@ -827,16 +1103,84 @@ func parseCodexResponse(body []byte) (string, error) {
 		case "response.output_text.done":
 			if !sawDelta {
 				output.WriteString(event.Text)
+				sawItem = true
 			}
+		case "response.output_item.added":
+			if event.Item == nil {
+				return fmt.Errorf("Codex function call event is missing its item")
+			}
+			pending, err := mergeItem(*event.Item)
+			if err != nil {
+				return err
+			}
+			if pending.HasArgument {
+				if err := addPendingCall(pending); err != nil {
+					return err
+				}
+				pending.Completed = true
+			}
+		case "response.function_call_arguments.delta":
+			itemID := strings.TrimSpace(event.ItemID)
+			if itemID == "" {
+				return fmt.Errorf("Codex function call arguments event is missing item_id")
+			}
+			pending := pendingCalls[itemID]
+			if pending == nil {
+				pending = &codexPendingFunctionCall{ID: itemID}
+				pendingCalls[itemID] = pending
+			}
+			pending.Arguments += event.Delta
+			pending.HasArgument = pending.Arguments != ""
+		case "response.function_call_arguments.done":
+			itemID := strings.TrimSpace(event.ItemID)
+			if itemID == "" {
+				return fmt.Errorf("Codex function call arguments event is missing item_id")
+			}
+			pending := pendingCalls[itemID]
+			if pending == nil {
+				pending = &codexPendingFunctionCall{ID: itemID}
+				pendingCalls[itemID] = pending
+			}
+			if event.CallID != "" {
+				pending.CallID = strings.TrimSpace(event.CallID)
+			}
+			if event.Name != "" {
+				pending.Name = strings.TrimSpace(event.Name)
+			}
+			if len(event.Arguments) > 0 && string(event.Arguments) != "null" {
+				arguments, err := codexArgumentsString(event.Arguments)
+				if err != nil {
+					return err
+				}
+				pending.Arguments = arguments
+			}
+			pending.HasArgument = pending.Arguments != ""
+			if err := addPendingCall(pending); err != nil {
+				return err
+			}
+			pending.Completed = true
 		case "response.output_item.done":
-			if !sawDelta && !sawItem && event.Item != nil {
+			if event.Item == nil {
+				return fmt.Errorf("Codex output item event is missing its item")
+			}
+			if event.Item.Type == "function_call" {
+				pending, err := mergeItem(*event.Item)
+				if err != nil {
+					return err
+				}
+				if err := addPendingCall(pending); err != nil {
+					return err
+				}
+				pending.Completed = true
+			} else if isUnsupportedCodexCallType(event.Item.Type) {
+				return fmt.Errorf("Codex response contained unsupported tool call type %q", event.Item.Type)
+			} else if !sawDelta && !sawItem {
 				output.WriteString(outputItemText(*event.Item))
 				sawItem = true
 			}
 		default:
-			if !sawDelta && !sawItem && event.Response != nil {
-				output.WriteString(responseText(*event.Response))
-				sawItem = true
+			if err := processResponse(event.Response); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -857,7 +1201,7 @@ func parseCodexResponse(body []byte) (string, error) {
 		line := strings.TrimSuffix(scanner.Text(), "\r")
 		if line == "" {
 			if err := flush(); err != nil {
-				return "", err
+				return codexParsedResponse{}, err
 			}
 			continue
 		}
@@ -869,15 +1213,82 @@ func parseCodexResponse(body []byte) (string, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read Codex stream: %w", err)
+		return codexParsedResponse{}, fmt.Errorf("read Codex stream: %w", err)
 	}
 	if err := flush(); err != nil {
-		return "", err
+		return codexParsedResponse{}, err
 	}
-	if output.Len() == 0 {
-		return "", fmt.Errorf("Codex response contained no output text")
+	for _, pending := range pendingCalls {
+		if pending.Completed {
+			continue
+		}
+		if !pending.HasArgument || pending.Arguments == "" {
+			return codexParsedResponse{}, fmt.Errorf("Codex function call %q has no arguments", pending.Name)
+		}
+		if err := addPendingCall(pending); err != nil {
+			return codexParsedResponse{}, err
+		}
 	}
-	return output.String(), nil
+	if output.Len() == 0 && len(toolCalls) == 0 {
+		return codexParsedResponse{}, fmt.Errorf("Codex response contained no output text")
+	}
+	return codexParsedResponse{Text: output.String(), ToolCalls: toolCalls}, nil
+}
+
+func codexFunctionCallFromItem(item codexOutputItem) (codexFunctionCall, error) {
+	arguments, err := codexArgumentsString(item.Arguments)
+	if err != nil {
+		return codexFunctionCall{}, err
+	}
+	call := codexFunctionCall{
+		CallID:    strings.TrimSpace(item.CallID),
+		Name:      strings.TrimSpace(item.Name),
+		Arguments: arguments,
+	}
+	if err := validateCodexFunctionCall(call); err != nil {
+		return codexFunctionCall{}, err
+	}
+	return call, nil
+}
+
+func codexArgumentsString(raw json.RawMessage) (string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return "", nil
+	}
+	if raw[0] == '"' {
+		var arguments string
+		if err := json.Unmarshal(raw, &arguments); err != nil {
+			return "", fmt.Errorf("Codex function call arguments are malformed: %w", err)
+		}
+		return arguments, nil
+	}
+	if !json.Valid(raw) {
+		return "", fmt.Errorf("Codex function call arguments are malformed JSON")
+	}
+	return string(raw), nil
+}
+
+func validateCodexFunctionCall(call codexFunctionCall) error {
+	if call.CallID == "" {
+		return fmt.Errorf("Codex function call is missing call_id")
+	}
+	if call.Name == "" {
+		return fmt.Errorf("Codex function call is missing name")
+	}
+	if strings.TrimSpace(call.Arguments) == "" {
+		return fmt.Errorf("Codex function call %q has no arguments", call.Name)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(call.Arguments), &object); err != nil || object == nil {
+		return fmt.Errorf("Codex function call %q arguments must be a JSON object", call.Name)
+	}
+	return nil
+}
+
+func isUnsupportedCodexCallType(itemType string) bool {
+	itemType = strings.ToLower(strings.TrimSpace(itemType))
+	return itemType != "" && itemType != "function_call" && strings.HasSuffix(itemType, "_call")
 }
 
 func responseText(response codexResponse) string {

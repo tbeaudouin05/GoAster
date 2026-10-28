@@ -294,7 +294,8 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 			"OVH_REGION",
 			"Imported values are never sent to the chat",
 			"They execute the steps themselves",
-			"Do not claim to browse OVH pages",
+			"fixed built-in web_search tool",
+			"Use web_search when current OVH",
 		} {
 			if !strings.Contains(request.Instructions, want) {
 				t.Errorf("Codex instructions missing %q", want)
