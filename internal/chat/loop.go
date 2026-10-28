@@ -71,7 +71,11 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			continue
 		}
 		if message == "/ovh" {
-			if err := runOVHSetup(ctx, scanner, w, store, picker); err != nil {
+			var auth CredentialStore
+			if provider, ok := session.provider.(*CodexProvider); ok {
+				auth = provider.auth.Store
+			}
+			if err := runOVHSetup(ctx, scanner, w, store, picker, auth); err != nil {
 				return err
 			}
 			continue

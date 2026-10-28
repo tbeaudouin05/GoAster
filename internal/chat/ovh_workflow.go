@@ -3,6 +3,7 @@ package chat
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,9 +14,9 @@ import (
 )
 
 // runOVHSetup is local-only: no settings are passed to the chat provider.
-func runOVHSetup(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker) error {
+func runOVHSetup(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, auth CredentialStore) error {
 	ssh := ovh.OpenSSH{}
-	return runOVHSetupWithOptionsAndPicker(ctx, scanner, out, store, ovh.DefaultHTTPClient(), ssh, ssh, ovh.EnsureLocalKeyPair, ovh.ResolveGoasterCommit, picker)
+	return runOVHSetupWithOptionsAndPicker(ctx, scanner, out, store, ovh.DefaultHTTPClient(), ssh, ssh, ovh.EnsureLocalKeyPair, ovh.ResolveGoasterCommit, picker, auth)
 }
 
 func runOVHSetupWithDependencies(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, httpClient ovh.HTTPClient, ssh ovh.SSHRunner, remote ovh.RemoteRunner) error {
@@ -26,7 +27,7 @@ func runOVHSetupWithDependenciesAndOptions(ctx context.Context, scanner *bufio.S
 	return runOVHSetupWithOptionsAndPicker(ctx, scanner, out, store, httpClient, ssh, remote, keyPair, commit, nativeEnvironmentFilePicker{})
 }
 
-func runOVHSetupWithOptionsAndPicker(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, httpClient ovh.HTTPClient, ssh ovh.SSHRunner, remote ovh.RemoteRunner, keyPair func() (ovh.KeyPair, error), commit func() (string, error), picker EnvironmentFilePicker) error {
+func runOVHSetupWithOptionsAndPicker(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, httpClient ovh.HTTPClient, ssh ovh.SSHRunner, remote ovh.RemoteRunner, keyPair func() (ovh.KeyPair, error), commit func() (string, error), picker EnvironmentFilePicker, authStores ...CredentialStore) error {
 	if store == nil {
 		fmt.Fprintln(out, "OVH configuration rejected: environment settings store is unavailable.")
 		return out.Flush()
@@ -34,6 +35,26 @@ func runOVHSetupWithOptionsAndPicker(ctx context.Context, scanner *bufio.Scanner
 	config, err := ovh.ConfigFromValues(store.Values())
 	if err != nil {
 		fmt.Fprintf(out, "OVH configuration rejected: %v. Run /env first to select and save valid OVH settings locally.\n", err)
+		return out.Flush()
+	}
+	var authStore CredentialStore
+	if len(authStores) > 0 {
+		authStore = authStores[0]
+	} else {
+		authStore, err = NewCredentialStore("")
+	}
+	credential, loadErr := authStore.Load()
+	if err != nil || loadErr != nil {
+		fmt.Fprintln(out, "Runtime subscription credential unavailable; sign in locally before provisioning.")
+		return out.Flush()
+	}
+	authJSON, err := json.Marshal(credential)
+	if err != nil {
+		return fmt.Errorf("runtime subscription credential could not be prepared")
+	}
+	bundle, err := ovh.NewRuntimeBundle(authJSON, store.Values())
+	if err != nil {
+		fmt.Fprintln(out, "Runtime credentials rejected; correct the local settings before provisioning.")
 		return out.Flush()
 	}
 	pair, err := keyPair()
@@ -57,7 +78,7 @@ func runOVHSetupWithOptionsAndPicker(ctx context.Context, scanner *bufio.Scanner
 		return out.Flush()
 	}
 	workflow := ovh.Workflow{
-		Client: client, SSH: ssh, Remote: remote,
+		Client: client, SSH: ssh, Remote: remote, Runtime: bundle,
 		Select: func(ctx context.Context, kind string, choices []ovh.Choice) (string, error) {
 			return chooseOVHOption(ctx, scanner, out, kind, choices)
 		},
@@ -68,7 +89,7 @@ func runOVHSetupWithOptionsAndPicker(ctx context.Context, scanner *bufio.Scanner
 			}
 			fmt.Fprintf(out, "OVH preflight passed. Review this billable, public server:\n  Project: %s\n  Region: %s\n  Server name: %s\n  Image: %q (%s)\n  Flavor: %q (%s)\n  SSH key: %q (%s)\n  SSH user: %s\n  Repository: %s\n  Commit: %s\n  Billing: hourly; public network\n", p.ProjectID, p.Region, p.ServerName, p.ImageName, p.ImageID, p.FlavorName, p.FlavorID, p.SSHKeyName, keyID, p.SSHUser, ovh.Repository, p.Ref)
 			fmt.Fprintln(out, "The persistent local private key stays local; only its public key is sent to OVH.")
-			fmt.Fprintln(out, "After creation GoAster will connect over SSH, install packages, clone the pinned repository, and enable the agent service.")
+			fmt.Fprintln(out, "After creation GoAster will connect over SSH, install packages, clone the pinned repository, transfer the subscription and saved OVH/Telegram runtime credentials through encrypted SSH stdin, and enable the agent service.")
 			fmt.Fprint(out, "Type CREATE to provision this server; anything else cancels: ")
 			if err := out.Flush(); err != nil {
 				return false, err
@@ -92,7 +113,7 @@ func runOVHSetupWithOptionsAndPicker(ctx context.Context, scanner *bufio.Scanner
 		return out.Flush()
 	}
 	fmt.Fprintf(out, "OVH onboarding complete: project=%s region=%s image_id=%s flavor_id=%s ssh_key_id=%s server_id=%s public_ip=%s commit=%s service=%s\n", result.Plan.ProjectID, result.Plan.Region, result.Plan.ImageID, result.Plan.FlavorID, result.Plan.SSHKeyID, result.ServerID, result.IP, result.Commit, result.ServiceStatus)
-	fmt.Fprintln(out, "The service is running; authenticate the remote GoAster account separately before using chat.")
+	fmt.Fprintln(out, "The service is running with the transferred subscription credential.")
 	return offerTelegramSetup(ctx, scanner, out, store, picker, remote, ovh.Target{IP: result.IP, User: result.Plan.SSHUser, PrivateKey: pair.PrivateKeyPath})
 }
 
@@ -102,7 +123,7 @@ type telegramSetupRunner interface {
 
 // The target exists only while this post-provisioning prompt is running.
 func offerTelegramSetup(ctx context.Context, scanner *bufio.Scanner, out *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, remote ovh.RemoteRunner, target ovh.Target) error {
-	fmt.Fprintln(out, "Optional Telegram setup transfers only TELEGRAM_BOT_TOKEN over SSH and starts a private, outbound-only adapter.")
+	fmt.Fprintln(out, "Optional Telegram setup confirms the bot token and starts a private, outbound-only adapter; the initial runtime bundle already includes any saved token.")
 	fmt.Fprintln(out, "Create a bot with @BotFather and import its token with the OVH settings using /env. The target is retained only during this workflow.")
 	var code, hash string
 	for {
@@ -157,7 +178,7 @@ func offerTelegramSetup(ctx context.Context, scanner *bufio.Scanner, out *bufio.
 		}
 		fmt.Fprintln(out, "Telegram service is active and polling. Pair exactly one Telegram account in a private chat with your bot:")
 		fmt.Fprintf(out, "  /start %s\n", code)
-		fmt.Fprintln(out, "Keep this one-time code private. Authenticate the remote GoAster account separately before asking questions.")
+		fmt.Fprintln(out, "Keep this one-time code private. Chat uses the transferred subscription credential.")
 		return out.Flush()
 	}
 }

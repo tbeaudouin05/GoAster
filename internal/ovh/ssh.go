@@ -49,15 +49,29 @@ func (s OpenSSH) Check(ctx context.Context, target Target) error {
 	return err
 }
 
-func (s OpenSSH) Install(ctx context.Context, target Target, ref string) (string, string, error) {
+func (s OpenSSH) Install(ctx context.Context, target Target, ref string, bundle RuntimeBundle) (string, string, error) {
+	if err := bundle.validate(); err != nil {
+		return "", "", err
+	}
 	if !commitID.MatchString(ref) {
 		return "", "", fmt.Errorf("invalid commit ID")
 	}
 	// ref is restricted to lowercase hexadecimal, so interpolation is safe.
 	script := fmt.Sprintf(installScript, ref, Repository)
-	output, err := s.command(ctx, target, script)
+	_, err := s.command(ctx, target, script)
 	if err != nil {
 		return "", "", err
+	}
+	payload, err := json.Marshal(bundle)
+	if err != nil {
+		return "", "", fmt.Errorf("runtime bundle encoding failed")
+	}
+	if _, err := s.execute(ctx, target, []string{"sudo", "-n", "/usr/local/bin/goaster-agent", "setup-runtime"}, bytes.NewReader(payload)); err != nil {
+		return "", "", fmt.Errorf("runtime credential transfer failed")
+	}
+	output, err := s.command(ctx, target, fmt.Sprintf(agentStartScript, ref))
+	if err != nil {
+		return "", "", fmt.Errorf("agent service startup failed")
 	}
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	if len(lines) != 2 || !commitID.MatchString(lines[0]) || lines[1] != "active" {
@@ -147,6 +161,10 @@ sudo -n install -d -o goaster -g goaster -m 0700 /var/lib/goaster
 sudo -n install -d -o root -g root -m 0700 /etc/goaster /var/lib/goaster-telegram
 printf '[Unit]\nDescription=GoAster remote agent\nAfter=network-online.target\n[Service]\nUser=goaster\nEnvironment=HOME=/var/lib/goaster\nExecStart=/usr/local/bin/goaster-agent\nRestart=on-failure\nNoNewPrivileges=true\nProtectSystem=strict\nProtectHome=true\nReadWritePaths=/var/lib/goaster\n[Install]\nWantedBy=multi-user.target\n' | sudo -n tee /etc/systemd/system/goaster-agent.service >/dev/null
 printf '[Unit]\nDescription=GoAster Telegram adapter\nAfter=network-online.target goaster-agent.service\nWants=network-online.target\n[Service]\nType=notify\nNotifyAccess=main\nTimeoutStartSec=50\nExecStart=/usr/local/bin/goaster-telegram\nRestart=on-failure\nRestartSec=10\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nReadWritePaths=/var/lib/goaster-telegram\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\n[Install]\nWantedBy=multi-user.target\n' | sudo -n tee /etc/systemd/system/goaster-telegram.service >/dev/null
+`
+
+const agentStartScript = `set -eu
+commit='%s'
 sudo -n systemctl daemon-reload
 sudo -n systemctl enable goaster-agent.service >/dev/null 2>&1
 sudo -n systemctl restart goaster-agent.service >/dev/null 2>&1

@@ -26,7 +26,7 @@ type SSHRunner interface {
 
 // RemoteRunner installs and verifies the service on the confirmed instance.
 type RemoteRunner interface {
-	Install(context.Context, Target, string) (commit, serviceStatus string, err error)
+	Install(context.Context, Target, string, RuntimeBundle) (commit, serviceStatus string, err error)
 }
 
 type Result struct {
@@ -36,6 +36,7 @@ type Result struct {
 }
 
 type Workflow struct {
+	Runtime               RuntimeBundle
 	Client                *Client
 	SSH                   SSHRunner
 	Remote                RemoteRunner
@@ -52,6 +53,9 @@ func (w Workflow) Run(ctx context.Context) (Result, error) {
 	var result Result
 	if w.Client == nil || w.SSH == nil || w.Remote == nil || w.Confirm == nil {
 		return result, fmt.Errorf("OVH workflow dependencies and confirmation callback are required")
+	}
+	if err := w.Runtime.validate(); err != nil {
+		return result, err
 	}
 	plan, err := w.Client.PreflightWithSelector(ctx, w.Select)
 	if err != nil {
@@ -124,7 +128,7 @@ func (w Workflow) Run(ctx context.Context) (Result, error) {
 			return result, fmt.Errorf("wait for SSH readiness: %w", err)
 		}
 	}
-	commit, status, err := w.Remote.Install(ctx, target, plan.Ref)
+	commit, status, err := w.Remote.Install(ctx, target, plan.Ref, w.Runtime)
 	if err != nil {
 		return result, fmt.Errorf("install or verify agent service failed")
 	}

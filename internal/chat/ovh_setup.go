@@ -27,8 +27,8 @@ Safe setup sequence:
    For Telegram, create a bot with @BotFather, put TELEGRAM_BOT_TOKEN in the
    local file together with all four OVH variables, and import it with /env.
    Every /env import replaces the entire saved set. After /ovh succeeds, the
-   user may explicitly type SETUP TELEGRAM at the separate prompt. The token is
-   sent only then over SSH. The user pairs one private Telegram account with
+   user may explicitly type SETUP TELEGRAM at the separate prompt. The runtime bundle, including any saved bot token, is transferred over
+   encrypted SSH stdin after CREATE; SETUP TELEGRAM separately authorizes activation. The user pairs one private Telegram account with
    the one-time code shown locally. No webhook or inbound port is used.
    The assistant cannot execute /ovh or inspect credentials or cloud state; the
    user executes these steps locally.
@@ -50,12 +50,16 @@ OVH variable names that GoAster /env needs:
 - OVH_APPLICATION_SECRET: API application secret; keep it private.
 - OVH_CONSUMER_KEY: account-scoped API consumer key; keep it private.
 GoAster discovers the Public Cloud project and deployment region automatically;
-these are the only four settings required for /ovh.
+these are the four imported settings required for /ovh; the subscription credential comes from local login.
+Provisioning transfers the complete subscription credential (including refresh/account data),
+the four OVH settings, and any saved TELEGRAM_BOT_TOKEN over encrypted SSH stdin.
+The SSH private key stays local. Runtime credentials never authorize destructive
+OVH self-management; require explicit confirmation for those operations.
 The local /ovh workflow discovers the Public Cloud project, region, Ubuntu
 24.04 image, smallest compatible flavor, and SSH key. It generates or reuses a
 persistent Ed25519 key at ~/.goaster/ovh_ed25519, uses the fixed goaster SSH
 user, generates the server name, and derives the exact local GoAster commit.
-Only the four credential settings are required for /ovh. TELEGRAM_BOT_TOKEN is
+The four OVH settings and the active local subscription credential are required for /ovh. TELEGRAM_BOT_TOKEN is
 optional and needed for Telegram; /env accepts other valid names. Each import
 replaces the previous set, so keep the OVH variables in the same file.
 

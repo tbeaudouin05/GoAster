@@ -101,10 +101,12 @@ When you are ready, enter `/ovh`. GoAster validates the stored settings and
 local key, contacts the OVH API to discover and validate the target, and
 displays the proposed IDs, names, repository, commit, and hourly billing. Type
 exactly `CREATE` to authorize the key upload if needed, server creation, and
-subsequent SSH installation; any other response cancels. The workflow waits
+subsequent SSH installation and runtime credential transfer; any other response
+cancels. The workflow waits
 for an active instance and public IP, checks SSH as `goaster`, clones the
 public repository at the derived commit, installs required packages and the
-GoAster, agent, and Telegram adapter binaries, and enables and checks
+GoAster, agent, and Telegram adapter binaries, transfers the runtime credentials
+through encrypted SSH stdin, and then enables and checks
 `goaster-agent.service`. The image must support
 passwordless `sudo`, `apt`, and systemd, and have outbound access to Ubuntu
 package sources, GitHub, and Go module sources. The local machine needs
@@ -120,22 +122,48 @@ outcome even when no ID is returned; check the OVH project before retrying to
 avoid creating a second billable server.
 
 After successful provisioning, GoAster offers a separate optional Telegram
-prompt. Type exactly `SETUP TELEGRAM` to authorize sending the bot token to the
-new server and starting the adapter; any other answer skips it. You can also
+prompt. Type exactly `SETUP TELEGRAM` to authorize Telegram pairing setup and
+starting the adapter (including updating the token if you import a new one);
+any other answer skips it. You can also
 enter `/env` at this prompt to import or correct the local file before
 confirming. The SSH target is retained only during this provisioning workflow;
 skipping or ending it discards the target. Running `/ovh` again creates another
 billable server after its own confirmation.
 
-Only the bot token and a verifier for an independently generated one-time
-pairing code are sent over SSH stdin. OVH credentials, OpenAI credentials, and
-the SSH private key are not transferred. The token is stored on the server in
-`/etc/goaster/telegram-token`, owned by root with `0600` permissions; neither
-the token nor the Telegram API URL is placed in a command, systemd unit, or
-log. `goaster-telegram.service` runs only after the separate confirmation and
-is verified after its first successful polling request. Use a fresh bot without
-a webhook; a webhook prevents polling. The server needs outbound HTTPS access
-to Telegram. The adapter uses long polling and opens no inbound port.
+By default, confirmed provisioning transfers the complete local OpenAI subscription
+credential (access token, refresh token, expiry, and account ID), all four OVH
+settings (`OVH_ENDPOINT`, `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, and
+`OVH_CONSUMER_KEY`), and `TELEGRAM_BOT_TOKEN` when present. Unrelated imported
+settings are excluded. The subscription comes from the active local login,
+including a custom `-auth-file`; a missing or invalid credential stops the
+workflow before any billable creation. An invalid saved bot token must also be
+corrected before provisioning. Omitting the token still permits agent-only setup.
+
+The bundle travels as JSON only on encrypted SSH stdin to a fixed remote setup
+command, before the agent starts. Secrets are never included in command arguments,
+logs, systemd unit text, OVH metadata, Git, or Telegram messages. The **SSH private
+key stays local** at `~/.goaster/ovh_ed25519`: it authenticates the SSH connection
+and is not a runtime credential. Only its public key goes to OVH.
+
+The remote subscription is stored in `/var/lib/goaster/.goaster/auth.json`, and
+OVH/Telegram settings in `/var/lib/goaster/.goaster/env`, both owned by `goaster`
+with `0600` permissions inside a `0700` directory. The agent service sets
+`HOME=/var/lib/goaster` and reads and refreshes that subscription file directly;
+the remote GoAster CLI uses the same default files. The adapter reads its separate
+root-owned `0600` `/etc/goaster/telegram-token` inside root-owned `0700`
+`/etc/goaster`. Runtime installation rejects existing authentication directories;
+a failed transfer prevents agent startup and preserves the billable server for
+inspection. A failed later step may leave protected credentials on that server.
+
+Storing OVH credentials does not add autonomous infrastructure tools or authorize
+OVH changes. Billable creation still requires `CREATE`; Telegram activation still
+requires `SETUP TELEGRAM`; destructive OVH self-management must receive its own
+explicit confirmation. This workflow never deletes servers.
+
+`goaster-telegram.service` runs only after the separate confirmation and is
+verified after its first successful polling request. Use a fresh bot without a
+webhook; a webhook prevents polling. The server needs outbound HTTPS access to
+Telegram. The adapter uses long polling and opens no inbound port.
 
 When startup succeeds, GoAster displays a one-time pairing command. In a
 **private** Telegram chat with your new bot, send the displayed command:
@@ -154,15 +182,11 @@ commands. Each message starts a separate conversation.
 
 The agent listens only on `127.0.0.1:8765` on the server; its health check
 verifies the process, not subscription login or a successful chat. Telegram
-startup likewise verifies polling, not OpenAI login. Before using chat, sign in
-separately on the server as `goaster`:
-
-```sh
-ssh -i ~/.goaster/ovh_ed25519 goaster@SERVER_IP /usr/local/bin/goaster
-```
-
-Complete the displayed device-code flow and exit that interactive session. You
-can then send your paired bot a private text message. You can also use the
+startup likewise verifies polling, not a successful model request. A separate
+server login is no longer needed: paired private messages use the transferred
+subscription. Local and remote copies may refresh independently; if the provider
+invalidates a copied refresh token, reauthentication may be needed. You can also
+use the
 remote agent directly: forward its loopback port over SSH and make a local
 request in another terminal:
 

@@ -149,7 +149,7 @@ type fakeRemote struct {
 	fail  bool
 }
 
-func (r *fakeRemote) Install(_ context.Context, target Target, ref string) (string, string, error) {
+func (r *fakeRemote) Install(_ context.Context, target Target, ref string, _ RuntimeBundle) (string, string, error) {
 	r.calls++
 	if target.IP != "203.0.113.7" || ref != testRef {
 		return "", "", errors.New("invalid install inputs")
@@ -189,7 +189,7 @@ func TestWorkflowSuccessAndFailures(t *testing.T) {
 			ssh := &fakeSSH{fail: tc.failSSH}
 			remote := &fakeRemote{fail: tc.failInstall}
 			var created Result
-			w := Workflow{Client: client, SSH: ssh, Remote: remote, Timeout: 30 * time.Millisecond, PollInterval: time.Millisecond,
+			w := Workflow{Runtime: testRuntimeBundle(t), Client: client, SSH: ssh, Remote: remote, Timeout: 30 * time.Millisecond, PollInterval: time.Millisecond,
 				Confirm: func(_ context.Context, plan Plan) (bool, error) {
 					if plan.ProjectID != "project-1" || plan.Region != "GRA11" || plan.Ref != testRef || plan.ImageID != "image-1" || plan.FlavorID != "flavor-1" || plan.SSHKeyID != "key-1" {
 						t.Error("incorrect confirmation plan")
@@ -300,7 +300,7 @@ func TestPreflightRejectsInvalidSelectionsBeforeConfirmation(t *testing.T) {
 			f := &fakeHTTP{t: t, responses: map[string]string{"GET /1.0/cloud/project/project-1" + tc.path: tc.response}}
 			client, _ := NewClient(config, f)
 			called := false
-			w := Workflow{Client: client, SSH: &fakeSSH{}, Remote: &fakeRemote{}, Confirm: func(context.Context, Plan) (bool, error) { called = true; return true, nil }}
+			w := Workflow{Runtime: testRuntimeBundle(t), Client: client, SSH: &fakeSSH{}, Remote: &fakeRemote{}, Confirm: func(context.Context, Plan) (bool, error) { called = true; return true, nil }}
 			if _, err := w.Run(context.Background()); err == nil {
 				t.Fatal("preflight accepted invalid selection")
 			}
@@ -342,7 +342,7 @@ func TestRequiresConfirmationAndPreservesCreatedServerWhenReportingFails(t *test
 	confirmed := false
 	f := &fakeHTTP{t: t, confirmed: &confirmed}
 	client, _ := NewClient(config, f)
-	w := Workflow{Client: client, SSH: &fakeSSH{}, Remote: &fakeRemote{}}
+	w := Workflow{Runtime: testRuntimeBundle(t), Client: client, SSH: &fakeSSH{}, Remote: &fakeRemote{}}
 	if _, err := w.Run(context.Background()); err == nil || len(f.requests) != 0 {
 		t.Fatal("missing callback should fail before API calls")
 	}
@@ -370,4 +370,13 @@ func TestPublicIPSelection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testRuntimeBundle(t *testing.T) RuntimeBundle {
+	t.Helper()
+	b, err := NewRuntimeBundle([]byte(`{"access_token":"fake-access","refresh_token":"fake-refresh","account_id":"fake-account"}`), testValues())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

@@ -19,7 +19,7 @@ func TestInstallerScriptHasValidShellSyntax(t *testing.T) {
 	if err != nil {
 		t.Skip("sh is unavailable")
 	}
-	script := fmt.Sprintf(installScript, testRef, Repository)
+	script := fmt.Sprintf(installScript, testRef, Repository) + fmt.Sprintf(agentStartScript, testRef)
 	cmd := exec.Command(sh, "-n") // parse only; do not execute installation
 	cmd.Stdin = strings.NewReader(script)
 	if err := cmd.Run(); err != nil {

@@ -79,8 +79,11 @@ type onboardingRunners struct {
 }
 
 func (*onboardingRunners) Check(context.Context, ovh.Target) error { return nil }
-func (r *onboardingRunners) Install(_ context.Context, target ovh.Target, ref string) (string, string, error) {
+func (r *onboardingRunners) Install(_ context.Context, target ovh.Target, ref string, bundle ovh.RuntimeBundle) (string, string, error) {
 	r.installs++
+	if !strings.Contains(string(bundle.Auth), "fake-access") || bundle.Values["OVH_APPLICATION_SECRET"] != "fake-app-secret" {
+		return "", "", fmt.Errorf("incomplete runtime bundle")
+	}
 	if r.installError {
 		return "", "", fmt.Errorf("fake install failure")
 	}
@@ -99,6 +102,11 @@ func (r *onboardingRunners) SetupTelegram(_ context.Context, target ovh.Target, 
 }
 
 func TestOVHLocalConfirmationAndReporting(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	auth, _ := NewCredentialStore("")
+	if err := auth.Save(Credential{AccessToken: "fake-access", RefreshToken: "fake-refresh", AccountID: "fake-account"}); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name, answer string
 		creates      bool
@@ -146,6 +154,11 @@ func TestOVHLocalConfirmationAndReporting(t *testing.T) {
 }
 
 func TestTelegramSetupAfterOVHConfirmation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	auth, _ := NewCredentialStore("")
+	if err := auth.Save(Credential{AccessToken: "fake-access", RefreshToken: "fake-refresh", AccountID: "fake-account"}); err != nil {
+		t.Fatal(err)
+	}
 	const token = "123456789:abcdefghijklmnopqrstuvwxyzABCDE_12345"
 	dir := t.TempDir()
 	pair, err := ovh.EnsureKeyPairAt(filepath.Join(dir, "key"))
@@ -244,5 +257,34 @@ func TestPairingCodeIsRandomAndHasAValidVerifier(t *testing.T) {
 	other, _, err := telegram.PairingCode()
 	if err != nil || code == other {
 		t.Fatal("pairing codes were not generated independently")
+	}
+}
+
+func TestRuntimeCredentialPreflightAndCustomAuthFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Save(map[string]string{"OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	custom := CredentialStore{Path: filepath.Join(t.TempDir(), "custom-auth")}
+	for _, present := range []bool{false, true} {
+		if present {
+			if err := custom.Save(Credential{AccessToken: "custom-access", RefreshToken: "custom-refresh", AccountID: "custom-account"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fake := &onboardingHTTP{}
+		var output bytes.Buffer
+		keyCalls := 0
+		err := runOVHSetupWithOptionsAndPicker(context.Background(), bufio.NewScanner(strings.NewReader("no\n")), bufio.NewWriter(&output), store, fake, &onboardingRunners{}, &onboardingRunners{}, func() (ovh.KeyPair, error) { keyCalls++; return ovh.KeyPair{}, fmt.Errorf("test stops before network") }, func() (string, error) { t.Fatal("unexpected commit lookup"); return "", nil }, nil, custom)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (keyCalls > 0) != present || len(fake.requests) != 0 {
+			t.Fatal("credential preflight did not use custom auth file before provisioning")
+		}
+		if strings.Contains(output.String(), "custom-access") || strings.Contains(output.String(), "custom-refresh") {
+			t.Fatal("credential exposed")
+		}
 	}
 }

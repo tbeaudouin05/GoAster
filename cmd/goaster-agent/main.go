@@ -7,14 +7,41 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/user"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"goaster/internal/chat"
+	"goaster/internal/ovh"
+	"goaster/internal/telegram"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "setup-runtime" {
+		if os.Geteuid() != 0 {
+			fmt.Fprintln(os.Stderr, "agent: runtime setup requires root")
+			os.Exit(1)
+		}
+		account, err := user.Lookup("goaster")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "agent: runtime account unavailable")
+			os.Exit(1)
+		}
+		uid, uidErr := strconv.Atoi(account.Uid)
+		gid, gidErr := strconv.Atoi(account.Gid)
+		if uidErr != nil || gidErr != nil || ovh.StoreRuntime(os.Stdin, "/var/lib/goaster/.goaster", telegram.DefaultPaths.Token, uid, gid) != nil {
+			fmt.Fprintln(os.Stderr, "agent: runtime setup failed")
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) != 1 {
+		fmt.Fprintln(os.Stderr, "agent: invalid invocation")
+		os.Exit(1)
+	}
+
 	store, err := chat.NewCredentialStore("")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "agent: cannot initialize credential store")

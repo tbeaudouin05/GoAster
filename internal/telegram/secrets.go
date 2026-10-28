@@ -51,8 +51,8 @@ var DefaultPaths = Paths{
 	UserID:      "/var/lib/goaster-telegram/user-id",
 }
 
-// SetupInput is the complete SSH stdin payload; no other local settings cross
-// the connection. The hash is useless for guessing the random pairing code.
+// SetupInput is the separately confirmed Telegram activation payload. Runtime
+// provisioning also transfers credentials. The hash cannot reveal the random code.
 type SetupInput struct {
 	Token       string `json:"token"`
 	PairingHash string `json:"pairing_hash"`
