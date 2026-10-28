@@ -34,8 +34,8 @@ func ParseRuntimeConfig(args []string, output io.Writer) (RuntimeConfig, error) 
 	flags.Usage = func() {
 		fmt.Fprintln(output, "Usage: goaster [options]")
 		flags.PrintDefaults()
-		fmt.Fprintln(output, "For Telegram, create a bot with @BotFather and save TELEGRAM_BOT_TOKEN in the local /env file alongside all OVH variables; /env replaces the saved set.")
-		fmt.Fprintln(output, "After /ovh succeeds, type SETUP TELEGRAM at its separate confirmation prompt to activate the adapter and pair one private account; provisioning already transfers saved runtime credentials over encrypted SSH stdin.")
+		fmt.Fprintln(output, "Telegram is required. Create a bot with @BotFather and save TELEGRAM_BOT_TOKEN in the local /env file alongside all OVH variables; /env replaces the saved set.")
+		fmt.Fprintln(output, "After exact CREATE confirmation, /ovh transfers runtime credentials over encrypted SSH stdin, automatically sets up and verifies Telegram, and shows the command to pair one private account. Telegram is the only remote-agent access path.")
 	}
 	flags.StringVar(&config.PrimaryModel, "primary-model", DefaultPrimaryModel, "primary model name")
 	flags.StringVar(&config.FallbackModel, "fallback-model", DefaultFallbackModel, "fallback model name")

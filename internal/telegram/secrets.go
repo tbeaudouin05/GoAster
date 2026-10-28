@@ -51,7 +51,7 @@ var DefaultPaths = Paths{
 	UserID:      "/var/lib/goaster-telegram/user-id",
 }
 
-// SetupInput is the separately confirmed Telegram activation payload. Runtime
+// SetupInput is the Telegram activation payload authorized by CREATE. Runtime
 // provisioning also transfers credentials. The hash cannot reveal the random code.
 type SetupInput struct {
 	Token       string `json:"token"`

@@ -19,7 +19,7 @@ const testRef = "0123456789abcdef0123456789abcdef01234567"
 
 func testValues() map[string]string {
 	return map[string]string{
-		"OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret",
+		"TELEGRAM_BOT_TOKEN": runtimeToken, "OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret",
 		"OVH_PROJECT_ID": "project-1", "OVH_REGION": "GRA11", "OVH_IMAGE_ID": "image-1", "OVH_FLAVOR_ID": "flavor-1", "OVH_SSH_KEY_ID": "key-1",
 		"OVH_SERVER_NAME": "agent-1", "OVH_SSH_USER": "ubuntu", "OVH_SSH_PRIVATE_KEY": "/local/fake-key", "OVH_GOASTER_REF": testRef,
 	}
@@ -145,8 +145,21 @@ func (s *fakeSSH) Check(_ context.Context, target Target) error {
 }
 
 type fakeRemote struct {
-	calls int
-	fail  bool
+	calls         int
+	fail          bool
+	telegramCalls int
+	failTelegram  bool
+}
+
+func (r *fakeRemote) SetupTelegram(_ context.Context, target Target, token, hash string) error {
+	r.telegramCalls++
+	if r.calls != 1 || target.IP != "203.0.113.7" || token != runtimeToken || len(hash) != 64 {
+		return errors.New("invalid Telegram inputs or ordering")
+	}
+	if r.failTelegram {
+		return fmt.Errorf("%s https://example.invalid/bot", token)
+	}
+	return nil
 }
 
 func (r *fakeRemote) Install(_ context.Context, target Target, ref string, _ RuntimeBundle) (string, string, error) {
@@ -162,10 +175,10 @@ func (r *fakeRemote) Install(_ context.Context, target Target, ref string, _ Run
 
 func TestWorkflowSuccessAndFailures(t *testing.T) {
 	for _, tc := range []struct {
-		name, failHTTP, wantError     string
-		confirm, failSSH, failInstall bool
-		wantID, wantIP                string
-		wantPost, wantInstall         bool
+		name, failHTTP, wantError                   string
+		confirm, failSSH, failInstall, failTelegram bool
+		wantID, wantIP                              string
+		wantPost, wantInstall                       bool
 	}{
 		{name: "success", confirm: true, wantID: "server-1", wantIP: "203.0.113.7", wantPost: true, wantInstall: true},
 		{name: "refusal", wantError: "not confirmed"},
@@ -173,6 +186,7 @@ func TestWorkflowSuccessAndFailures(t *testing.T) {
 		{name: "ambiguous creation failure", confirm: true, failHTTP: "POST /1.0/cloud/project/project-1/instance", wantError: "outcome may be unknown", wantPost: true},
 		{name: "status API failure", confirm: true, failHTTP: "GET /1.0/cloud/project/project-1/instance/server-1", wantError: "server status", wantID: "server-1", wantPost: true},
 		{name: "SSH failure", confirm: true, failSSH: true, wantError: "SSH readiness", wantID: "server-1", wantIP: "203.0.113.7", wantPost: true},
+		{name: "Telegram failure", confirm: true, failTelegram: true, wantError: "Telegram setup or service verification failed", wantID: "server-1", wantIP: "203.0.113.7", wantPost: true, wantInstall: true},
 		{name: "install failure", confirm: true, failInstall: true, wantError: "install or verify", wantID: "server-1", wantIP: "203.0.113.7", wantPost: true, wantInstall: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -187,7 +201,7 @@ func TestWorkflowSuccessAndFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			ssh := &fakeSSH{fail: tc.failSSH}
-			remote := &fakeRemote{fail: tc.failInstall}
+			remote := &fakeRemote{fail: tc.failInstall, failTelegram: tc.failTelegram}
 			var created Result
 			w := Workflow{Runtime: testRuntimeBundle(t), Client: client, SSH: ssh, Remote: remote, Timeout: 30 * time.Millisecond, PollInterval: time.Millisecond,
 				Confirm: func(_ context.Context, plan Plan) (bool, error) {
@@ -207,6 +221,15 @@ func TestWorkflowSuccessAndFailures(t *testing.T) {
 			}
 			if err != nil && (strings.Contains(err.Error(), "fake-app-secret") || strings.Contains(err.Error(), "fake-consumer-secret")) {
 				t.Fatal("error exposed fake credentials")
+			}
+			if (result.PairingCode != "") != (err == nil) {
+				t.Fatal("pairing code must be returned only after verified Telegram startup")
+			}
+			if (remote.telegramCalls > 0) != (tc.wantError == "" || tc.failTelegram) {
+				t.Fatal("Telegram setup did not follow successful agent verification")
+			}
+			if err != nil && (strings.Contains(err.Error(), runtimeToken) || strings.Contains(err.Error(), "https://")) {
+				t.Fatal("Telegram error exposed secrets or remote output")
 			}
 			if result.ServerID != tc.wantID || result.IP != tc.wantIP || result.CreationAttempted != tc.wantPost {
 				t.Errorf("unexpected partial result: %+v", result)

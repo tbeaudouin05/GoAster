@@ -509,7 +509,7 @@ func TestOVHCommandUsesLocalConfigAndDoesNotSendValuesToProvider(t *testing.T) {
 	if !reflect.DeepEqual(messages, []string{"hello"}) {
 		t.Fatal("local OVH command was sent to the chat provider")
 	}
-	if !strings.Contains(output.String(), "OVH configuration rejected") || !strings.Contains(output.String(), "Run /env first to select and save valid OVH settings locally.") || strings.Contains(output.String(), "fake-secret") {
+	if !strings.Contains(output.String(), "Telegram token is missing or invalid") || !strings.Contains(output.String(), "Run /env with a valid TELEGRAM_BOT_TOKEN and all four OVH settings") || strings.Contains(output.String(), "fake-secret") {
 		t.Fatal("unexpected OVH configuration output")
 	}
 }

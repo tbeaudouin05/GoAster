@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -110,7 +109,7 @@ func TestOVHLocalConfirmationAndReporting(t *testing.T) {
 	for _, tc := range []struct {
 		name, answer string
 		creates      bool
-	}{{"refuse", "no", false}, {"approve", "CREATE", true}} {
+	}{{"refuse", "no", false}, {"lowercase", "create", false}, {"padded", " CREATE ", false}, {"approve", "CREATE", true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			keyPath := filepath.Join(dir, "key")
@@ -119,7 +118,7 @@ func TestOVHLocalConfirmationAndReporting(t *testing.T) {
 				t.Skipf("OpenSSH ssh-keygen is unavailable: %v", err)
 			}
 			store := localenv.NewStoreAt(filepath.Join(dir, "env"))
-			values := map[string]string{"OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret"}
+			values := map[string]string{"TELEGRAM_BOT_TOKEN": "123456789:abcdefghijklmnopqrstuvwxyzABCDE_12345", "OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret"}
 			if err := store.Save(values); err != nil {
 				t.Fatal(err)
 			}
@@ -173,36 +172,24 @@ func TestTelegramSetupAfterOVHConfirmation(t *testing.T) {
 		wantCalls    int
 		wantMessage  string
 		wantCode     bool
-		importToken  bool
 	}{
 		{name: "creation refused", input: "no\n", token: token, wantMessage: "not confirmed"},
-		{name: "agent failed", input: "CREATE\nSETUP TELEGRAM\n", token: token, installError: true, wantMessage: "install or verify agent service failed"},
-		{name: "skipped", input: "CREATE\nskip\n", token: token, wantMessage: "Telegram setup skipped"},
-		{name: "not exact confirmation", input: "CREATE\nsetup telegram\n", token: token, wantMessage: "Telegram setup skipped"},
-		{name: "missing token", input: "CREATE\nSETUP TELEGRAM\nskip\n", wantMessage: "Telegram token is missing or invalid"},
-		{name: "approved", input: "CREATE\nSETUP TELEGRAM\n", token: token, wantCalls: 1, wantCode: true, wantMessage: "Telegram service is active"},
-		{name: "failed then retry", input: "CREATE\nSETUP TELEGRAM\nSETUP TELEGRAM\n", token: token, setupErrors: 1, wantCalls: 2, wantCode: true, wantMessage: "verification failed"},
-		{name: "import during workflow", input: "CREATE\n/env\ny\nSETUP TELEGRAM\n", importToken: true, wantCalls: 1, wantCode: true, wantMessage: "Telegram service is active"},
+		{name: "agent failed", input: "CREATE\n", token: token, installError: true, wantMessage: "install or verify agent service failed"},
+		{name: "missing token", input: "CREATE\n", wantMessage: "Telegram token is missing or invalid"},
+		{name: "invalid token", input: "CREATE\n", token: "invalid-token", wantMessage: "Telegram token is missing or invalid"},
+		{name: "automatic setup", input: "CREATE\n", token: token, wantCalls: 1, wantCode: true, wantMessage: "Telegram service is active"},
+		{name: "setup failed", input: "CREATE\n", token: token, setupErrors: 1, wantCalls: 1, wantMessage: "verification failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
-			values := map[string]string{"OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret"}
-			if tc.token != "" {
-				values["TELEGRAM_BOT_TOKEN"] = tc.token
-			}
+			values := map[string]string{"TELEGRAM_BOT_TOKEN": "123456789:abcdefghijklmnopqrstuvwxyzABCDE_12345", "OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret"}
+			values["TELEGRAM_BOT_TOKEN"] = tc.token
 			if err := store.Save(values); err != nil {
 				t.Fatal(err)
 			}
 			picker := EnvironmentFilePickerFunc(func() (string, error) {
-				if !tc.importToken {
-					t.Fatal("unexpected picker use")
-				}
-				path := filepath.Join(t.TempDir(), "input")
-				data := "OVH_ENDPOINT=ovh-eu\nOVH_APPLICATION_KEY=fake-app-key\nOVH_APPLICATION_SECRET=fake-app-secret\nOVH_CONSUMER_KEY=fake-consumer-secret\nTELEGRAM_BOT_TOKEN=" + token + "\n"
-				if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-					t.Fatal(err)
-				}
-				return path, nil
+				t.Fatal("unexpected picker use during provisioning")
+				return "", nil
 			})
 			fake := &onboardingHTTP{publicKey: pair.PublicKey}
 			runners := &onboardingRunners{installError: tc.installError, setupErrors: tc.setupErrors}
@@ -214,16 +201,21 @@ func TestTelegramSetupAfterOVHConfirmation(t *testing.T) {
 			if len(runners.telegram) != tc.wantCalls || !strings.Contains(output.String(), tc.wantMessage) {
 				t.Fatalf("setup calls = %d, output = %s", len(runners.telegram), output.String())
 			}
-			if tc.importToken && (strings.Contains(output.String(), "Next command: /ovh") || !strings.Contains(output.String(), "Back in Telegram setup")) {
-				t.Fatal("environment import did not return to the current Telegram setup")
+			if tc.token == "" || tc.token == "invalid-token" {
+				if len(fake.requests) != 0 || runners.installs != 0 {
+					t.Fatal("missing or invalid Telegram token reached provisioning")
+				}
+			}
+			if tc.setupErrors > 0 && (!strings.Contains(output.String(), "Retained server:") || strings.Contains(output.String(), "OVH onboarding complete")) {
+				t.Fatal("Telegram failure did not preserve and report the server as incomplete")
+			}
+			if strings.Contains(output.String(), "SETUP TELEGRAM") || strings.Contains(output.String(), "skipped") {
+				t.Fatal("optional Telegram path was advertised")
 			}
 			for _, call := range runners.telegram {
 				if call.token != token || call.target.IP != "203.0.113.7" || call.target.User != "goaster" || call.target.PrivateKey != pair.PrivateKeyPath {
 					t.Fatal("Telegram setup did not receive only the intended target and token")
 				}
-			}
-			if len(runners.telegram) == 2 && runners.telegram[0].hash != runners.telegram[1].hash {
-				t.Fatal("retry changed the undisclosed pairing code")
 			}
 			matches := regexp.MustCompile(`(?m)^  /start ([A-Za-z0-9_-]+)$`).FindStringSubmatch(output.String())
 			if (len(matches) == 2) != tc.wantCode {
@@ -263,7 +255,7 @@ func TestPairingCodeIsRandomAndHasAValidVerifier(t *testing.T) {
 func TestRuntimeCredentialPreflightAndCustomAuthFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
-	if err := store.Save(map[string]string{"OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret"}); err != nil {
+	if err := store.Save(map[string]string{"TELEGRAM_BOT_TOKEN": "123456789:abcdefghijklmnopqrstuvwxyzABCDE_12345", "OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret"}); err != nil {
 		t.Fatal(err)
 	}
 	custom := CredentialStore{Path: filepath.Join(t.TempDir(), "custom-auth")}

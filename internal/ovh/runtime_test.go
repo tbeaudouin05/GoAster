@@ -266,14 +266,12 @@ func TestRuntimeStorageWithoutTelegramToken(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "runtime")
 	token := filepath.Join(root, "telegram-token")
-	if err := StoreRuntime(bytes.NewReader(data), directory, token, os.Getuid(), os.Getgid()); err != nil {
-		t.Fatal(err)
+	if err := StoreRuntime(bytes.NewReader(data), directory, token, os.Getuid(), os.Getgid()); err == nil {
+		t.Fatal("installation accepted missing Telegram token")
 	}
-	if _, err := os.Lstat(token); !os.IsNotExist(err) {
-		t.Fatal("installation without Telegram created token state")
-	}
-	if got, err := os.ReadFile(filepath.Join(directory, "auth.json")); err != nil || !bytes.Equal(got, b.Auth) {
-		t.Fatal("subscription state missing or changed")
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("rejected bundle left runtime or token state")
 	}
 }
 
@@ -287,20 +285,28 @@ func TestRuntimeServiceFileWiring(t *testing.T) {
 	if strings.Contains(installer, "systemctl enable") || strings.Contains(installer, "systemctl restart") {
 		t.Fatal("installer starts services before credentials")
 	}
-	if strings.Contains(agentStartScript, "goaster-telegram") {
-		t.Fatal("agent startup bypasses Telegram confirmation")
-	}
 }
 
 func TestInvalidRuntimeBundleStopsBeforeOVHCalls(t *testing.T) {
-	config, _ := ConfigFromValues(testValues())
-	fake := &fakeHTTP{t: t}
-	client, _ := NewClient(config, fake)
-	w := Workflow{Client: client, SSH: &fakeSSH{}, Remote: &fakeRemote{}, Confirm: func(context.Context, Plan) (bool, error) {
-		t.Fatal("invalid bundle reached confirmation")
-		return false, nil
-	}}
-	if _, err := w.Run(context.Background()); err == nil || len(fake.requests) != 0 {
-		t.Fatal("invalid runtime bundle reached OVH")
+	for _, token := range []string{"", "invalid-token"} {
+		t.Run(token, func(t *testing.T) {
+			values := testValues()
+			values["TELEGRAM_BOT_TOKEN"] = token
+			if _, err := NewRuntimeBundle([]byte(`{"access_token":"fake-access"}`), values); err == nil {
+				t.Fatal("bundle accepted missing or invalid Telegram token")
+			}
+			bundle := completeRuntime(t)
+			bundle.Values["TELEGRAM_BOT_TOKEN"] = token
+			config, _ := ConfigFromValues(testValues())
+			fake := &fakeHTTP{t: t}
+			client, _ := NewClient(config, fake)
+			w := Workflow{Runtime: bundle, Client: client, SSH: &fakeSSH{}, Remote: &fakeRemote{}, Confirm: func(context.Context, Plan) (bool, error) {
+				t.Fatal("invalid bundle reached confirmation")
+				return false, nil
+			}}
+			if _, err := w.Run(context.Background()); err == nil || len(fake.requests) != 0 {
+				t.Fatal("invalid runtime bundle reached OVH")
+			}
+		})
 	}
 }

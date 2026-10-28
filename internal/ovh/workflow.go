@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"strings"
 	"time"
+
+	"goaster/internal/telegram"
 )
 
 var ErrRefused = errors.New("server creation was not confirmed")
@@ -27,11 +29,13 @@ type SSHRunner interface {
 // RemoteRunner installs and verifies the service on the confirmed instance.
 type RemoteRunner interface {
 	Install(context.Context, Target, string, RuntimeBundle) (commit, serviceStatus string, err error)
+	SetupTelegram(context.Context, Target, string, string) error
 }
 
 type Result struct {
 	Plan                                Plan
 	CreationAttempted                   bool
+	PairingCode                         string
 	ServerID, IP, Commit, ServiceStatus string
 }
 
@@ -137,6 +141,14 @@ func (w Workflow) Run(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("agent commit or service status did not match the expected result")
 	}
 	result.Commit, result.ServiceStatus = commit, status
+	code, hash, err := telegram.PairingCode()
+	if err != nil {
+		return result, fmt.Errorf("Telegram pairing code could not be generated")
+	}
+	if err := w.Remote.SetupTelegram(ctx, target, w.Runtime.Values["TELEGRAM_BOT_TOKEN"], hash); err != nil {
+		return result, fmt.Errorf("Telegram setup or service verification failed; remote setup may be incomplete; check the bot token, outbound access and webhook settings")
+	}
+	result.PairingCode = code
 	return result, nil
 }
 

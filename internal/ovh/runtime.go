@@ -49,10 +49,7 @@ func (b RuntimeBundle) validate() error {
 			return fmt.Errorf("unexpected runtime setting")
 		}
 	}
-	if token := b.Values["TELEGRAM_BOT_TOKEN"]; token != "" {
-		return telegram.ValidateToken(token)
-	}
-	return nil
+	return telegram.ValidateToken(b.Values["TELEGRAM_BOT_TOKEN"])
 }
 
 // StoreRuntime receives bounded JSON on stdin. The caller must be root in production.
@@ -104,31 +101,30 @@ func StoreRuntime(input io.Reader, directory, tokenPath string, uid, gid int) er
 			os.Remove(tokenPath)
 		}
 	}()
-	if token := b.Values["TELEGRAM_BOT_TOKEN"]; token != "" {
-		// The parent is root-owned 0700, created by the installer. A hard link
-		// publishes the complete token without replacing any destination,
-		// including a symlink or a token created after the absence check.
-		f, err := os.CreateTemp(filepath.Dir(tokenPath), ".token-*")
-		if err != nil {
-			return fail()
-		}
-		name := f.Name()
-		defer os.Remove(name)
-		if err := f.Chmod(0600); err != nil {
-			f.Close()
-			return fail()
-		}
-		_, writeErr := f.WriteString(token)
-		syncErr := f.Sync()
-		closeErr := f.Close()
-		if writeErr != nil || syncErr != nil || closeErr != nil {
-			return fail()
-		}
-		if err := os.Link(name, tokenPath); err != nil {
-			return fail()
-		}
-		tokenPublished = true
+	token := b.Values["TELEGRAM_BOT_TOKEN"]
+	// The parent is root-owned 0700, created by the installer. A hard link
+	// publishes the complete token without replacing any destination,
+	// including a symlink or a token created after the absence check.
+	f, err := os.CreateTemp(filepath.Dir(tokenPath), ".token-*")
+	if err != nil {
+		return fail()
 	}
+	name := f.Name()
+	defer os.Remove(name)
+	if err := f.Chmod(0600); err != nil {
+		f.Close()
+		return fail()
+	}
+	_, writeErr := f.WriteString(token)
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if writeErr != nil || syncErr != nil || closeErr != nil {
+		return fail()
+	}
+	if err := os.Link(name, tokenPath); err != nil {
+		return fail()
+	}
+	tokenPublished = true
 	if err := os.Rename(stage, directory); err != nil {
 		return fail()
 	}

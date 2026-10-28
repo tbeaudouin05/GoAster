@@ -24,12 +24,13 @@ Safe setup sequence:
 3. Explain the local sequence: prepare the file shown by /env, type /env and
    select that file in the picker, then type /ovh. /ovh runs a preflight and
    only provisions after the user reviews the plan and types exactly CREATE.
-   For Telegram, create a bot with @BotFather, put TELEGRAM_BOT_TOKEN in the
-   local file together with all four OVH variables, and import it with /env.
-   Every /env import replaces the entire saved set. After /ovh succeeds, the
-   user may explicitly type SETUP TELEGRAM at the separate prompt. The runtime bundle, including any saved bot token, is transferred over
-   encrypted SSH stdin after CREATE; SETUP TELEGRAM separately authorizes activation. The user pairs one private Telegram account with
-   the one-time code shown locally. No webhook or inbound port is used.
+   Telegram is mandatory and the only remote-agent access path. Create a bot
+   with @BotFather, put a valid TELEGRAM_BOT_TOKEN in the local file together
+   with all four OVH variables, and import it with /env before /ovh.
+   Every /env import replaces the entire saved set. After CREATE, the workflow
+   transfers runtime credentials over encrypted SSH stdin, automatically sets
+   up, starts and verifies Telegram polling, and shows the one-time code to
+   pair one private Telegram account. No webhook or inbound port is used.
    The assistant cannot execute /ovh or inspect credentials or cloud state; the
    user executes these steps locally.
 4. When explaining credentials, use current official OVHcloud web guidance
@@ -50,17 +51,16 @@ OVH variable names that GoAster /env needs:
 - OVH_APPLICATION_SECRET: API application secret; keep it private.
 - OVH_CONSUMER_KEY: account-scoped API consumer key; keep it private.
 GoAster discovers the Public Cloud project and deployment region automatically;
-these are the four imported settings required for /ovh; the subscription credential comes from local login.
+these four OVH settings and TELEGRAM_BOT_TOKEN are required for /ovh; the subscription credential comes from local login.
 Provisioning transfers the complete subscription credential (including refresh/account data),
-the four OVH settings, and any saved TELEGRAM_BOT_TOKEN over encrypted SSH stdin.
+the four OVH settings, and the required TELEGRAM_BOT_TOKEN over encrypted SSH stdin.
 The SSH private key stays local. Runtime credentials never authorize destructive
 OVH self-management; require explicit confirmation for those operations.
 The local /ovh workflow discovers the Public Cloud project, region, Ubuntu
 24.04 image, smallest compatible flavor, and SSH key. It generates or reuses a
 persistent Ed25519 key at ~/.goaster/ovh_ed25519, uses the fixed goaster SSH
 user, generates the server name, and derives the exact local GoAster commit.
-The four OVH settings and the active local subscription credential are required for /ovh. TELEGRAM_BOT_TOKEN is
-optional and needed for Telegram; /env accepts other valid names. Each import
+The four OVH settings, a valid TELEGRAM_BOT_TOKEN, and the active local subscription credential are required for /ovh. Telegram is the only remote-agent access path; /env accepts other valid names. Each import
 replaces the previous set, so keep the OVH variables in the same file.
 
 GoAster has a fixed built-in web_search tool that can search current public
@@ -85,8 +85,8 @@ const ovhStartupGuidance = `OVH onboarding:
 Use OVH_ENDPOINT=ovh-eu, ovh-ca, or ovh-us for your API region; GoAster finds the project
 and deployment region. Never paste credentials or secrets into chat. /env saves confirmed
 values locally and replaces the previous saved set.
-For Telegram, create a bot with @BotFather and add TELEGRAM_BOT_TOKEN to the same local file.
-After /ovh succeeds, type SETUP TELEGRAM at its separate prompt to start pairing.`
+Telegram is required: create a bot with @BotFather and add TELEGRAM_BOT_TOKEN to the same local file.
+After CREATE, /ovh automatically starts and verifies Telegram and shows the private pairing command.`
 
 const ovhEnvironmentFileGuidance = `Next: choose your local OVH KEY=VALUE file in the file picker.
 Create the application key, application secret, and consumer key in OVHcloud's official
@@ -100,6 +100,6 @@ OVH_ENDPOINT=ovh-eu
 OVH_APPLICATION_KEY=replace-with-your-application-key
 OVH_APPLICATION_SECRET=replace-with-your-application-secret
 OVH_CONSUMER_KEY=replace-with-your-consumer-key
-Optional Telegram setup: create a bot with @BotFather and add this line to the same file:
+Telegram is mandatory. Create a bot with @BotFather and include its token:
 TELEGRAM_BOT_TOKEN=replace-with-your-bot-token
 /env replaces the saved set, so include all OVH variables when adding the bot token.`
