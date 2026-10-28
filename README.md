@@ -38,6 +38,19 @@ configuration flag:
 ./goaster -auth-file /path/to/auth.json
 ```
 
+## Local environment settings
+
+In chat, enter `/env` to save local settings for a future OVH integration. Add
+one `KEY=VALUE` pair per line, then press Enter on a blank line. GoAster checks
+the names and rejects malformed lines or duplicate keys. It then displays the
+variable names with masked values and asks for `y/N` confirmation. Only `y`
+saves the submitted set; any other response cancels without changing the file.
+
+Confirmed settings are stored in `~/.goaster/env` with `0600` file permissions
+inside a `0700` directory. They are loaded locally at startup and are never sent
+to the chat provider. Each confirmed `/env` setup replaces the previous saved
+set.
+
 ## Models and fallback
 
 Primary and fallback models default to `gpt-6.1-sol` and `gpt-5.6-luna`:

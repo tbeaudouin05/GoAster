@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"goaster/internal/chat"
+	"goaster/internal/localenv"
 )
 
 func main() {
@@ -27,6 +28,14 @@ func run(ctx context.Context, args []string, input io.Reader, output, errorOutpu
 		return err
 	}
 
+	environmentStore, err := localenv.NewStore()
+	if err != nil {
+		return err
+	}
+	if err := environmentStore.Load(); err != nil {
+		return err
+	}
+
 	store, err := chat.NewCredentialStore(runtimeConfig.AuthFile)
 	if err != nil {
 		return err
@@ -35,5 +44,5 @@ func run(ctx context.Context, args []string, input io.Reader, output, errorOutpu
 	if err := codexProvider.EnsureAuth(ctx, output); err != nil {
 		return err
 	}
-	return chat.Run(ctx, input, output, chat.NewSession(runtimeConfig.Config, codexProvider))
+	return chat.RunWithEnvStore(ctx, input, output, chat.NewSession(runtimeConfig.Config, codexProvider), environmentStore)
 }

@@ -7,9 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"goaster/internal/localenv"
 )
 
 func TestConfig(t *testing.T) {
@@ -112,7 +115,7 @@ func TestLoop(t *testing.T) {
 		messages = append(messages, message)
 		return "received " + message, nil
 	})
-	err := Run(context.Background(), strings.NewReader("\n hello \n/history\n/clear\n/quit\n/exit\nsecond\n"), &output, NewSession(defaultConfig(t), provider))
+	err := runWithTestEnvStore(t, context.Background(), strings.NewReader("\n hello \n/history\n/clear\n/quit\n/exit\nsecond\n"), &output, NewSession(defaultConfig(t), provider))
 	if err != nil || !reflect.DeepEqual(messages, []string{"hello", "/history", "/clear", "/quit", "/exit", "second"}) {
 		t.Fatalf("messages = %q, error = %v", messages, err)
 	}
@@ -131,7 +134,7 @@ func TestLoopShowsFallback(t *testing.T) {
 		}
 		return "reply to " + message, nil
 	})
-	err := Run(context.Background(), strings.NewReader("hello\nagain"), &output,
+	err := runWithTestEnvStore(t, context.Background(), strings.NewReader("hello\nagain"), &output,
 		NewSession(defaultConfig(t), provider))
 	if err != nil {
 		t.Fatal(err)
@@ -141,6 +144,78 @@ func TestLoopShowsFallback(t *testing.T) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
 	}
+}
+
+func TestEnvLoopSavesOnlyAfterConfirmationAndKeepsSettingsLocal(t *testing.T) {
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	input := strings.NewReader("/env\nOVH_REGION=gva\nAPI_TOKEN=sample-value\n\ny\nhello\n")
+	if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(messages, []string{"hello"}) {
+		t.Fatalf("provider messages = %q, want only the ordinary chat message", messages)
+	}
+	if !reflect.DeepEqual(store.Values(), map[string]string{"OVH_REGION": "gva", "API_TOKEN": "sample-value"}) {
+		t.Fatalf("saved variable names = %v", localenvNames(store.Values()))
+	}
+	for _, want := range []string{"OVH_REGION=********", "API_TOKEN=********", "Save these values? [y/N]", "Environment values saved locally."} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q: %s", want, &output)
+		}
+	}
+	for _, value := range []string{"gva", "sample-value"} {
+		if strings.Contains(output.String(), value) {
+			t.Errorf("output exposed a submitted value %q", value)
+		}
+	}
+}
+
+func TestEnvLoopCancellationPreservesSavedValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "env")
+	store := localenv.NewStoreAt(path)
+	if err := store.Save(map[string]string{"EXISTING": "before"}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	input := strings.NewReader("/env\nNEW_VALUE=after\n\nn\nhello\n")
+	if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(store.Values(), map[string]string{"EXISTING": "before"}) {
+		t.Fatalf("canceled setup changed saved variable names: %v", localenvNames(store.Values()))
+	}
+	loaded := localenv.NewStoreAt(path)
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Values(), map[string]string{"EXISTING": "before"}) {
+		t.Fatalf("canceled setup changed persisted variable names: %v", localenvNames(loaded.Values()))
+	}
+	if !strings.Contains(output.String(), "Environment setup canceled.") {
+		t.Errorf("output did not report cancellation: %s", &output)
+	}
+	if !reflect.DeepEqual(messages, []string{"hello"}) {
+		t.Fatalf("provider messages = %q, want only the ordinary chat message", messages)
+	}
+}
+
+func localenvNames(values map[string]string) []string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	return names
 }
 
 type failingReader struct{ err error }
@@ -165,9 +240,18 @@ func TestLoopErrors(t *testing.T) {
 		{"provider", strings.NewReader("hello\n"), io.Discard, providerFunc(func(context.Context, string, string) (string, error) { return "", failure })},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := Run(context.Background(), tc.input, tc.output, NewSession(defaultConfig(t), tc.provider)); !errors.Is(err, failure) {
+			if err := runWithTestEnvStore(t, context.Background(), tc.input, tc.output, NewSession(defaultConfig(t), tc.provider)); !errors.Is(err, failure) {
 				t.Fatalf("error = %v", err)
 			}
 		})
 	}
+}
+
+func runWithTestEnvStore(t *testing.T, ctx context.Context, input io.Reader, output io.Writer, session *Session) error {
+	t.Helper()
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Load(); err != nil {
+		return err
+	}
+	return RunWithEnvStore(ctx, input, output, session, store)
 }
