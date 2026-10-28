@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,7 @@ const (
 	directoryName = ".goaster"
 	fileName      = "env"
 	maxLineSize   = 1024 * 1024
+	maxFileSize   = 1024 * 1024
 )
 
 // Store keeps environment settings separate from chat messages and providers.
@@ -40,6 +42,75 @@ func NewStoreAt(path string) *Store {
 // Values returns a copy of the values loaded or saved by this store.
 func (s *Store) Values() map[string]string {
 	return clone(s.values)
+}
+
+// LoadFile reads and validates KEY=VALUE settings from a local regular file.
+// It never changes a Store; callers can review the returned values first.
+func LoadFile(path string) (map[string]string, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("environment file path is empty")
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect environment file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("environment file must not be a symbolic link")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("environment file must be a regular file")
+	}
+	if info.Mode().Perm()&0444 == 0 {
+		return nil, fmt.Errorf("environment file is not readable")
+	}
+	if info.Size() > maxFileSize {
+		return nil, fmt.Errorf("environment file exceeds the 1 MiB limit")
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open environment file: %w", err)
+	}
+	defer file.Close()
+
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened environment file: %w", err)
+	}
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect environment file: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(openedInfo, pathInfo) {
+		return nil, fmt.Errorf("environment file changed while it was opened")
+	}
+	if !openedInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("environment file must be a regular file")
+	}
+	if openedInfo.Mode().Perm()&0444 == 0 {
+		return nil, fmt.Errorf("environment file is not readable")
+	}
+	if openedInfo.Size() > maxFileSize {
+		return nil, fmt.Errorf("environment file exceeds the 1 MiB limit")
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read environment file: %w", err)
+	}
+	if len(data) > maxFileSize {
+		return nil, fmt.Errorf("environment file exceeds the 1 MiB limit")
+	}
+
+	values, err := Parse(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("parse environment file: %w", err)
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("environment file contains no settings")
+	}
+	return values, nil
 }
 
 // Load reads settings without creating the file. A missing file means no

@@ -40,11 +40,15 @@ configuration flag:
 
 ## Local environment settings
 
-In chat, enter `/env` to save local settings for a future OVH integration. Add
-one `KEY=VALUE` pair per line, then press Enter on a blank line. GoAster checks
-the names and rejects malformed lines or duplicate keys. It then displays the
+In chat, enter `/env /path/to/env-file` to load local settings for a future OVH
+integration. `/env` requires a local file path; it does not accept typed
+`KEY=VALUE` entries. Relative paths are resolved from the directory where
+GoAster started. The file must contain one `KEY=VALUE` pair per line and be no
+larger than 1 MiB. GoAster reads it locally, validates it, then shows the
 variable names with masked values and asks for `y/N` confirmation. Only `y`
-saves the submitted set; any other response cancels without changing the file.
+saves the set; any other response cancels without changing the file. Unreadable,
+malformed, duplicate-key, oversized, symbolic-link, or non-regular files are
+rejected without changing the saved settings.
 
 Confirmed settings are stored in `~/.goaster/env` with `0600` file permissions
 inside a `0700` directory. They are loaded locally at startup and are never sent

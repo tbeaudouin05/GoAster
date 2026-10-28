@@ -59,8 +59,15 @@ func RunWithEnvStore(ctx context.Context, input io.Reader, output io.Writer, ses
 		if message == "" {
 			continue
 		}
-		if message == "/env" {
-			if err := runEnvironmentSetup(scanner, w, store); err != nil {
+		if path, isEnvironmentCommand := environmentFilePath(message); isEnvironmentCommand {
+			if path == "" {
+				fmt.Fprintln(w, "Usage: /env <local-file-path>")
+				if err := w.Flush(); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := runEnvironmentFileSetup(path, scanner, w, store); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -86,38 +93,30 @@ func RunWithEnvStore(ctx context.Context, input io.Reader, output io.Writer, ses
 	}
 }
 
-func runEnvironmentSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store) error {
-	fmt.Fprintln(output, "Enter KEY=VALUE pairs, one per line. Press Enter on a blank line to review.")
-	var lines []string
-	for {
-		fmt.Fprint(output, "env> ")
-		if err := output.Flush(); err != nil {
-			return err
-		}
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return fmt.Errorf("read environment settings: %w", err)
-			}
-			fmt.Fprintln(output, "\nEnvironment setup canceled.")
-			return nil
-		}
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			break
-		}
-		lines = append(lines, line)
-	}
-	if len(lines) == 0 {
-		fmt.Fprintln(output, "No environment values entered; nothing saved.")
-		return nil
-	}
-
-	values, err := localenv.Parse(strings.Join(lines, "\n"))
+func runEnvironmentFileSetup(path string, scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store) error {
+	values, err := localenv.LoadFile(path)
 	if err != nil {
-		fmt.Fprintf(output, "Environment setup rejected: %v\n", err)
+		fmt.Fprintf(output, "Environment file rejected: %v\n", err)
 		return nil
 	}
+	return reviewEnvironmentValues(scanner, output, store, values)
+}
 
+func environmentFilePath(message string) (string, bool) {
+	if message == "/env" {
+		return "", true
+	}
+	if !strings.HasPrefix(message, "/env") || len(message) == len("/env") {
+		return "", false
+	}
+	separator := message[len("/env")]
+	if separator != ' ' && separator != '\t' {
+		return "", false
+	}
+	return strings.TrimSpace(message[len("/env"):]), true
+}
+
+func reviewEnvironmentValues(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, values map[string]string) error {
 	fmt.Fprintln(output, "Review environment values (values are masked):")
 	keys := make([]string, 0, len(values))
 	for key := range values {

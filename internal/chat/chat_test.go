@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -146,38 +147,56 @@ func TestLoopShowsFallback(t *testing.T) {
 	}
 }
 
-func TestEnvLoopSavesOnlyAfterConfirmationAndKeepsSettingsLocal(t *testing.T) {
-	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+func TestEnvWithoutPathShowsUsageAndKeepsSettingsLocal(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "env")
+	store := localenv.NewStoreAt(storePath)
+	if err := store.Save(map[string]string{"EXISTING": "before"}); err != nil {
+		t.Fatal(err)
+	}
+	originalFile, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
 	var messages []string
 	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
 		messages = append(messages, message)
 		return "received", nil
 	})
-	input := strings.NewReader("/env\nOVH_REGION=gva\nAPI_TOKEN=sample-value\n\ny\nhello\n")
+	input := strings.NewReader("/env\nhello\n")
 	if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(messages, []string{"hello"}) {
 		t.Fatalf("provider messages = %q, want only the ordinary chat message", messages)
 	}
-	if !reflect.DeepEqual(store.Values(), map[string]string{"OVH_REGION": "gva", "API_TOKEN": "sample-value"}) {
-		t.Fatalf("saved variable names = %v", localenvNames(store.Values()))
+	if !reflect.DeepEqual(store.Values(), map[string]string{"EXISTING": "before"}) {
+		t.Fatalf("bare /env changed saved variable names: %v", localenvNames(store.Values()))
 	}
-	for _, want := range []string{"OVH_REGION=********", "API_TOKEN=********", "Save these values? [y/N]", "Environment values saved locally."} {
-		if !strings.Contains(output.String(), want) {
-			t.Errorf("output missing %q: %s", want, &output)
-		}
+	afterFile, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, value := range []string{"gva", "sample-value"} {
-		if strings.Contains(output.String(), value) {
-			t.Errorf("output exposed a submitted value %q", value)
+	if !bytes.Equal(afterFile, originalFile) {
+		t.Errorf("bare /env changed saved env file: before %q, after %q", originalFile, afterFile)
+	}
+	if !strings.Contains(output.String(), "Usage: /env <local-file-path>") {
+		t.Errorf("output missing file-path usage: %s", &output)
+	}
+	for _, unwanted := range []string{"env>", "Review environment values", "Save these values?"} {
+		if strings.Contains(output.String(), unwanted) {
+			t.Errorf("bare /env entered an interactive setup flow: %s", &output)
 		}
 	}
 }
 
-func TestEnvLoopCancellationPreservesSavedValues(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "env")
+func TestEnvFileCancellationPreservesSavedValues(t *testing.T) {
+	directory := t.TempDir()
+	inputFile := filepath.Join(directory, "settings.txt")
+	if err := os.WriteFile(inputFile, []byte("NEW_VALUE=after\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "env")
 	store := localenv.NewStoreAt(path)
 	if err := store.Save(map[string]string{"EXISTING": "before"}); err != nil {
 		t.Fatal(err)
@@ -188,7 +207,7 @@ func TestEnvLoopCancellationPreservesSavedValues(t *testing.T) {
 		messages = append(messages, message)
 		return "received", nil
 	})
-	input := strings.NewReader("/env\nNEW_VALUE=after\n\nn\nhello\n")
+	input := strings.NewReader(fmt.Sprintf("/env %s\nn\nhello\n", inputFile))
 	if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
 		t.Fatal(err)
 	}
@@ -207,6 +226,134 @@ func TestEnvLoopCancellationPreservesSavedValues(t *testing.T) {
 	}
 	if !reflect.DeepEqual(messages, []string{"hello"}) {
 		t.Fatalf("provider messages = %q, want only the ordinary chat message", messages)
+	}
+}
+
+func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
+	directory := t.TempDir()
+	filePath := filepath.Join(directory, "settings to import.txt")
+	if err := os.WriteFile(filePath, []byte("OVH_REGION=gva\nAPI_TOKEN=file-secret-value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := localenv.NewStoreAt(filepath.Join(directory, "saved", "env"))
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	input := strings.NewReader(fmt.Sprintf("/env %s\ny\nhello\n", filePath))
+	if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
+		t.Fatal(err)
+	}
+
+	wantValues := map[string]string{"OVH_REGION": "gva", "API_TOKEN": "file-secret-value"}
+	if !reflect.DeepEqual(store.Values(), wantValues) {
+		t.Fatalf("saved variable names = %v, want %v", localenvNames(store.Values()), localenvNames(wantValues))
+	}
+	if !reflect.DeepEqual(messages, []string{"hello"}) {
+		t.Fatalf("provider messages = %q, want only the ordinary chat message", messages)
+	}
+	for _, want := range []string{"OVH_REGION=********", "API_TOKEN=********", "Save these values? [y/N]", "Environment values saved locally."} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q: %s", want, &output)
+		}
+	}
+	for _, secret := range []string{"gva", "file-secret-value"} {
+		if strings.Contains(output.String(), secret) {
+			t.Errorf("output exposed a file value %q", secret)
+		}
+	}
+}
+
+func TestEnvFileCommandErrorsPreserveSavedValuesAndContinue(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content []byte
+		prepare func(t *testing.T, path string)
+		wantErr string
+	}{
+		{name: "missing", wantErr: "inspect environment file"},
+		{name: "malformed", content: []byte("VALID=secret-value\nbad line\n"), wantErr: "line 2 must be KEY=VALUE"},
+		{name: "duplicate", content: []byte("DUPLICATE=first\nDUPLICATE=second\n"), wantErr: "duplicates key DUPLICATE"},
+		{name: "oversized", content: []byte(strings.Repeat("A", 1024*1024+1)), wantErr: "exceeds the 1 MiB limit"},
+		{name: "unreadable", prepare: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte("KEY=value\n"), 0000); err != nil {
+				t.Fatal(err)
+			}
+		}, wantErr: "not readable"},
+		{name: "symbolic link", prepare: func(t *testing.T, path string) {
+			t.Helper()
+			target := path + ".target"
+			if err := os.WriteFile(target, []byte("KEY=value\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Skipf("cannot create symbolic link: %v", err)
+			}
+		}, wantErr: "must not be a symbolic link"},
+		{name: "non-regular", prepare: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}, wantErr: "must be a regular file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			directory := t.TempDir()
+			filePath := filepath.Join(directory, "settings.txt")
+			if tc.prepare != nil {
+				tc.prepare(t, filePath)
+			} else if tc.name != "missing" {
+				if err := os.WriteFile(filePath, tc.content, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			storePath := filepath.Join(directory, "saved", "env")
+			store := localenv.NewStoreAt(storePath)
+			if err := store.Save(map[string]string{"EXISTING": "before"}); err != nil {
+				t.Fatal(err)
+			}
+			originalFile, err := os.ReadFile(storePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var output bytes.Buffer
+			var messages []string
+			provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+				messages = append(messages, message)
+				return "received", nil
+			})
+			input := strings.NewReader(fmt.Sprintf("/env %s\nhello\n", filePath))
+			if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
+				t.Fatal(err)
+			}
+
+			if !strings.Contains(output.String(), "Environment file rejected:") || !strings.Contains(output.String(), tc.wantErr) {
+				t.Errorf("output did not explain the rejected file: %s", &output)
+			}
+			if strings.Contains(output.String(), "Review environment values") {
+				t.Errorf("rejected file was sent to review: %s", &output)
+			}
+			if !reflect.DeepEqual(messages, []string{"hello"}) {
+				t.Errorf("provider messages = %q, want only the ordinary chat message", messages)
+			}
+			if !reflect.DeepEqual(store.Values(), map[string]string{"EXISTING": "before"}) {
+				t.Errorf("rejected file changed saved values: %v", localenvNames(store.Values()))
+			}
+			afterFile, err := os.ReadFile(storePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(afterFile, originalFile) {
+				t.Errorf("rejected file changed saved env file: before %q, after %q", originalFile, afterFile)
+			}
+		})
 	}
 }
 
