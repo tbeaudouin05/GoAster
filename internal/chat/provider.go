@@ -33,6 +33,7 @@ type Session struct {
 	config   Config
 	active   string
 	reason   string
+	history  []Entry
 }
 
 func NewSession(config Config, provider Provider) *Session {
@@ -40,6 +41,15 @@ func NewSession(config Config, provider Provider) *Session {
 }
 
 func (s *Session) Reply(ctx context.Context, message string) (string, error) {
+	s.history = append(s.history, Entry{Role: "user", Content: message})
+	reply, err := s.reply(ctx, message)
+	if err == nil {
+		s.history = append(s.history, Entry{Role: "assistant", Content: reply})
+	}
+	return reply, err
+}
+
+func (s *Session) reply(ctx context.Context, message string) (string, error) {
 	reply, err := s.provider.Reply(ctx, s.active, message)
 	if err == nil {
 		return reply, nil

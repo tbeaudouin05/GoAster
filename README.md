@@ -10,8 +10,14 @@ go test ./...
 ```
 
 Enter one message per line. Blank lines are ignored. Use `/quit`, `/exit`, or EOF
-(Ctrl-D on Unix) to exit. Messages are not persisted; the echo provider has no
-conversation memory.
+(Ctrl-D on Unix) to exit. Use `/history` to display numbered user and assistant
+entries for the current session, and `/clear` to erase them and restart numbering.
+Clearing confirms with `History cleared.`; empty history displays `History is empty.`
+Commands and blank lines are not recorded. Each submitted message is recorded
+once, along with its successful reply; a failed reply leaves only the user entry.
+History is kept only in memory and is lost on exit. It is not sent to the provider;
+the echo provider still replies to each message independently. Clearing history
+does not reset the active model or fallback reason.
 
 Primary and fallback models default to `gpt-6.1-sol` and `gpt-5.6-luna`:
 
