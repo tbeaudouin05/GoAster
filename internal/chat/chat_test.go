@@ -147,7 +147,7 @@ func TestLoopShowsFallback(t *testing.T) {
 	}
 }
 
-func TestEnvWithoutPathShowsUsageAndKeepsSettingsLocal(t *testing.T) {
+func TestEnvPickerCancellationPreservesSavedValues(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "env")
 	store := localenv.NewStoreAt(storePath)
 	if err := store.Save(map[string]string{"EXISTING": "before"}); err != nil {
@@ -163,9 +163,17 @@ func TestEnvWithoutPathShowsUsageAndKeepsSettingsLocal(t *testing.T) {
 		messages = append(messages, message)
 		return "received", nil
 	})
+	pickerCalls := 0
+	picker := EnvironmentFilePickerFunc(func() (string, error) {
+		pickerCalls++
+		return "", ErrEnvironmentFilePickerCanceled
+	})
 	input := strings.NewReader("/env\nhello\n")
-	if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
+	if err := RunWithEnvStoreAndPicker(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
 		t.Fatal(err)
+	}
+	if pickerCalls != 1 {
+		t.Fatalf("picker calls = %d, want 1", pickerCalls)
 	}
 	if !reflect.DeepEqual(messages, []string{"hello"}) {
 		t.Fatalf("provider messages = %q, want only the ordinary chat message", messages)
@@ -180,12 +188,48 @@ func TestEnvWithoutPathShowsUsageAndKeepsSettingsLocal(t *testing.T) {
 	if !bytes.Equal(afterFile, originalFile) {
 		t.Errorf("bare /env changed saved env file: before %q, after %q", originalFile, afterFile)
 	}
-	if !strings.Contains(output.String(), "Usage: /env <local-file-path>") {
-		t.Errorf("output missing file-path usage: %s", &output)
+	if !strings.Contains(output.String(), "Environment setup canceled.") {
+		t.Errorf("output did not report cancellation: %s", &output)
 	}
-	for _, unwanted := range []string{"env>", "Review environment values", "Save these values?"} {
+	for _, unwanted := range []string{"Usage: /env <local-file-path>", "Review environment values", "Save these values?"} {
 		if strings.Contains(output.String(), unwanted) {
-			t.Errorf("bare /env entered an interactive setup flow: %s", &output)
+			t.Errorf("canceled /env entered an unexpected flow: %s", &output)
+		}
+	}
+}
+
+func TestEnvPathSyntaxIsNotACommand(t *testing.T) {
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Save(map[string]string{"EXISTING": "before"}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	pickerCalls := 0
+	picker := EnvironmentFilePickerFunc(func() (string, error) {
+		pickerCalls++
+		return "", errors.New("the picker must not be called for path syntax")
+	})
+	message := "/env /path/to/settings.txt"
+	if err := RunWithEnvStoreAndPicker(context.Background(), strings.NewReader(message+"\n"), &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
+		t.Fatal(err)
+	}
+	if pickerCalls != 0 {
+		t.Fatalf("picker calls = %d, want 0", pickerCalls)
+	}
+	if !reflect.DeepEqual(messages, []string{message}) {
+		t.Fatalf("provider messages = %q, want %q", messages, []string{message})
+	}
+	if !reflect.DeepEqual(store.Values(), map[string]string{"EXISTING": "before"}) {
+		t.Fatalf("path syntax changed saved values: %v", localenvNames(store.Values()))
+	}
+	for _, unwanted := range []string{"Environment file rejected:", "Review environment values", "Environment setup canceled."} {
+		if strings.Contains(output.String(), unwanted) {
+			t.Errorf("path syntax entered environment setup: %s", &output)
 		}
 	}
 }
@@ -207,8 +251,9 @@ func TestEnvFileCancellationPreservesSavedValues(t *testing.T) {
 		messages = append(messages, message)
 		return "received", nil
 	})
-	input := strings.NewReader(fmt.Sprintf("/env %s\nn\nhello\n", inputFile))
-	if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
+	picker := EnvironmentFilePickerFunc(func() (string, error) { return inputFile, nil })
+	input := strings.NewReader("/env\nn\nhello\n")
+	if err := RunWithEnvStoreAndPicker(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(store.Values(), map[string]string{"EXISTING": "before"}) {
@@ -245,8 +290,9 @@ func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
 		messages = append(messages, message)
 		return "received", nil
 	})
-	input := strings.NewReader(fmt.Sprintf("/env %s\ny\nhello\n", filePath))
-	if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
+	picker := EnvironmentFilePickerFunc(func() (string, error) { return filePath, nil })
+	input := strings.NewReader("/env\ny\nhello\n")
+	if err := RunWithEnvStoreAndPicker(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
 		t.Fatal(err)
 	}
 
@@ -329,8 +375,9 @@ func TestEnvFileCommandErrorsPreserveSavedValuesAndContinue(t *testing.T) {
 				messages = append(messages, message)
 				return "received", nil
 			})
-			input := strings.NewReader(fmt.Sprintf("/env %s\nhello\n", filePath))
-			if err := RunWithEnvStore(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store); err != nil {
+			picker := EnvironmentFilePickerFunc(func() (string, error) { return filePath, nil })
+			input := strings.NewReader("/env\nhello\n")
+			if err := RunWithEnvStoreAndPicker(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
 				t.Fatal(err)
 			}
 
@@ -396,9 +443,16 @@ func TestLoopErrors(t *testing.T) {
 
 func runWithTestEnvStore(t *testing.T, ctx context.Context, input io.Reader, output io.Writer, session *Session) error {
 	t.Helper()
+	return runWithTestEnvStoreAndPicker(t, ctx, input, output, session, EnvironmentFilePickerFunc(func() (string, error) {
+		return "", ErrEnvironmentFilePickerCanceled
+	}))
+}
+
+func runWithTestEnvStoreAndPicker(t *testing.T, ctx context.Context, input io.Reader, output io.Writer, session *Session, picker EnvironmentFilePicker) error {
+	t.Helper()
 	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
 	if err := store.Load(); err != nil {
 		return err
 	}
-	return RunWithEnvStore(ctx, input, output, session, store)
+	return RunWithEnvStoreAndPicker(ctx, input, output, session, store, picker)
 }

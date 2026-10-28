@@ -3,6 +3,7 @@ package chat
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -25,8 +26,17 @@ func Run(ctx context.Context, input io.Reader, output io.Writer, session *Sessio
 
 // RunWithEnvStore runs chat with a separately loaded local environment store.
 func RunWithEnvStore(ctx context.Context, input io.Reader, output io.Writer, session *Session, store *localenv.Store) error {
+	return RunWithEnvStoreAndPicker(ctx, input, output, session, store, nativeEnvironmentFilePicker{})
+}
+
+// RunWithEnvStoreAndPicker runs chat with a separately loaded local
+// environment store and an injectable local-file picker.
+func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Writer, session *Session, store *localenv.Store, picker EnvironmentFilePicker) error {
 	if store == nil {
 		return fmt.Errorf("environment settings store is nil")
+	}
+	if picker == nil {
+		return fmt.Errorf("environment file picker is nil")
 	}
 	w := bufio.NewWriter(output)
 	status := func() {
@@ -59,15 +69,8 @@ func RunWithEnvStore(ctx context.Context, input io.Reader, output io.Writer, ses
 		if message == "" {
 			continue
 		}
-		if path, isEnvironmentCommand := environmentFilePath(message); isEnvironmentCommand {
-			if path == "" {
-				fmt.Fprintln(w, "Usage: /env <local-file-path>")
-				if err := w.Flush(); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := runEnvironmentFileSetup(path, scanner, w, store); err != nil {
+		if message == "/env" {
+			if err := runEnvironmentFileSetup(scanner, w, store, picker); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -93,27 +96,27 @@ func RunWithEnvStore(ctx context.Context, input io.Reader, output io.Writer, ses
 	}
 }
 
-func runEnvironmentFileSetup(path string, scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store) error {
+func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker) error {
+	path, err := picker.Pick()
+	if err != nil {
+		if errors.Is(err, ErrEnvironmentFilePickerCanceled) {
+			fmt.Fprintln(output, "Environment setup canceled.")
+			return nil
+		}
+		fmt.Fprintf(output, "Environment file selection failed: %v\n", err)
+		return nil
+	}
+	if strings.TrimSpace(path) == "" {
+		fmt.Fprintln(output, "Environment setup canceled.")
+		return nil
+	}
+
 	values, err := localenv.LoadFile(path)
 	if err != nil {
 		fmt.Fprintf(output, "Environment file rejected: %v\n", err)
 		return nil
 	}
 	return reviewEnvironmentValues(scanner, output, store, values)
-}
-
-func environmentFilePath(message string) (string, bool) {
-	if message == "/env" {
-		return "", true
-	}
-	if !strings.HasPrefix(message, "/env") || len(message) == len("/env") {
-		return "", false
-	}
-	separator := message[len("/env")]
-	if separator != ' ' && separator != '\t' {
-		return "", false
-	}
-	return strings.TrimSpace(message[len("/env"):]), true
 }
 
 func reviewEnvironmentValues(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, values map[string]string) error {

@@ -1,8 +1,8 @@
 # GoAster
 
-A small standalone terminal chat app, built with Go's standard library. Requires
-Go 1.22+. Normal chat uses an OpenAI ChatGPT/Codex subscription through the
-Codex backend; it does not use an OpenAI API key.
+A small standalone terminal chat app, built with Go and a native file-picker
+integration. Requires Go 1.22+. Normal chat uses an OpenAI ChatGPT/Codex
+subscription through the Codex backend; it does not use an OpenAI API key.
 
 ## Build and run
 
@@ -40,15 +40,18 @@ configuration flag:
 
 ## Local environment settings
 
-In chat, enter `/env /path/to/env-file` to load local settings for a future OVH
-integration. `/env` requires a local file path; it does not accept typed
-`KEY=VALUE` entries. Relative paths are resolved from the directory where
-GoAster started. The file must contain one `KEY=VALUE` pair per line and be no
-larger than 1 MiB. GoAster reads it locally, validates it, then shows the
-variable names with masked values and asks for `y/N` confirmation. Only `y`
-saves the set; any other response cancels without changing the file. Unreadable,
+In chat, enter `/env` to load local settings for a future OVH integration. A
+native file picker opens; choose the local environment text file there. Do not
+type or paste a file path or `KEY=VALUE` entries into chat. The file must contain
+one `KEY=VALUE` pair per line and be no larger than 1 MiB. GoAster reads it
+locally, validates it, then shows the variable names with masked values and asks
+for `y/N` confirmation. Only `y` saves the set; any other response, including
+canceling the picker, leaves the saved settings unchanged. Unreadable,
 malformed, duplicate-key, oversized, symbolic-link, or non-regular files are
 rejected without changing the saved settings.
+
+On Linux, the desktop must provide a Zenity-compatible dialog helper such as
+`zenity`, `qarma`, or `matedialog`.
 
 Confirmed settings are stored in `~/.goaster/env` with `0600` file permissions
 inside a `0700` directory. They are loaded locally at startup and are never sent
