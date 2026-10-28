@@ -4,11 +4,12 @@ A small standalone terminal chat app, built with Go and a native file-picker
 integration. Requires Go 1.22+. Normal chat uses an OpenAI ChatGPT/Codex
 subscription through the Codex backend; it does not use an OpenAI API key. A
 fixed built-in `web_search` tool uses no-key DuckDuckGo HTML search and returns
-search-result titles, URLs, and snippets. The built-in `shell_execute` tool runs
-commands through the platform's native shell and returns stdout, stderr, and the
-exit code; it accepts an optional working directory and timeout in milliseconds.
-GoAster has no provider, API-key, or web-search flag configuration and does not
-fetch web pages.
+search-result titles, URLs, and snippets. The built-in `web_fetch` tool retrieves
+readable content from public HTTP or HTTPS URLs with response and redirect limits.
+The built-in `shell_execute` tool runs commands through the platform's native
+shell and returns stdout, stderr, and the exit code; it accepts an optional
+working directory and timeout in milliseconds. GoAster has no provider, API-key,
+or web-search flag configuration.
 
 ## Build and run
 

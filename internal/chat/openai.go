@@ -34,6 +34,7 @@ const (
 	defaultPollDelay       = 5 * time.Second
 	maxResponseBody        = 8 << 20
 	maxCodexWebSearchCalls = 3
+	maxCodexWebFetchCalls  = 5
 )
 
 var ErrLoginRequired = errors.New("OpenAI subscription authentication required")
@@ -633,6 +634,7 @@ type CodexProvider struct {
 	backendURL      string
 	webSearchClient *http.Client
 	webSearchURL    string
+	webFetchClient  *http.Client
 }
 
 func NewCodexProvider(store CredentialStore) *CodexProvider {
@@ -643,6 +645,7 @@ func NewCodexProvider(store CredentialStore) *CodexProvider {
 		backendURL:      openAICodexURL,
 		webSearchClient: newWebSearchHTTPClient(),
 		webSearchURL:    duckDuckGoHTMLURL,
+		webFetchClient:  newWebFetchHTTPClient(),
 	}
 }
 
@@ -753,6 +756,29 @@ var webSearchCodexTool = codexTool{
 	},
 }
 
+var webFetchCodexTool = codexTool{
+	Type:        "function",
+	Name:        "web_fetch",
+	Description: "Fetch a public HTTP or HTTPS URL, such as a selected web_search result. Returns readable page content and truncation metadata.",
+	Parameters: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"url": map[string]any{
+				"type":        "string",
+				"description": "Public HTTP or HTTPS URL to fetch",
+			},
+			"maxChars": map[string]any{
+				"type":        "integer",
+				"description": "Maximum content characters (default: 20000, maximum: 100000)",
+				"minimum":     1,
+				"maximum":     webFetchMaxChars,
+			},
+		},
+		"required":             []string{"url"},
+		"additionalProperties": false,
+	},
+}
+
 var shellExecuteCodexTool = codexTool{
 	Type:        "function",
 	Name:        "shell_execute",
@@ -848,6 +874,7 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 		Content: []codexInputContent{{Type: "input_text", Text: message}},
 	}}
 	webSearchCallCount := 0
+	webFetchCallCount := 0
 	for {
 		response, status, err := p.requestCodex(ctx, credential, model, input)
 		if err != nil {
@@ -857,13 +884,20 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 			return response.Text, status, nil
 		}
 		responseWebSearchCalls := 0
+		responseWebFetchCalls := 0
 		for _, call := range response.ToolCalls {
 			if call.Name == webSearchCodexTool.Name {
 				responseWebSearchCalls++
 			}
+			if call.Name == webFetchCodexTool.Name {
+				responseWebFetchCalls++
+			}
 		}
 		if webSearchCallCount+responseWebSearchCalls > maxCodexWebSearchCalls {
 			return "", status, fmt.Errorf("Codex requested too many web_search calls (maximum %d)", maxCodexWebSearchCalls)
+		}
+		if webFetchCallCount+responseWebFetchCalls > maxCodexWebFetchCalls {
+			return "", status, fmt.Errorf("Codex requested too many web_fetch calls (maximum %d)", maxCodexWebFetchCalls)
 		}
 
 		callItems := make([]codexInputItem, 0, len(response.ToolCalls))
@@ -881,6 +915,15 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 					return "", status, fmt.Errorf("execute web_search: %w", err)
 				}
 				webSearchCallCount++
+			case webFetchCodexTool.Name:
+				arguments, fetchErr := parseWebFetchArguments(call.Arguments)
+				if fetchErr == nil {
+					result, fetchErr = fetchWebPage(ctx, p.webFetchHTTPClient(), arguments)
+				}
+				if fetchErr != nil {
+					result = fmt.Sprintf("web_fetch error: %v", fetchErr)
+				}
+				webFetchCallCount++
 			case shellExecuteCodexTool.Name:
 				result, err = executeShell(ctx, call.Arguments)
 				if err != nil {
@@ -911,7 +954,7 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 		Model:        model,
 		Instructions: openAIInstructions,
 		Input:        input,
-		Tools:        []codexTool{webSearchCodexTool, shellExecuteCodexTool},
+		Tools:        []codexTool{webSearchCodexTool, webFetchCodexTool, shellExecuteCodexTool},
 		Stream:       true,
 		Store:        false,
 	})
@@ -962,6 +1005,13 @@ func (p *CodexProvider) webSearchEndpoint() string {
 		return duckDuckGoHTMLURL
 	}
 	return p.webSearchURL
+}
+
+func (p *CodexProvider) webFetchHTTPClient() *http.Client {
+	if p.webFetchClient == nil {
+		return newWebFetchHTTPClient()
+	}
+	return p.webFetchClient
 }
 
 func (p *CodexProvider) client() *http.Client {
