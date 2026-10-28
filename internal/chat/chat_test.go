@@ -120,7 +120,19 @@ func TestLoop(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(messages, []string{"hello", "/history", "/clear", "/quit", "/exit", "second"}) {
 		t.Fatalf("messages = %q, error = %v", messages, err)
 	}
-	for _, want := range []string{"chat provider", "Type a message, then press Enter.", "OVH onboarding:", "Create an OVHcloud account.", "creating your remote agent", "Next command: /env", "select the file in the file picker", "details on obtaining OVH credentials", "Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello", "assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear", "assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit", "assistant [gpt-6.1-sol]> received second"} {
+	for _, want := range []string{
+		"chat provider", "Type a message, then press Enter.", "OVH onboarding:",
+		"Create an OVHcloud account.", "Account creation is free", "Prepare the local file shown by /env",
+		"server is paid", "short test may cost cents", "few dollars per month or more",
+		"https://www.ovhcloud.com/en/public-cloud/prices/",
+		"Official details on obtaining OVH credentials", "details on obtaining OVH credentials", "OVH_ENDPOINT=ovh-eu, ovh-ca, or ovh-us",
+		"Next command: /env", "select the file in the file picker", "then type /ovh",
+		"exactly CREATE", "Never paste credentials or secrets into chat",
+		"Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello",
+		"assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear",
+		"assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit",
+		"assistant [gpt-6.1-sol]> received second",
+	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
@@ -321,7 +333,10 @@ func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
 		"Environment values saved locally.",
 		"Next command: /ovh",
 		"Next: choose your local OVH KEY=VALUE file in the file picker.",
+		"OVH_ENDPOINT=ovh-eu",
+		"OVH_APPLICATION_KEY=replace-with-your-application-key",
 		"OVH_APPLICATION_SECRET=replace-with-your-application-secret",
+		"OVH_CONSUMER_KEY=replace-with-your-consumer-key",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
