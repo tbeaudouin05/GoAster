@@ -33,7 +33,7 @@ const (
 	maxResponseBody   = 8 << 20
 )
 
-var ErrLoginRequired = errors.New("OpenAI subscription login required")
+var ErrLoginRequired = errors.New("OpenAI subscription authentication required")
 
 // Credential is the local ChatGPT/Codex OAuth state. It deliberately has no
 // API-key field: GoAster uses the subscription-backed Codex service only.
@@ -83,11 +83,11 @@ func (s CredentialStore) Load() (Credential, error) {
 	}
 	var credential Credential
 	if err := json.Unmarshal(data, &credential); err != nil {
-		return Credential{}, fmt.Errorf("parse credential file: %w", err)
+		return Credential{}, fmt.Errorf("%w: parse credential file: %v", ErrLoginRequired, err)
 	}
 	credential.normalize()
 	if credential.AccessToken == "" {
-		return Credential{}, fmt.Errorf("credential file has no access token")
+		return Credential{}, fmt.Errorf("%w: credential file has no access token", ErrLoginRequired)
 	}
 	return credential, nil
 }
@@ -289,7 +289,7 @@ func (a *OpenAIAuthenticator) Login(ctx context.Context, output io.Writer) error
 	if err := a.Store.Save(credential); err != nil {
 		return fmt.Errorf("save OpenAI credentials: %w", err)
 	}
-	_, err = fmt.Fprintf(output, "OpenAI subscription login complete. Credentials saved to %s.\n", a.Store.Path)
+	_, err = fmt.Fprintf(output, "OpenAI subscription authentication complete. Credentials saved to %s.\n", a.Store.Path)
 	return err
 }
 
@@ -643,16 +643,27 @@ func (p *CodexProvider) Description() string {
 	return "OpenAI subscription via ChatGPT/Codex backend"
 }
 
-func (p *CodexProvider) EnsureAuth(ctx context.Context) error {
-	_, err := p.auth.Credential(ctx)
-	return err
+func (p *CodexProvider) EnsureAuth(ctx context.Context, outputs ...io.Writer) error {
+	var output io.Writer = io.Discard
+	if len(outputs) > 0 && outputs[0] != nil {
+		output = outputs[0]
+	}
+	if _, err := p.auth.Credential(ctx); err == nil {
+		return nil
+	} else if !errors.Is(err, ErrLoginRequired) {
+		return fmt.Errorf("OpenAI subscription authentication failed: %w", err)
+	}
+	if err := p.auth.Login(ctx, output); err != nil {
+		return fmt.Errorf("OpenAI subscription authentication failed: %w", err)
+	}
+	return nil
 }
 
 func (p *CodexProvider) Reply(ctx context.Context, model, message string) (string, error) {
 	credential, err := p.auth.Credential(ctx)
 	if err != nil {
 		if errors.Is(err, ErrLoginRequired) {
-			return "", fmt.Errorf("%w; run `go run ./cmd/goaster login`", err)
+			return "", fmt.Errorf("%w; restart GoAster to authenticate", err)
 		}
 		return "", fmt.Errorf("OpenAI subscription authentication failed: %w", err)
 	}
@@ -660,13 +671,13 @@ func (p *CodexProvider) Reply(ctx context.Context, model, message string) (strin
 	if status == http.StatusUnauthorized {
 		refreshed, refreshErr := p.auth.Refresh(ctx)
 		if refreshErr != nil {
-			return "", fmt.Errorf("OpenAI session expired; run `go run ./cmd/goaster login`: %w", refreshErr)
+			return "", fmt.Errorf("OpenAI session expired; restart GoAster to authenticate: %w", refreshErr)
 		}
 		reply, status, err = p.requestReply(ctx, refreshed, model, message)
 	}
 	if err != nil {
 		if status == http.StatusUnauthorized {
-			return "", fmt.Errorf("%w; run `go run ./cmd/goaster login`", ErrLoginRequired)
+			return "", fmt.Errorf("%w; restart GoAster to authenticate", ErrLoginRequired)
 		}
 		if status == http.StatusNotFound {
 			return "", fmt.Errorf("%w: Codex model %s was not found", ErrModelUnavailable, model)

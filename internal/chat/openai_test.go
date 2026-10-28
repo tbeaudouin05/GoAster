@@ -124,7 +124,85 @@ func TestOpenAIAuthenticatorDeviceLogin(t *testing.T) {
 	}
 }
 
-func TestOpenAIAuthenticatorRefreshRotatesTokensAndKeepsAccount(t *testing.T) {
+func TestCodexProviderEnsureAuthStartsDeviceLoginBeforeChat(t *testing.T) {
+	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+	var pollCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			fmt.Fprint(w, `{"device_auth_id":"device-123","user_code":"ABCD-EFGH","interval":1}`)
+		case "/api/accounts/deviceauth/token":
+			pollCount.Add(1)
+			fmt.Fprint(w, `{"authorization_code":"authorization-code","code_verifier":"verifier"}`)
+		case "/oauth/token":
+			fmt.Fprint(w, `{"access_token":"access-token","refresh_token":"refresh-token","expires_in":3600}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider(store)
+	provider.auth.AuthBaseURL = server.URL
+	provider.auth.HTTPClient = server.Client()
+	provider.auth.Sleep = func(context.Context, time.Duration) error { return nil }
+	var output bytes.Buffer
+	if err := provider.EnsureAuth(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	if got := pollCount.Load(); got != 1 {
+		t.Fatalf("poll count = %d, want 1", got)
+	}
+	if !strings.Contains(output.String(), "ABCD-EFGH") || !strings.Contains(output.String(), "authentication complete") {
+		t.Fatalf("authentication output = %q", output.String())
+	}
+	if _, err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Run(context.Background(), strings.NewReader("/exit\n"), &output, NewSession(Config{
+		PrimaryModel:  DefaultPrimaryModel,
+		FallbackModel: DefaultFallbackModel,
+	}, provider)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Goodbye.") {
+		t.Fatalf("chat output = %q", output.String())
+	}
+}
+
+func TestCodexProviderEnsureAuthUsesValidCredential(t *testing.T) {
+	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(Credential{
+		AccessToken: "access-token",
+		AccountID:   "account-123",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider(store)
+	provider.auth.AuthBaseURL = server.URL
+	provider.auth.HTTPClient = server.Client()
+	var output bytes.Buffer
+	if err := provider.EnsureAuth(context.Background(), &output); err != nil {
+		t.Fatal(err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("authentication requests = %d, want 0", got)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("unexpected authentication output = %q", output.String())
+	}
+}
+
+func TestCodexProviderEnsureAuthRefreshesTokensAndKeepsAccount(t *testing.T) {
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
 	if err := store.Save(Credential{
 		AccessToken:  "old-access",
@@ -155,18 +233,21 @@ func TestOpenAIAuthenticatorRefreshRotatesTokensAndKeepsAccount(t *testing.T) {
 	}))
 	defer server.Close()
 
-	authenticator := NewOpenAIAuthenticator(store)
-	authenticator.AuthBaseURL = server.URL
-	authenticator.HTTPClient = server.Client()
-	authenticator.Now = func() time.Time { return time.Unix(200, 0) }
-	credential, err := authenticator.Credential(context.Background())
+	provider := NewCodexProvider(store)
+	provider.auth.AuthBaseURL = server.URL
+	provider.auth.HTTPClient = server.Client()
+	provider.auth.Now = func() time.Time { return time.Unix(200, 0) }
+	if err := provider.EnsureAuth(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	credential, err := provider.auth.Credential(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if credential.AccessToken != "new-access" || credential.RefreshToken != "new-refresh" || credential.AccountID != "account-123" {
 		t.Fatalf("refreshed credential = %+v", credential)
 	}
-	if _, err := authenticator.Credential(context.Background()); err != nil {
+	if _, err := provider.auth.Credential(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := refreshCount.Load(); got != 1 {
@@ -220,7 +301,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 	}
 }
 
-func TestCodexProviderRequiresLoginBeforeBackendRequest(t *testing.T) {
+func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testing.T) {
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "missing-auth.json")}
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -231,8 +312,8 @@ func TestCodexProviderRequiresLoginBeforeBackendRequest(t *testing.T) {
 	provider := NewCodexProvider(store)
 	provider.backendURL = server.URL + "/responses"
 	_, err := provider.Reply(context.Background(), "gpt-test", "hello")
-	if !errors.Is(err, ErrLoginRequired) || !strings.Contains(err.Error(), "go run ./cmd/goaster login") {
-		t.Fatalf("login error = %v", err)
+	if !errors.Is(err, ErrLoginRequired) || !strings.Contains(err.Error(), "restart GoAster") {
+		t.Fatalf("authentication error = %v", err)
 	}
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("backend requests = %d, want 0", got)

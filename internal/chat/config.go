@@ -53,17 +53,3 @@ func ParseRuntimeConfig(args []string, output io.Writer) (RuntimeConfig, error) 
 	}
 	return config, nil
 }
-
-func ParseLoginArgs(args []string, output io.Writer) (string, error) {
-	var authFile string
-	flags := flag.NewFlagSet("goaster login", flag.ContinueOnError)
-	flags.SetOutput(output)
-	flags.StringVar(&authFile, "auth-file", "", "path for the local OpenAI subscription credentials")
-	if err := flags.Parse(args); err != nil {
-		return "", err
-	}
-	if flags.NArg() != 0 {
-		return "", fmt.Errorf("unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
-	}
-	return strings.TrimSpace(authFile), nil
-}
