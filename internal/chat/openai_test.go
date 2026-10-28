@@ -282,34 +282,8 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		if request.Model != "gpt-test" || request.Instructions == "" || !request.Stream || request.Store || len(request.Input) != 1 || request.Input[0].Type != "message" || request.Input[0].Content[0].Text != "hello" {
 			t.Errorf("Codex request = %+v", request)
 		}
-		for _, want := range []string{
-			"OVH remote-agent setup",
-			"Goal: help the user plan and create a remote agent hosted on OVHcloud.",
-			"Safe setup sequence:",
-			"OVH_ENDPOINT",
-			"OVH_APPLICATION_KEY",
-			"OVH_APPLICATION_SECRET",
-			"OVH_CONSUMER_KEY",
-			"Proactively provide the",
-			"exact local KEY=VALUE template shown by /env",
-			"one of ovh-eu, ovh-ca, or ovh-us",
-			"short test may cost cents",
-			"few dollars per month or more",
-			"official First Steps with the OVHcloud APIs guide",
-			"https://docs.ovhcloud.com/en/guides/manage-and-operate/api/first-steps",
-			"paste credentials or secrets into chat",
-			"types exactly CREATE",
-			"persistent Ed25519 key",
-			"fixed goaster SSH",
-			"The /env import itself does not send imported values",
-			"local app workflows",
-			"fixed built-in web_search tool",
-			"Use web_search when current OVH",
-			"built-in shell_execute tool runs commands",
-		} {
-			if !strings.Contains(request.Instructions, want) {
-				t.Errorf("Codex instructions missing %q", want)
-			}
+		if request.Instructions != "You are Codex, a coding assistant." {
+			t.Errorf("Codex instructions = %q", request.Instructions)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}\n\n")

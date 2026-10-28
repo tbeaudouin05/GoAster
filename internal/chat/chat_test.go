@@ -121,13 +121,7 @@ func TestLoop(t *testing.T) {
 		t.Fatalf("messages = %q, error = %v", messages, err)
 	}
 	for _, want := range []string{
-		"chat provider", "Type a message, then press Enter.", "OVH onboarding:",
-		"Create an OVHcloud account.", "Account creation is free", "Prepare the local file shown by /env",
-		"server is paid", "short test may cost cents", "few dollars per month or more",
-		"https://www.ovhcloud.com/en/public-cloud/prices/",
-		"Official details on obtaining OVH credentials", "details on obtaining OVH credentials", "OVH_ENDPOINT=ovh-eu, ovh-ca, or ovh-us",
-		"Next command: /env", "select the file in the file picker", "then type /ovh",
-		"exactly CREATE", "Never paste credentials or secrets into chat",
+		"chat provider", "Type a message, then press Enter.",
 		"Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello",
 		"assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear",
 		"assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit",
@@ -289,7 +283,7 @@ func TestEnvFileCancellationPreservesSavedValues(t *testing.T) {
 func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
 	directory := t.TempDir()
 	filePath := filepath.Join(directory, "settings to import.txt")
-	if err := os.WriteFile(filePath, []byte("OVH_ENDPOINT=ovh-eu\nOVH_APPLICATION_KEY=test-application-key\nOVH_APPLICATION_SECRET=test-application-secret\nOVH_CONSUMER_KEY=test-consumer-key\nOVH_PROJECT_ID=test-project-id\nOVH_REGION=gra11\n"), 0600); err != nil {
+	if err := os.WriteFile(filePath, []byte("GOASTER_MODE=remote\nAPI_TOKEN=test-api-token\nREMOTE_HOST=example.invalid\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	store := localenv.NewStoreAt(filepath.Join(directory, "saved", "env"))
@@ -309,12 +303,9 @@ func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
 	}
 
 	wantValues := map[string]string{
-		"OVH_ENDPOINT":           "ovh-eu",
-		"OVH_APPLICATION_KEY":    "test-application-key",
-		"OVH_APPLICATION_SECRET": "test-application-secret",
-		"OVH_CONSUMER_KEY":       "test-consumer-key",
-		"OVH_PROJECT_ID":         "test-project-id",
-		"OVH_REGION":             "gra11",
+		"GOASTER_MODE": "remote",
+		"API_TOKEN":    "test-api-token",
+		"REMOTE_HOST":  "example.invalid",
 	}
 	if !reflect.DeepEqual(store.Values(), wantValues) {
 		t.Fatalf("saved variable names = %v, want %v", localenvNames(store.Values()), localenvNames(wantValues))
@@ -323,26 +314,19 @@ func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
 		t.Fatalf("provider messages = %q, want only the ordinary chat message", messages)
 	}
 	for _, want := range []string{
-		"OVH_ENDPOINT=********",
-		"OVH_APPLICATION_KEY=********",
-		"OVH_APPLICATION_SECRET=********",
-		"OVH_CONSUMER_KEY=********",
-		"OVH_PROJECT_ID=********",
-		"OVH_REGION=********",
+		"GOASTER_MODE=********",
+		"API_TOKEN=********",
+		"REMOTE_HOST=********",
 		"Save these values? [y/N]",
 		"Environment values saved locally.",
-		"Next command: /ovh",
-		"Next: choose your local OVH KEY=VALUE file in the file picker.",
-		"OVH_ENDPOINT=ovh-eu",
-		"OVH_APPLICATION_KEY=replace-with-your-application-key",
-		"OVH_APPLICATION_SECRET=replace-with-your-application-secret",
-		"OVH_CONSUMER_KEY=replace-with-your-consumer-key",
+		"Next: choose your local KEY=VALUE file in the file picker.",
+		"never paste credentials or secrets into chat",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
 	}
-	for _, secret := range []string{"test-application-key", "test-application-secret", "test-consumer-key", "test-project-id", "gra11"} {
+	for _, secret := range []string{"test-api-token", "example.invalid", "remote"} {
 		if strings.Contains(output.String(), secret) {
 			t.Errorf("output exposed a file value %q", secret)
 		}
@@ -489,27 +473,4 @@ func runWithTestEnvStoreAndPicker(t *testing.T, ctx context.Context, input io.Re
 		return err
 	}
 	return RunWithEnvStoreAndPicker(ctx, input, output, session, store, picker)
-}
-
-func TestOVHCommandUsesLocalConfigAndDoesNotSendValuesToProvider(t *testing.T) {
-	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
-	if err := store.Save(map[string]string{"OVH_APPLICATION_SECRET": "fake-secret"}); err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	var messages []string
-	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
-		messages = append(messages, message)
-		return "received", nil
-	})
-	picker := EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled })
-	if err := RunWithEnvStoreAndPicker(context.Background(), strings.NewReader("/ovh\nhello\n"), &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(messages, []string{"hello"}) {
-		t.Fatal("local OVH command was sent to the chat provider")
-	}
-	if !strings.Contains(output.String(), "OVH configuration rejected") || !strings.Contains(output.String(), "Run /env first to select and save valid OVH settings locally.") || strings.Contains(output.String(), "fake-secret") {
-		t.Fatal("unexpected OVH configuration output")
-	}
 }

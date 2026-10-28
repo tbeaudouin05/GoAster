@@ -12,6 +12,10 @@ import (
 	"goaster/internal/localenv"
 )
 
+const environmentFileGuidance = `Next: choose your local KEY=VALUE file in the file picker.
+Use a local file for environment values; never paste credentials or secrets into chat.
+GoAster displays variable names with masked values and saves confirmed values locally.`
+
 // Run accepts one message per line and ends the session at EOF.
 func Run(ctx context.Context, input io.Reader, output io.Writer, session *Session) error {
 	store, err := localenv.NewStore()
@@ -47,7 +51,6 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 	}
 	fmt.Fprintf(w, "GoAster — %s\n", session.description())
 	fmt.Fprintln(w, "Type a message, then press Enter.")
-	fmt.Fprintln(w, ovhStartupGuidance)
 	status()
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
@@ -70,14 +73,8 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		if message == "" {
 			continue
 		}
-		if message == "/ovh" {
-			if err := runOVHSetup(ctx, scanner, w, store, picker); err != nil {
-				return err
-			}
-			continue
-		}
 		if message == "/env" {
-			if err := runEnvironmentFileSetup(scanner, w, store, picker, "Next command: /ovh to run the preflight and review the provisioning confirmation."); err != nil {
+			if err := runEnvironmentFileSetup(scanner, w, store, picker, ""); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -104,7 +101,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 }
 
 func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, next string) error {
-	fmt.Fprintln(output, ovhEnvironmentFileGuidance)
+	fmt.Fprintln(output, environmentFileGuidance)
 	if err := output.Flush(); err != nil {
 		return err
 	}
