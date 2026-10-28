@@ -17,7 +17,7 @@ func Run(ctx context.Context, input io.Reader, output io.Writer, session *Sessio
 			fmt.Fprintf(w, "Fallback reason: %s\n", session.reason)
 		}
 	}
-	fmt.Fprintln(w, "GoAster — local echo provider (offline)")
+	fmt.Fprintf(w, "GoAster — %s\n", session.description())
 	fmt.Fprintln(w, "Type a message, /quit or /exit to exit.")
 	status()
 	scanner := bufio.NewScanner(input)
@@ -58,4 +58,11 @@ func Run(ctx context.Context, input io.Reader, output io.Writer, session *Sessio
 		}
 		fmt.Fprintf(w, "assistant [%s]> %s\n", session.active, reply)
 	}
+}
+
+func (s *Session) description() string {
+	if described, ok := s.provider.(interface{ Description() string }); ok {
+		return described.Description()
+	}
+	return "local echo provider (offline)"
 }
