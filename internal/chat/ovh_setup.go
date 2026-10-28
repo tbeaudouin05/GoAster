@@ -29,9 +29,10 @@ Safe setup sequence:
    Every /env import replaces the entire saved set. After /ovh succeeds, the
    user may explicitly type SETUP TELEGRAM at the separate prompt. The token is
    sent only then over SSH. The user pairs one private Telegram account with
-   the one-time code shown locally. No webhook or inbound port is used.
-   The assistant cannot execute /ovh or inspect credentials or cloud state; the
-   user executes these steps locally.
+   the one-time code shown locally. No webhook or inbound port is used. These
+   are local app workflows. The assistant can also run native shell commands
+   through shell_execute, with the current process's access to local files and
+   state.
 4. When explaining credentials, use current official OVHcloud web guidance
    when needed. The official First Steps with the OVHcloud APIs guide explains
    where to create and retrieve the application key (AK), application secret
@@ -41,8 +42,8 @@ Safe setup sequence:
    exact local KEY=VALUE template shown by /env, clearly mark placeholders,
    and tell users to replace them only in their local file. Never ask users to
    paste credentials or secrets into chat. GoAster masks values and saves the
-   confirmed file locally. Imported values are never sent to the chat provider,
-   and you cannot read or use them.
+   confirmed file locally. The /env import itself does not send imported values
+   to the chat provider.
 
 OVH variable names that GoAster /env needs:
 - OVH_ENDPOINT: one of ovh-eu, ovh-ca, or ovh-us, matching the OVH API region.
@@ -64,8 +65,9 @@ information and returns result titles, URLs, and snippets. It does not fetch
 web pages, access local environment values, provision resources, or verify cloud
 state. Use web_search when current OVH credential or control-panel details are
 needed, prefer official OVH sources, and include the returned URLs in the
-explanation. Clearly label commands or configuration as instructions for the
-user to run and review themselves.`
+explanation. The built-in shell_execute tool runs commands through the native
+shell and returns stdout, stderr, and exit code; it accepts an optional working
+directory and timeout in milliseconds.`
 
 const ovhStartupGuidance = `OVH onboarding:
 1. Create an OVHcloud account. Account creation is free; also create a Public Cloud project.

@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goaster/internal/command"
 )
 
 const (
@@ -751,13 +753,101 @@ var webSearchCodexTool = codexTool{
 	},
 }
 
+var shellExecuteCodexTool = codexTool{
+	Type:        "function",
+	Name:        "shell_execute",
+	Description: "Run a command through the platform's native shell. Returns stdout, stderr, and the exit code.",
+	Parameters: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"command": map[string]any{
+				"type":        "string",
+				"description": "Command to run",
+			},
+			"cwd": map[string]any{
+				"type":        "string",
+				"description": "Optional working directory",
+			},
+			"timeout_ms": map[string]any{
+				"type":        "integer",
+				"description": "Optional execution timeout in milliseconds; zero or omitted means no timeout",
+			},
+		},
+		"required": []string{"command"},
+	},
+}
+
+type shellExecuteArguments struct {
+	Command   string `json:"command"`
+	CWD       string `json:"cwd,omitempty"`
+	TimeoutMS *int64 `json:"timeout_ms,omitempty"`
+}
+
+func parseShellExecuteArguments(arguments string) (command.Request, error) {
+	decoder := json.NewDecoder(strings.NewReader(arguments))
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		return command.Request{}, fmt.Errorf("shell_execute arguments are not valid JSON: %w", err)
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '{' {
+		return command.Request{}, fmt.Errorf("shell_execute arguments must be a JSON object")
+	}
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); err == nil {
+		return command.Request{}, fmt.Errorf("shell_execute arguments contain more than one JSON value")
+	} else if err != io.EOF {
+		return command.Request{}, fmt.Errorf("shell_execute arguments are not valid JSON: %w", err)
+	}
+
+	var args shellExecuteArguments
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return command.Request{}, fmt.Errorf("shell_execute arguments are malformed: %w", err)
+	}
+
+	request := command.Request{Command: args.Command, Dir: args.CWD}
+	if args.TimeoutMS != nil {
+		const maxTimeoutMS = int64((1<<63 - 1) / int64(time.Millisecond))
+		const minTimeoutMS = int64((-1 << 63) / int64(time.Millisecond))
+		if *args.TimeoutMS > maxTimeoutMS || *args.TimeoutMS < minTimeoutMS {
+			return command.Request{}, fmt.Errorf("shell_execute timeout_ms is outside the supported duration range")
+		}
+		request.Timeout = time.Duration(*args.TimeoutMS) * time.Millisecond
+	}
+	return request, nil
+}
+
+func executeShell(ctx context.Context, arguments string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	request, err := parseShellExecuteArguments(arguments)
+	if err != nil {
+		return formatShellExecuteResult(command.Result{ExitCode: -1}, fmt.Errorf("malformed shell_execute arguments: %w", err)), nil
+	}
+	result, err := command.Execute(ctx, request)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	return formatShellExecuteResult(result, err), nil
+}
+
+func formatShellExecuteResult(result command.Result, executionErr error) string {
+	var output strings.Builder
+	if executionErr != nil {
+		fmt.Fprintf(&output, "execution_error: %v\n", executionErr)
+	}
+	fmt.Fprintf(&output, "stdout:\n%s\nstderr:\n%s\nexit_code: %d", result.Stdout, result.Stderr, result.ExitCode)
+	return output.String()
+}
+
 func (p *CodexProvider) requestReply(ctx context.Context, credential Credential, model, message string) (string, int, error) {
 	input := []codexInputItem{{
 		Type:    "message",
 		Role:    "user",
 		Content: []codexInputContent{{Type: "input_text", Text: message}},
 	}}
-	toolCallCount := 0
+	webSearchCallCount := 0
 	for {
 		response, status, err := p.requestCodex(ctx, credential, model, input)
 		if err != nil {
@@ -766,23 +856,38 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 		if len(response.ToolCalls) == 0 {
 			return response.Text, status, nil
 		}
-		if toolCallCount+len(response.ToolCalls) > maxCodexWebSearchCalls {
+		responseWebSearchCalls := 0
+		for _, call := range response.ToolCalls {
+			if call.Name == webSearchCodexTool.Name {
+				responseWebSearchCalls++
+			}
+		}
+		if webSearchCallCount+responseWebSearchCalls > maxCodexWebSearchCalls {
 			return "", status, fmt.Errorf("Codex requested too many web_search calls (maximum %d)", maxCodexWebSearchCalls)
 		}
 
 		callItems := make([]codexInputItem, 0, len(response.ToolCalls))
 		outputItems := make([]codexInputItem, 0, len(response.ToolCalls))
 		for _, call := range response.ToolCalls {
-			if call.Name != webSearchCodexTool.Name {
+			var result string
+			switch call.Name {
+			case webSearchCodexTool.Name:
+				arguments, err := parseWebSearchArguments(call.Arguments)
+				if err != nil {
+					return "", status, fmt.Errorf("malformed web_search call: %w", err)
+				}
+				result, err = searchDuckDuckGo(ctx, p.webSearchHTTPClient(), p.webSearchEndpoint(), arguments)
+				if err != nil {
+					return "", status, fmt.Errorf("execute web_search: %w", err)
+				}
+				webSearchCallCount++
+			case shellExecuteCodexTool.Name:
+				result, err = executeShell(ctx, call.Arguments)
+				if err != nil {
+					return "", status, err
+				}
+			default:
 				return "", status, fmt.Errorf("Codex requested unsupported tool %q", call.Name)
-			}
-			arguments, err := parseWebSearchArguments(call.Arguments)
-			if err != nil {
-				return "", status, fmt.Errorf("malformed web_search call: %w", err)
-			}
-			result, err := searchDuckDuckGo(ctx, p.webSearchHTTPClient(), p.webSearchEndpoint(), arguments)
-			if err != nil {
-				return "", status, fmt.Errorf("execute web_search: %w", err)
 			}
 			callItems = append(callItems, codexInputItem{
 				Type:      "function_call",
@@ -798,7 +903,6 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 		}
 		input = append(input, callItems...)
 		input = append(input, outputItems...)
-		toolCallCount += len(response.ToolCalls)
 	}
 }
 
@@ -807,7 +911,7 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 		Model:        model,
 		Instructions: openAIInstructions,
 		Input:        input,
-		Tools:        []codexTool{webSearchCodexTool},
+		Tools:        []codexTool{webSearchCodexTool, shellExecuteCodexTool},
 		Stream:       true,
 		Store:        false,
 	})
@@ -1275,6 +1379,11 @@ func validateCodexFunctionCall(call codexFunctionCall) error {
 	}
 	if call.Name == "" {
 		return fmt.Errorf("Codex function call is missing name")
+	}
+	if call.Name == shellExecuteCodexTool.Name {
+		// Let shell_execute validate its own arguments so malformed calls can
+		// receive a function_call_output and the model can recover.
+		return nil
 	}
 	if strings.TrimSpace(call.Arguments) == "" {
 		return fmt.Errorf("Codex function call %q has no arguments", call.Name)

@@ -301,10 +301,11 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 			"types exactly CREATE",
 			"persistent Ed25519 key",
 			"fixed goaster SSH",
-			"Imported values are never sent to the chat",
-			"user executes these steps locally",
+			"The /env import itself does not send imported values",
+			"local app workflows",
 			"fixed built-in web_search tool",
 			"Use web_search when current OVH",
+			"built-in shell_execute tool runs commands",
 		} {
 			if !strings.Contains(request.Instructions, want) {
 				t.Errorf("Codex instructions missing %q", want)
