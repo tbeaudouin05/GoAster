@@ -86,6 +86,7 @@ sudo -n install -m 0755 "$work/goaster-agent" /usr/local/bin/goaster-agent
 if ! id goaster >/dev/null 2>&1; then
   sudo -n useradd --system --create-home --home-dir /var/lib/goaster --shell /usr/sbin/nologin goaster
 fi
+sudo -n install -d -o goaster -g goaster -m 0700 /var/lib/goaster
 printf '[Unit]\nDescription=GoAster remote agent\nAfter=network-online.target\n[Service]\nUser=goaster\nEnvironment=HOME=/var/lib/goaster\nExecStart=/usr/local/bin/goaster-agent\nRestart=on-failure\nNoNewPrivileges=true\nProtectSystem=strict\nProtectHome=true\nReadWritePaths=/var/lib/goaster\n[Install]\nWantedBy=multi-user.target\n' | sudo -n tee /etc/systemd/system/goaster-agent.service >/dev/null
 sudo -n systemctl daemon-reload
 sudo -n systemctl enable goaster-agent.service >/dev/null 2>&1

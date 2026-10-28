@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,13 +18,18 @@ import (
 
 const fakeRef = "0123456789abcdef0123456789abcdef01234567"
 
-type onboardingHTTP struct{ posts int }
+type onboardingHTTP struct {
+	posts     int
+	publicKey string
+}
 
 func (f *onboardingHTTP) Do(r *http.Request) (*http.Response, error) {
 	var body string
 	switch r.Method + " " + r.URL.Path {
 	case "GET /1.0/auth/time":
 		body = fmt.Sprint(time.Now().Unix())
+	case "GET /1.0/cloud/project":
+		body = `["project"]`
 	case "GET /1.0/cloud/project/project":
 		body = `{"project_id":"project","status":"ok"}`
 	case "GET /1.0/cloud/project/project/region":
@@ -37,7 +41,9 @@ func (f *onboardingHTTP) Do(r *http.Request) (*http.Response, error) {
 	case "GET /1.0/cloud/project/project/flavor":
 		body = `[{"id":"flavor","region":"GRA11","name":"test-flavor","available":true,"quota":1,"ram":2,"disk":20}]`
 	case "GET /1.0/cloud/project/project/sshkey":
-		body = `[{"id":"key","name":"test-key","regions":["GRA11"]}]`
+		body = fmt.Sprintf(`[{"id":"key","name":"test-key","regions":["GRA11"],"publicKey":%q}]`, f.publicKey)
+	case "POST /1.0/cloud/project/project/sshkey":
+		body = `{"id":"key","name":"test-key","regions":["GRA11"]}`
 	case "POST /1.0/cloud/project/project/instance":
 		f.posts++
 		body = `{"id":"server","status":"BUILD"}`
@@ -68,18 +74,19 @@ func TestOVHLocalConfirmationAndReporting(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			keyPath := filepath.Join(dir, "key")
-			if err := os.WriteFile(keyPath, []byte("fake-key-content"), 0600); err != nil {
-				t.Fatal(err)
+			pair, err := ovh.EnsureKeyPairAt(keyPath)
+			if err != nil {
+				t.Skipf("OpenSSH ssh-keygen is unavailable: %v", err)
 			}
 			store := localenv.NewStoreAt(filepath.Join(dir, "env"))
-			values := map[string]string{"OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret", "OVH_PROJECT_ID": "project", "OVH_REGION": "GRA11", "OVH_IMAGE_ID": "image", "OVH_FLAVOR_ID": "flavor", "OVH_SSH_KEY_ID": "key", "OVH_SERVER_NAME": "server-name", "OVH_SSH_USER": "ubuntu", "OVH_SSH_PRIVATE_KEY": keyPath, "OVH_GOASTER_REF": fakeRef}
+			values := map[string]string{"OVH_ENDPOINT": "ovh-eu", "OVH_APPLICATION_KEY": "fake-app-key", "OVH_APPLICATION_SECRET": "fake-app-secret", "OVH_CONSUMER_KEY": "fake-consumer-secret"}
 			if err := store.Save(values); err != nil {
 				t.Fatal(err)
 			}
-			fake := &onboardingHTTP{}
+			fake := &onboardingHTTP{publicKey: pair.PublicKey}
 			runners := &onboardingRunners{}
 			var output bytes.Buffer
-			if err := runOVHSetupWithDependencies(context.Background(), bufio.NewScanner(strings.NewReader(tc.answer+"\n")), bufio.NewWriter(&output), store, fake, runners, runners); err != nil {
+			if err := runOVHSetupWithDependenciesAndOptions(context.Background(), bufio.NewScanner(strings.NewReader(tc.answer+"\n")), bufio.NewWriter(&output), store, fake, runners, runners, func() (ovh.KeyPair, error) { return pair, nil }, func() (string, error) { return fakeRef, nil }); err != nil {
 				t.Fatal(err)
 			}
 			if (fake.posts > 0) != tc.creates || (runners.installs > 0) != tc.creates {

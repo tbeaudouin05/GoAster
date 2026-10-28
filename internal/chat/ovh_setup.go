@@ -28,17 +28,17 @@ Safe setup sequence:
    locally. Imported values are never sent to the chat provider, and you
    cannot read or use them.
 
-OVH variable names that GoAster /env must accept:
+OVH variable names that GoAster /env needs:
 - OVH_ENDPOINT: OVH API endpoint for the user's account.
 - OVH_APPLICATION_KEY: API application key.
 - OVH_APPLICATION_SECRET: API application secret; keep it private.
 - OVH_CONSUMER_KEY: account-scoped API consumer key; keep it private.
-- OVH_PROJECT_ID: Public Cloud project identifier when targeting a project.
-- OVH_REGION: Public Cloud region when targeting a region.
-The first four are the OVH API credential settings; the project and region are
-needed to identify a Public Cloud target. The local /ovh workflow also needs
-OVH_IMAGE_ID, OVH_FLAVOR_ID, OVH_SSH_KEY_ID, OVH_SERVER_NAME, OVH_SSH_USER,
-OVH_SSH_PRIVATE_KEY, and OVH_GOASTER_REF. /env accepts other valid names.
+The local /ovh workflow discovers the Public Cloud project, region, Ubuntu
+24.04 image, smallest compatible flavor, and SSH key. It generates or reuses a
+persistent Ed25519 key at ~/.goaster/ovh_ed25519, uses the fixed goaster SSH
+user, generates the server name, and derives the exact local GoAster commit.
+Only the four credential settings need to be imported. /env accepts other
+valid names.
 
 GoAster has a fixed built-in web_search tool that can search current public
 information and returns result titles, URLs, and snippets. It does not fetch
@@ -60,13 +60,4 @@ Example template (replace every placeholder in your local file; these are not cr
 OVH_ENDPOINT=replace-with-your-ovh-endpoint
 OVH_APPLICATION_KEY=replace-with-your-application-key
 OVH_APPLICATION_SECRET=replace-with-your-application-secret
-OVH_CONSUMER_KEY=replace-with-your-consumer-key
-OVH_PROJECT_ID=replace-with-your-public-cloud-project-id
-OVH_REGION=replace-with-your-public-cloud-region
-OVH_IMAGE_ID=replace-with-your-ubuntu-image-id
-OVH_FLAVOR_ID=replace-with-your-flavor-id
-OVH_SSH_KEY_ID=replace-with-your-ssh-key-id
-OVH_SERVER_NAME=replace-with-your-server-name
-OVH_SSH_USER=replace-with-your-ssh-user
-OVH_SSH_PRIVATE_KEY=replace-with-your-absolute-private-key-path
-OVH_GOASTER_REF=replace-with-your-40-character-public-commit-id`
+OVH_CONSUMER_KEY=replace-with-your-consumer-key`

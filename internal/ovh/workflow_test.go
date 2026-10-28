@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +29,7 @@ type fakeHTTP struct {
 	t         *testing.T
 	confirmed *bool
 	requests  []string
+	bodies    map[string]string
 	fail      string
 	responses map[string]string
 	polls     int
@@ -40,6 +43,10 @@ func (f *fakeHTTP) Do(r *http.Request) (*http.Response, error) {
 	}
 	key := r.Method + " " + r.URL.Path
 	f.requests = append(f.requests, key)
+	if f.bodies == nil {
+		f.bodies = make(map[string]string)
+	}
+	f.bodies[key] = string(body)
 	if r.URL.Host != "eu.api.ovh.com" || r.Header.Get("X-Ovh-Application") != "fake-app-key" {
 		f.t.Error("unexpected host or application header")
 	}
@@ -50,7 +57,7 @@ func (f *fakeHTTP) Do(r *http.Request) (*http.Response, error) {
 			f.t.Error("incorrect OVH authentication headers")
 		}
 	}
-	if strings.Contains(key, "/image") || strings.Contains(key, "/flavor") || strings.Contains(key, "/sshkey") {
+	if r.Method == http.MethodGet && (strings.Contains(key, "/image") || strings.Contains(key, "/flavor") || strings.Contains(key, "/sshkey")) {
 		if r.URL.Query().Get("region") != "GRA11" {
 			f.t.Error("missing regional query")
 		}
@@ -58,7 +65,7 @@ func (f *fakeHTTP) Do(r *http.Request) (*http.Response, error) {
 	if r.Method == "DELETE" {
 		f.t.Error("workflow must never delete a server")
 	}
-	if r.Method == "POST" {
+	if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/instance") {
 		if f.confirmed == nil || !*f.confirmed {
 			f.t.Error("created without explicit confirmation")
 		}
@@ -85,6 +92,8 @@ func (f *fakeHTTP) Do(r *http.Request) (*http.Response, error) {
 		switch key {
 		case "GET /1.0/auth/time":
 			value = fmt.Sprintf("%d", time.Now().Unix())
+		case "GET /1.0/cloud/project":
+			value = `["project-1"]`
 		case "GET /1.0/cloud/project/project-1":
 			value = `{"project_id":"project-1","status":"ok"}`
 		case "GET /1.0/cloud/project/project-1/region":
@@ -97,6 +106,8 @@ func (f *fakeHTTP) Do(r *http.Request) (*http.Response, error) {
 			value = `[{"id":"flavor-1","region":"GRA11","name":"b2-7","available":true,"quota":1,"disk":20,"ram":8}]`
 		case "GET /1.0/cloud/project/project-1/sshkey":
 			value = `[{"id":"key-1","name":"my-key","regions":["GRA11"]}]`
+		case "POST /1.0/cloud/project/project-1/sshkey":
+			value = `{"id":"key-new","name":"goaster","regions":["GRA11"]}`
 		case "POST /1.0/cloud/project/project-1/instance":
 			value = `{"id":"server-1","status":"BUILD"}`
 		case "GET /1.0/cloud/project/project-1/instance/server-1":
@@ -222,6 +233,59 @@ func TestWorkflowSuccessAndFailures(t *testing.T) {
 	}
 }
 
+func TestAutomaticPreflightDiscoversSelectionsAndUploadsOnlyPublicKey(t *testing.T) {
+	pair, err := EnsureKeyPairAt(filepath.Join(t.TempDir(), "keys", "ovh_ed25519"))
+	if err != nil {
+		if strings.Contains(err.Error(), "ssh-keygen is required") {
+			t.Skip(err)
+		}
+		t.Fatal(err)
+	}
+	config, err := ConfigFromValues(map[string]string{
+		"OVH_ENDPOINT":           "ovh-eu",
+		"OVH_APPLICATION_KEY":    "fake-app-key",
+		"OVH_APPLICATION_SECRET": "fake-app-secret",
+		"OVH_CONSUMER_KEY":       "fake-consumer-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err = config.WithAutomaticProvisioning(pair, testRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeHTTP{t: t}
+	client, err := NewClient(config, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := client.Preflight(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ProjectID != "project-1" || plan.Region != "GRA11" || plan.ImageID != "image-1" || plan.FlavorID != "flavor-1" || plan.SSHKeyID != "" || plan.SSHUser != DefaultSSHUser || !strings.HasPrefix(plan.ServerName, "goaster-") {
+		t.Fatalf("automatic plan = %+v", plan)
+	}
+	if !strings.Contains(config.userData, DefaultSSHUser) || !strings.Contains(config.userData, pair.PublicKey) {
+		t.Fatal("automatic provisioning did not prepare fixed-user cloud-init")
+	}
+	plan, err = client.EnsureSSHKey(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.SSHKeyID != "key-new" {
+		t.Fatalf("uploaded key was not selected: %+v", plan)
+	}
+	privateData, err := os.ReadFile(pair.PrivateKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fake.bodies["POST /1.0/cloud/project/project-1/sshkey"]
+	if !strings.Contains(body, pair.PublicKey) || strings.Contains(body, string(privateData)) {
+		t.Fatal("SSH key upload did not contain only the public key")
+	}
+}
+
 func TestPreflightRejectsInvalidSelectionsBeforeConfirmation(t *testing.T) {
 	for _, tc := range []struct{ name, path, response string }{
 		{"project", "", `{"project_id":"project-1","status":"suspended"}`},
@@ -248,7 +312,7 @@ func TestPreflightRejectsInvalidSelectionsBeforeConfirmation(t *testing.T) {
 }
 
 func TestConfigValidationAndRedaction(t *testing.T) {
-	for _, key := range []string{"OVH_ENDPOINT", "OVH_APPLICATION_KEY", "OVH_APPLICATION_SECRET", "OVH_CONSUMER_KEY", "OVH_PROJECT_ID", "OVH_REGION", "OVH_IMAGE_ID", "OVH_FLAVOR_ID", "OVH_SSH_KEY_ID", "OVH_SERVER_NAME", "OVH_SSH_USER", "OVH_SSH_PRIVATE_KEY", "OVH_GOASTER_REF"} {
+	for _, key := range []string{"OVH_ENDPOINT", "OVH_APPLICATION_KEY", "OVH_APPLICATION_SECRET", "OVH_CONSUMER_KEY"} {
 		values := testValues()
 		delete(values, key)
 		if _, err := ConfigFromValues(values); err == nil || !strings.Contains(err.Error(), key) {

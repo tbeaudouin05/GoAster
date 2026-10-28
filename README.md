@@ -51,37 +51,36 @@ confirmation before the billable instance is created. The assistant cannot
 invoke the workflow, access the local settings, or inspect OVH state. Imported
 values are never sent to the chat provider.
 
-Choose a Public Cloud project and region, an Ubuntu 24.04 image, an available
-flavor with sufficient quota, and an existing project SSH key. The server is
-public and billed hourly until you delete it. Review OVH pricing, network
-exposure, SSH access, and account permissions before confirming. The workflow
-needs permission to read the project, regions, images, flavors and SSH keys, and
-to create and read instances. It never deletes an instance.
+The workflow discovers a usable Public Cloud project and region, selects an
+active Ubuntu 24.04 image, chooses the smallest compatible available flavor
+(preferring an explicitly advertised resizable Flex flavor), and reuses or
+registers the GoAster SSH key. If more than one candidate remains, `/ovh`
+shows a short numbered choice instead of guessing. The server is public and
+billed hourly until you delete it. Review OVH pricing, network exposure, SSH
+access, and account permissions before confirming. The workflow needs
+permission to list projects, regions, images, flavors, and SSH keys, to create a
+project SSH key, and to create and read instances. It never deletes an
+instance.
 
-Prepare a local text file with one `KEY=VALUE` pair per line, replacing every
-placeholder. `OVH_ENDPOINT` accepts `ovh-eu`, `ovh-ca`, or `ovh-us`.
-`OVH_SSH_PRIVATE_KEY` is an absolute path to the local private key matching the
-OVH project key; it must be a nonempty, owner-readable regular file with
-owner-only permissions and be usable by OpenSSH in batch mode. `OVH_SSH_USER` must match the image's login user (usually `ubuntu`).
-`OVH_GOASTER_REF` must be the complete lowercase 40-character commit ID of a
-reviewed commit **already published** in the public GoAster repository and
-containing `cmd/goaster-agent`. This change is not published automatically.
+Prepare a local text file with one `KEY=VALUE` pair per line. Only the OVH API
+settings below are needed; `OVH_ENDPOINT` accepts `ovh-eu`, `ovh-ca`, or
+`ovh-us`.
 
 ```text
 OVH_ENDPOINT=replace-with-your-ovh-endpoint
 OVH_APPLICATION_KEY=replace-with-your-application-key
 OVH_APPLICATION_SECRET=replace-with-your-application-secret
 OVH_CONSUMER_KEY=replace-with-your-consumer-key
-OVH_PROJECT_ID=replace-with-your-public-cloud-project-id
-OVH_REGION=replace-with-your-public-cloud-region
-OVH_IMAGE_ID=replace-with-your-ubuntu-image-id
-OVH_FLAVOR_ID=replace-with-your-flavor-id
-OVH_SSH_KEY_ID=replace-with-your-ssh-key-id
-OVH_SERVER_NAME=replace-with-your-server-name
-OVH_SSH_USER=replace-with-your-ssh-user
-OVH_SSH_PRIVATE_KEY=replace-with-your-absolute-private-key-path
-OVH_GOASTER_REF=replace-with-your-40-character-public-commit-id
 ```
+
+On `/ovh`, GoAster creates or reuses an Ed25519 pair at
+`~/.goaster/ovh_ed25519` with owner-only private-key permissions. The private
+key remains local; only the public key is uploaded through the OVH API. The
+fixed SSH account is `goaster`, created by Ubuntu cloud-init. The server name
+is generated automatically. GoAster derives the exact commit from the local
+checkout or build VCS metadata; it does not ask for a shortened or 40-character
+commit ID. That commit must be available in the public repository for the
+remote installer to clone it.
 
 In chat, enter `/env` and choose the local file in the native picker. Do not
 paste paths or credentials into chat. GoAster validates the file, displays the
@@ -93,14 +92,14 @@ Zenity-compatible helper such as `zenity`, `qarma`, or `matedialog`. Confirmed
 settings replace the previous set at `~/.goaster/env`, with `0600` permissions
 inside a `0700` directory. The importer also accepts other valid names.
 
-When you are ready, enter `/ovh`. GoAster validates the stored settings and the
-local key file, contacts the OVH API to check the project, region, image,
-flavor, and SSH key, and displays the proposed IDs, names, repository, commit,
-and hourly billing. Type exactly `CREATE` to authorize creation and the
-subsequent SSH installation; any other response cancels. The workflow waits for
-an active instance and public IP, checks SSH, clones the public repository at
-the specified commit, installs required packages and both GoAster binaries,
-and enables and checks `goaster-agent.service`. The image must support
+When you are ready, enter `/ovh`. GoAster validates the stored settings and
+local key, contacts the OVH API to discover and validate the target, and
+displays the proposed IDs, names, repository, commit, and hourly billing. Type
+exactly `CREATE` to authorize the key upload if needed, server creation, and
+subsequent SSH installation; any other response cancels. The workflow waits
+for an active instance and public IP, checks SSH as `goaster`, clones the
+public repository at the derived commit, installs required packages and both
+GoAster binaries, and enables and checks `goaster-agent.service`. The image must support
 passwordless `sudo`, `apt`, and systemd, and have outbound access to Ubuntu
 package sources, GitHub, and Go module sources. The local machine needs
 OpenSSH; `StrictHostKeyChecking=accept-new` trusts an unseen host key on first
@@ -117,10 +116,10 @@ avoid creating a second billable server.
 The agent listens only on `127.0.0.1:8765` on the server; its health check
 verifies the process, not subscription login or a successful chat. No local
 credentials are copied to it. Before using chat, sign in separately on the
-server as the service account (substitute the key path, user and public IP):
+server as `goaster`:
 
 ```sh
-ssh -i /path/to/private-key ubuntu@SERVER_IP 'sudo -u goaster -H /usr/local/bin/goaster'
+ssh -i ~/.goaster/ovh_ed25519 goaster@SERVER_IP /usr/local/bin/goaster
 ```
 
 Complete the displayed device-code flow and exit that interactive session.
@@ -128,7 +127,7 @@ To use the remote agent, forward its loopback port over SSH and make a local
 request in another terminal:
 
 ```sh
-ssh -i /path/to/private-key -L 8765:127.0.0.1:8765 ubuntu@SERVER_IP
+ssh -i ~/.goaster/ovh_ed25519 -L 8765:127.0.0.1:8765 goaster@SERVER_IP
 curl -fsS http://127.0.0.1:8765/chat -H 'Content-Type: application/json' -d '{"message":"Hello"}'
 ```
 

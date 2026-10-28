@@ -39,6 +39,7 @@ type Workflow struct {
 	Client                *Client
 	SSH                   SSHRunner
 	Remote                RemoteRunner
+	Select                ChooseFunc
 	Confirm               func(context.Context, Plan) (bool, error)
 	Created               func(Result) error
 	PollInterval, Timeout time.Duration
@@ -52,7 +53,7 @@ func (w Workflow) Run(ctx context.Context) (Result, error) {
 	if w.Client == nil || w.SSH == nil || w.Remote == nil || w.Confirm == nil {
 		return result, fmt.Errorf("OVH workflow dependencies and confirmation callback are required")
 	}
-	plan, err := w.Client.Preflight(ctx)
+	plan, err := w.Client.PreflightWithSelector(ctx, w.Select)
 	if err != nil {
 		return result, fmt.Errorf("preflight: %w", err)
 	}
@@ -77,6 +78,11 @@ func (w Workflow) Run(ctx context.Context) (Result, error) {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
+	plan, err = w.Client.EnsureSSHKey(ctx, plan)
+	if err != nil {
+		return result, fmt.Errorf("prepare SSH key: %w", err)
+	}
+	result.Plan = plan
 	result.CreationAttempted = true
 	server, err := w.Client.create(ctx)
 	if err != nil {
@@ -109,7 +115,7 @@ func (w Workflow) Run(ctx context.Context) (Result, error) {
 			return result, fmt.Errorf("wait for active server and public IP: %w", err)
 		}
 	}
-	target := Target{IP: result.IP, User: w.Client.config.SSHUser, PrivateKey: w.Client.config.SSHPrivateKey}
+	target := Target{IP: result.IP, User: plan.SSHUser, PrivateKey: w.Client.config.SSHPrivateKey}
 	for {
 		if err := w.SSH.Check(ctx, target); err == nil {
 			break
