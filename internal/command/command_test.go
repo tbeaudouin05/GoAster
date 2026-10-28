@@ -3,7 +3,9 @@ package command
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -50,6 +52,68 @@ func TestExecuteWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestExecuteWorkingDirectoryValidation(t *testing.T) {
+	t.Run("relative directory is resolved", func(t *testing.T) {
+		result, err := Execute(context.Background(), Request{Command: workingDirectoryCommand(), Dir: "."})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		current, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(result.Stdout); !samePath(got, current) {
+			t.Errorf("stdout working directory = %q, want %q", got, current)
+		}
+	})
+
+	t.Run("directory symlink is resolved", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symbolic-link creation may require elevated Windows privileges")
+		}
+		target := t.TempDir()
+		link := filepath.Join(t.TempDir(), "working-link")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		result, err := Execute(context.Background(), Request{Command: workingDirectoryCommand(), Dir: link})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if got := strings.TrimSpace(result.Stdout); !samePath(got, target) {
+			t.Errorf("stdout working directory = %q, want %q", got, target)
+		}
+	})
+
+	t.Run("missing directory does not expose path", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "secret-working-directory")
+		result, err := Execute(context.Background(), Request{
+			Command: "printf should-not-run",
+			Dir:     missing,
+		})
+		if err == nil {
+			t.Fatal("Execute() error = nil, want an error")
+		}
+		if strings.Contains(err.Error(), missing) {
+			t.Errorf("working-directory error exposed path: %q", err)
+		}
+		if result.ExitCode != -1 || result.Stdout != "" || result.Stderr != "" {
+			t.Errorf("result for invalid directory = %+v, want untouched result", result)
+		}
+	})
+
+	t.Run("file is not a directory", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "working-file")
+		if err := os.WriteFile(file, []byte("not a directory"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Execute(context.Background(), Request{Command: "printf should-not-run", Dir: file})
+		if err == nil || !strings.Contains(err.Error(), "working directory") {
+			t.Fatalf("Execute() error = %v, want working-directory error", err)
+		}
+	})
+}
+
 func TestExecuteCancellationAndTimeout(t *testing.T) {
 	t.Run("cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -85,6 +149,223 @@ func TestExecuteCancellationAndTimeout(t *testing.T) {
 			t.Errorf("exit code = %d, want -1 for interrupted process", result.ExitCode)
 		}
 	})
+}
+
+func TestExecuteHonorsAlreadyCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := Execute(ctx, Request{Command: loopCommand()})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute() error = %v, want context.Canceled", err)
+	}
+	if result.ExitCode != -1 || result.Stdout != "" || result.Stderr != "" {
+		t.Errorf("result for canceled context = %+v, want untouched result", result)
+	}
+}
+
+func TestExecuteCancellationCleansUpChildProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup uses POSIX process groups")
+	}
+
+	directory := t.TempDir()
+	started := filepath.Join(directory, "started")
+	survived := filepath.Join(directory, "survived")
+	command := fmt.Sprintf(
+		"printf started > %s; (sleep 0.3; printf survived > %s) & while :; do :; done",
+		shellQuote(started), shellQuote(survived),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := Execute(ctx, Request{Command: command})
+		done <- err
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Execute() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Execute() did not stop after child-process cancellation")
+	}
+
+	time.Sleep(600 * time.Millisecond)
+	if _, err := os.Stat(survived); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("background child artifact stat error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestExecuteCancellationAllowsCleanupTrap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell trap cleanup")
+	}
+
+	directory := t.TempDir()
+	artifact := filepath.Join(directory, "temporary-artifact")
+	quotedArtifact := shellQuote(artifact)
+	command := fmt.Sprintf(
+		"touch %s; trap \"rm -f -- %s\" TERM EXIT; while :; do :; done",
+		quotedArtifact, quotedArtifact,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := Execute(ctx, Request{Command: command})
+		done <- err
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(artifact); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("command did not create temporary artifact")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Execute() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Execute() did not stop after cleanup-trap cancellation")
+	}
+	if _, err := os.Stat(artifact); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary artifact stat error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestExecuteCleansUpBackgroundChildAfterNormalExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup uses POSIX process groups")
+	}
+
+	directory := t.TempDir()
+	artifact := filepath.Join(directory, "background-artifact")
+	command := fmt.Sprintf(
+		"(sleep 0.3; printf survived > %s) >/dev/null 2>&1 & exit 0",
+		shellQuote(artifact),
+	)
+	result, err := Execute(context.Background(), Request{Command: command})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", result.ExitCode)
+	}
+	time.Sleep(600 * time.Millisecond)
+	if _, err := os.Stat(artifact); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("background child artifact stat error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestExecuteLimitsCapturedOutput(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		command    string
+		outputSize func(Result) int
+		truncated  func(Result) bool
+	}{
+		{
+			name:       "stdout",
+			command:    largeStdoutCommand(MaxOutputBytes + 1024),
+			outputSize: func(result Result) int { return len(result.Stdout) },
+			truncated:  func(result Result) bool { return result.StdoutTruncated },
+		},
+		{
+			name:       "stderr",
+			command:    largeStderrCommand(MaxOutputBytes + 1024),
+			outputSize: func(result Result) int { return len(result.Stderr) },
+			truncated:  func(result Result) bool { return result.StderrTruncated },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Execute(context.Background(), Request{Command: test.command})
+			if !errors.Is(err, ErrOutputLimit) {
+				t.Fatalf("Execute() error = %v, want ErrOutputLimit", err)
+			}
+			if got := test.outputSize(result); got != MaxOutputBytes {
+				t.Errorf("captured output length = %d, want %d", got, MaxOutputBytes)
+			}
+			if !test.truncated(result) {
+				t.Error("output truncation flag = false, want true")
+			}
+			if result.ExitCode != -1 {
+				t.Errorf("exit code = %d, want -1 for output-limit interruption", result.ExitCode)
+			}
+		})
+	}
+}
+
+func TestExecuteRejectsUnsafeRequestBounds(t *testing.T) {
+	secret := "secret-command-value"
+	tests := []struct {
+		name string
+		req  Request
+		want string
+	}{
+		{
+			name: "command too large",
+			req:  Request{Command: strings.Repeat("x", MaxCommandBytes+1)},
+			want: "1 MiB limit",
+		},
+		{
+			name: "negative timeout",
+			req:  Request{Command: secret, Timeout: -time.Millisecond},
+			want: "timeout must not be negative",
+		},
+		{
+			name: "timeout too large",
+			req:  Request{Command: secret, Timeout: MaxTimeout + time.Nanosecond},
+			want: "timeout exceeds",
+		},
+		{
+			name: "NUL command",
+			req:  Request{Command: secret + "\x00suffix"},
+			want: "NUL",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Execute(context.Background(), test.req)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Execute() error = %v, want %q", err, test.want)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("error exposed command content: %q", err)
+			}
+			if result.ExitCode != -1 {
+				t.Errorf("exit code = %d, want -1", result.ExitCode)
+			}
+		})
+	}
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func TestExecuteEmptyCommand(t *testing.T) {
@@ -123,6 +404,20 @@ func loopCommand() string {
 		return "while ($true) {}"
 	}
 	return "while :; do :; done"
+}
+
+func largeStdoutCommand(size int) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("[Console]::Out.Write('A' * %d)", size)
+	}
+	return fmt.Sprintf("yes A | head -c %d", size)
+}
+
+func largeStderrCommand(size int) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("[Console]::Error.Write('B' * %d)", size)
+	}
+	return fmt.Sprintf("yes B | head -c %d >&2", size)
 }
 
 func samePath(got, want string) bool {

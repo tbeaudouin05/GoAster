@@ -29,9 +29,10 @@ trusted channel and get explicit approval before accepting it.
 ## Run SSH through `shell_execute`
 
 Call GoAster's built-in `shell_execute` with a JSON object containing the
-required string `command` and, when useful, `cwd` and `timeout_ms`. The tool
-returns `stdout`, `stderr`, and `exit_code`; an `execution_error` may also be
-present. Read all of the result. A nonzero exit code, timeout, or execution
+required string `command` and, when useful, `cwd` and `timeout_ms`. Omitted or
+zero `timeout_ms` uses GoAster's fixed safety timeout; choose a positive
+bounded timeout for longer work. The tool returns `stdout`, `stderr`, and
+`exit_code`; an `execution_error` may also be present. Read all of the result. A nonzero exit code, timeout, or execution
 error is a failure or uncertain outcome, not success, and must not be retried
 blindly.
 

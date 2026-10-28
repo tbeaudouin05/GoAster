@@ -8,8 +8,8 @@ search-result titles, URLs, and snippets. The built-in `web_fetch` tool retrieve
 readable content from public HTTP or HTTPS URLs with response and redirect limits.
 The built-in `shell_execute` tool runs commands through the platform's native
 shell and returns stdout, stderr, and the exit code; it accepts an optional
-working directory and timeout in milliseconds. GoAster has no provider, API-key,
-or web-search flag configuration.
+working directory and bounded timeout in milliseconds. GoAster has no provider,
+API-key, or web-search flag configuration.
 
 ## Build and run
 

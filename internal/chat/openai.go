@@ -814,6 +814,7 @@ var shellExecuteCodexTool = codexTool{
 			"command": map[string]any{
 				"type":        "string",
 				"description": "Command to run",
+				"maxLength":   int64(command.MaxCommandBytes),
 			},
 			"cwd": map[string]any{
 				"type":        "string",
@@ -821,7 +822,9 @@ var shellExecuteCodexTool = codexTool{
 			},
 			"timeout_ms": map[string]any{
 				"type":        "integer",
-				"description": "Optional execution timeout in milliseconds; zero or omitted means no timeout",
+				"description": "Optional execution timeout in milliseconds; zero or omitted uses GoAster's fixed safety timeout",
+				"minimum":     0,
+				"maximum":     int64(command.MaxTimeout / time.Millisecond),
 			},
 		},
 		"required": []string{"command"},
@@ -858,10 +861,12 @@ func parseShellExecuteArguments(arguments string) (command.Request, error) {
 
 	request := command.Request{Command: args.Command, Dir: args.CWD}
 	if args.TimeoutMS != nil {
-		const maxTimeoutMS = int64((1<<63 - 1) / int64(time.Millisecond))
-		const minTimeoutMS = int64((-1 << 63) / int64(time.Millisecond))
-		if *args.TimeoutMS > maxTimeoutMS || *args.TimeoutMS < minTimeoutMS {
-			return command.Request{}, fmt.Errorf("shell_execute timeout_ms is outside the supported duration range")
+		if *args.TimeoutMS < 0 {
+			return command.Request{}, fmt.Errorf("shell_execute timeout_ms must not be negative")
+		}
+		maxTimeoutMS := int64(command.MaxTimeout / time.Millisecond)
+		if *args.TimeoutMS > maxTimeoutMS {
+			return command.Request{}, fmt.Errorf("shell_execute timeout_ms exceeds the maximum allowed duration")
 		}
 		request.Timeout = time.Duration(*args.TimeoutMS) * time.Millisecond
 	}
@@ -874,7 +879,7 @@ func executeShell(ctx context.Context, arguments string) (string, error) {
 	}
 	request, err := parseShellExecuteArguments(arguments)
 	if err != nil {
-		return formatShellExecuteResult(command.Result{ExitCode: -1}, fmt.Errorf("malformed shell_execute arguments: %w", err)), nil
+		return formatShellExecuteResult(command.Result{ExitCode: -1}, &safeShellExecutionError{message: "malformed shell_execute arguments"}), nil
 	}
 	result, err := command.Execute(ctx, request)
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -886,10 +891,43 @@ func executeShell(ctx context.Context, arguments string) (string, error) {
 func formatShellExecuteResult(result command.Result, executionErr error) string {
 	var output strings.Builder
 	if executionErr != nil {
-		fmt.Fprintf(&output, "execution_error: %v\n", executionErr)
+		fmt.Fprintf(&output, "execution_error: %s\n", safeShellExecutionErrorMessage(executionErr))
 	}
-	fmt.Fprintf(&output, "stdout:\n%s\nstderr:\n%s\nexit_code: %d", result.Stdout, result.Stderr, result.ExitCode)
+	fmt.Fprintf(&output, "stdout:\n%s\n", result.Stdout)
+	if result.StdoutTruncated {
+		output.WriteString("stdout_truncated: true\n")
+	}
+	fmt.Fprintf(&output, "stderr:\n%s\n", result.Stderr)
+	if result.StderrTruncated {
+		output.WriteString("stderr_truncated: true\n")
+	}
+	fmt.Fprintf(&output, "exit_code: %d", result.ExitCode)
 	return output.String()
+}
+
+type safeShellExecutionError struct {
+	message string
+}
+
+func (err *safeShellExecutionError) Error() string {
+	return err.message
+}
+
+func safeShellExecutionErrorMessage(err error) string {
+	var safeErr *safeShellExecutionError
+	if errors.As(err, &safeErr) {
+		return safeErr.message
+	}
+	switch {
+	case errors.Is(err, command.ErrOutputLimit):
+		return "command output exceeded the limit"
+	case errors.Is(err, context.Canceled):
+		return "context canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context deadline exceeded"
+	default:
+		return "command execution failed"
+	}
 }
 
 func (p *CodexProvider) executeWebSearchTool(ctx context.Context, arguments string) (string, error) {

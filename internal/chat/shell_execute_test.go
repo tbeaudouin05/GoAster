@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"goaster/internal/command"
 )
 
 func TestCodexProviderAdvertisesShellExecute(t *testing.T) {
@@ -42,6 +45,14 @@ func TestCodexProviderAdvertisesShellExecute(t *testing.T) {
 					if _, ok := properties[name]; !ok {
 						t.Errorf("shell_execute properties missing %q: %#v", name, properties)
 					}
+				}
+				commandProperties, ok := properties["command"].(map[string]any)
+				if !ok || commandProperties["maxLength"] != float64(command.MaxCommandBytes) {
+					t.Errorf("shell_execute command safety schema = %#v, want maxLength %d", properties["command"], command.MaxCommandBytes)
+				}
+				timeoutProperties, ok := properties["timeout_ms"].(map[string]any)
+				if !ok || timeoutProperties["minimum"] != float64(0) || timeoutProperties["maximum"] != float64(command.MaxTimeout/time.Millisecond) {
+					t.Errorf("shell_execute timeout safety schema = %#v", properties["timeout_ms"])
 				}
 			}
 			required, ok := shellTool.Parameters["required"].([]any)
@@ -175,6 +186,70 @@ func TestCodexProviderReturnsMalformedShellArgumentsAsToolOutput(t *testing.T) {
 	}
 }
 
+func TestShellExecuteBoundsTimeoutArguments(t *testing.T) {
+	maxTimeoutMS := int64(command.MaxTimeout / time.Millisecond)
+	for _, test := range []struct {
+		name string
+		args string
+		want string
+	}{
+		{name: "negative", args: `{"command":"printf ok","timeout_ms":-1}`, want: "must not be negative"},
+		{name: "too large", args: fmt.Sprintf(`{"command":"printf ok","timeout_ms":%d}`, maxTimeoutMS+1), want: "exceeds the maximum"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := parseShellExecuteArguments(test.args)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("parseShellExecuteArguments() error = %v, want %q", err, test.want)
+			}
+			if request.Command != "" || request.Dir != "" || request.Timeout != 0 {
+				t.Errorf("request on parse failure = %+v, want zero value", request)
+			}
+		})
+	}
+}
+
+func TestFormatShellExecuteResultIsExplicitAndSecretSafe(t *testing.T) {
+	secret := "shell-result-secret"
+	result := command.Result{
+		Stdout:          "captured stdout",
+		Stderr:          "captured stderr",
+		ExitCode:        -1,
+		StdoutTruncated: true,
+		StderrTruncated: true,
+	}
+	formatted := formatShellExecuteResult(result, errors.New("internal detail: "+secret))
+	for _, want := range []string{"execution_error: command execution failed", "stdout_truncated: true", "stderr_truncated: true", "exit_code: -1"} {
+		if !strings.Contains(formatted, want) {
+			t.Errorf("formatted result missing %q: %q", want, formatted)
+		}
+	}
+	if strings.Contains(formatted, secret) {
+		t.Errorf("formatted result exposed execution error detail: %q", formatted)
+	}
+	if got := formatShellExecuteResult(result, command.ErrOutputLimit); !strings.Contains(got, "execution_error: command output exceeded the limit") {
+		t.Errorf("output-limit result = %q", got)
+	}
+}
+
+func TestExecuteShellReportsTimeoutAsUncertainResult(t *testing.T) {
+	arguments, err := json.Marshal(map[string]any{
+		"command":    shellLoopCommand(),
+		"timeout_ms": 50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted, err := executeShell(context.Background(), string(arguments))
+	if err != nil {
+		t.Fatalf("executeShell() error = %v", err)
+	}
+	for _, want := range []string{"execution_error: context deadline exceeded", "exit_code: -1"} {
+		if !strings.Contains(formatted, want) {
+			t.Errorf("timeout result missing %q: %q", want, formatted)
+		}
+	}
+}
+
 func newShellTestProvider(t *testing.T, backend *httptest.Server) *CodexProvider {
 	t.Helper()
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
@@ -216,4 +291,11 @@ func shellOutputCommand() string {
 		return `Write-Output "stdout"; [Console]::Error.WriteLine("stderr"); Write-Output ("cwd=" + (Get-Location).Path); exit 7`
 	}
 	return `printf 'stdout\n'; printf 'stderr\n' >&2; printf 'cwd='; pwd; exit 7`
+}
+
+func shellLoopCommand() string {
+	if runtime.GOOS == "windows" {
+		return "while ($true) {}"
+	}
+	return "while :; do :; done"
 }
