@@ -13,14 +13,12 @@ const (
 )
 
 type Config struct {
-	PrimaryModel         string
-	FallbackModel        string
-	EchoUnavailableModel string
+	PrimaryModel  string
+	FallbackModel string
 }
 
 type RuntimeConfig struct {
 	Config
-	Offline  bool
 	AuthFile string
 }
 
@@ -35,8 +33,6 @@ func ParseRuntimeConfig(args []string, output io.Writer) (RuntimeConfig, error) 
 	flags.SetOutput(output)
 	flags.StringVar(&config.PrimaryModel, "primary-model", DefaultPrimaryModel, "primary model name")
 	flags.StringVar(&config.FallbackModel, "fallback-model", DefaultFallbackModel, "fallback model name")
-	flags.StringVar(&config.EchoUnavailableModel, "echo-unavailable-model", "", "simulate this model being unavailable in the local echo provider")
-	flags.BoolVar(&config.Offline, "offline", false, "use the local echo provider instead of OpenAI subscription chat")
 	flags.StringVar(&config.AuthFile, "auth-file", "", "path for the local OpenAI subscription credentials")
 	if err := flags.Parse(args); err != nil {
 		return RuntimeConfig{}, err
@@ -46,7 +42,6 @@ func ParseRuntimeConfig(args []string, output io.Writer) (RuntimeConfig, error) 
 	}
 	config.PrimaryModel = strings.TrimSpace(config.PrimaryModel)
 	config.FallbackModel = strings.TrimSpace(config.FallbackModel)
-	config.EchoUnavailableModel = strings.TrimSpace(config.EchoUnavailableModel)
 	config.AuthFile = strings.TrimSpace(config.AuthFile)
 	if config.PrimaryModel == "" || config.FallbackModel == "" {
 		return RuntimeConfig{}, fmt.Errorf("primary and fallback model names must be non-empty")

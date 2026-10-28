@@ -13,21 +13,6 @@ type Provider interface {
 	Reply(ctx context.Context, model, message string) (string, error)
 }
 
-// EchoProvider is entirely local; model names are labels, not API calls.
-type EchoProvider struct {
-	UnavailableModel string
-}
-
-func (p EchoProvider) Reply(ctx context.Context, model, message string) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if model == p.UnavailableModel {
-		return "", fmt.Errorf("%w: %s (simulated by local echo provider)", ErrModelUnavailable, model)
-	}
-	return "Echo: " + message, nil
-}
-
 type Session struct {
 	provider Provider
 	config   Config

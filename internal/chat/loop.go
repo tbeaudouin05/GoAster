@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Run accepts one message per line. EOF and /quit or /exit end the session.
+// Run accepts one message per line and ends the session at EOF.
 func Run(ctx context.Context, input io.Reader, output io.Writer, session *Session) error {
 	w := bufio.NewWriter(output)
 	status := func() {
@@ -18,7 +18,7 @@ func Run(ctx context.Context, input io.Reader, output io.Writer, session *Sessio
 		}
 	}
 	fmt.Fprintf(w, "GoAster — %s\n", session.description())
-	fmt.Fprintln(w, "Type a message, /quit or /exit to exit.")
+	fmt.Fprintln(w, "Type a message, then press Enter.")
 	status()
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
@@ -38,10 +38,6 @@ func Run(ctx context.Context, input io.Reader, output io.Writer, session *Sessio
 			return w.Flush()
 		}
 		message := strings.TrimSpace(scanner.Text())
-		if message == "/quit" || message == "/exit" {
-			fmt.Fprintln(w, "Goodbye.")
-			return w.Flush()
-		}
 		if message == "" {
 			continue
 		}
@@ -64,5 +60,5 @@ func (s *Session) description() string {
 	if described, ok := s.provider.(interface{ Description() string }); ok {
 		return described.Description()
 	}
-	return "local echo provider (offline)"
+	return "chat provider"
 }

@@ -160,14 +160,14 @@ func TestCodexProviderEnsureAuthStartsDeviceLoginBeforeChat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Run(context.Background(), strings.NewReader("/exit\n"), &output, NewSession(Config{
+	if err := Run(context.Background(), strings.NewReader(""), &output, NewSession(Config{
 		PrimaryModel:  DefaultPrimaryModel,
 		FallbackModel: DefaultFallbackModel,
 	}, provider)); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "Goodbye.") {
-		t.Fatalf("chat output = %q", output.String())
+	if !strings.Contains(output.String(), "GoAster — OpenAI subscription via ChatGPT/Codex backend") {
+		t.Fatalf("chat did not start after authentication: %q", output.String())
 	}
 }
 
@@ -320,16 +320,17 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 	}
 }
 
-func TestCodexChatKeepsExitCommandBeforeLogin(t *testing.T) {
+func TestCodexChatSendsExitTextToProviderAndRequiresAuth(t *testing.T) {
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "missing-auth.json")}
 	provider := NewCodexProvider(store)
 	var output bytes.Buffer
 	config := Config{PrimaryModel: DefaultPrimaryModel, FallbackModel: DefaultFallbackModel}
-	if err := Run(context.Background(), strings.NewReader("/exit\n"), &output, NewSession(config, provider)); err != nil {
-		t.Fatal(err)
+	err := Run(context.Background(), strings.NewReader("/exit\n"), &output, NewSession(config, provider))
+	if !errors.Is(err, ErrLoginRequired) {
+		t.Fatalf("chat error = %v, want missing authentication", err)
 	}
-	if !strings.Contains(output.String(), "Goodbye.") {
-		t.Fatalf("exit output = %q", output.String())
+	if !strings.Contains(output.String(), "Type a message, then press Enter.") {
+		t.Fatalf("chat prompt missing: %q", output.String())
 	}
 }
 

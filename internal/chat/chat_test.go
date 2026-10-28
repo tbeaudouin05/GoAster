@@ -14,14 +14,14 @@ import (
 
 func TestConfig(t *testing.T) {
 	config, err := ParseConfig(nil, io.Discard)
-	if err != nil || config.PrimaryModel != "gpt-6.1-sol" || config.FallbackModel != "gpt-5.6-luna" || config.EchoUnavailableModel != "" {
+	if err != nil || config.PrimaryModel != "gpt-6.1-sol" || config.FallbackModel != "gpt-5.6-luna" {
 		t.Fatalf("defaults: %+v, %v", config, err)
 	}
-	config, err = ParseConfig([]string{"-primary-model", " custom-primary ", "-fallback-model", "custom-fallback", "-echo-unavailable-model", "custom-primary"}, io.Discard)
-	if err != nil || config != (Config{"custom-primary", "custom-fallback", "custom-primary"}) {
+	config, err = ParseConfig([]string{"-primary-model", " custom-primary ", "-fallback-model", "custom-fallback"}, io.Discard)
+	if err != nil || config != (Config{"custom-primary", "custom-fallback"}) {
 		t.Fatalf("overrides: %+v, %v", config, err)
 	}
-	for _, args := range [][]string{{"-primary-model", " "}, {"-fallback-model", ""}, {"unexpected"}, {"-unknown"}, {"-primary-model"}} {
+	for _, args := range [][]string{{"-primary-model", " "}, {"-fallback-model", ""}, {"unexpected"}, {"-unknown"}, {"-primary-model"}, {"-offline"}, {"-echo-unavailable-model", "gpt-6.1-sol"}} {
 		if _, err := ParseConfig(args, io.Discard); err == nil {
 			t.Errorf("expected invalid configuration: %q", args)
 		}
@@ -48,7 +48,7 @@ func defaultConfig(t *testing.T) Config {
 
 func TestSessionSelection(t *testing.T) {
 	ordinaryError := errors.New("provider failed")
-	unavailable := fmt.Errorf("temporarily offline: %w", ErrModelUnavailable)
+	unavailable := fmt.Errorf("temporarily unavailable: %w", ErrModelUnavailable)
 	for _, tc := range []struct {
 		name        string
 		primaryErr  error
@@ -105,54 +105,38 @@ func TestSessionSelection(t *testing.T) {
 	}
 }
 
-func TestEchoProvider(t *testing.T) {
-	provider := EchoProvider{UnavailableModel: "offline"}
-	for i := 0; i < 2; i++ {
-		reply, err := provider.Reply(context.Background(), "local", "hello")
-		if err != nil || reply != "Echo: hello" {
-			t.Fatalf("reply = %q, %v", reply, err)
-		}
-	}
-	if _, err := provider.Reply(context.Background(), "offline", "hello"); !errors.Is(err, ErrModelUnavailable) {
-		t.Fatalf("unavailable error = %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := provider.Reply(ctx, "local", "hello"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled error = %v", err)
-	}
-}
-
 func TestLoop(t *testing.T) {
-	for _, ending := range []string{"/quit\nignored\n", "/exit\nignored\n", ""} {
-		t.Run(fmt.Sprintf("ending=%q", ending), func(t *testing.T) {
-			var output bytes.Buffer
-			var messages []string
-			provider := providerFunc(func(_ context.Context, model, message string) (string, error) {
-				messages = append(messages, message)
-				return "received " + message, nil
-			})
-			err := Run(context.Background(), strings.NewReader("\n hello \n/history\n/clear\nsecond\n"+ending), &output, NewSession(defaultConfig(t), provider))
-			if err != nil || !reflect.DeepEqual(messages, []string{"hello", "/history", "/clear", "second"}) {
-				t.Fatalf("messages = %q, error = %v", messages, err)
-			}
-			for _, want := range []string{"local echo provider (offline)", "Type a message, /quit or /exit to exit.", "Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello", "assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear", "received second"} {
-				if !strings.Contains(output.String(), want) {
-					t.Errorf("output missing %q: %s", want, &output)
-				}
-			}
-		})
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, model, message string) (string, error) {
+		messages = append(messages, message)
+		return "received " + message, nil
+	})
+	err := Run(context.Background(), strings.NewReader("\n hello \n/history\n/clear\n/quit\n/exit\nsecond\n"), &output, NewSession(defaultConfig(t), provider))
+	if err != nil || !reflect.DeepEqual(messages, []string{"hello", "/history", "/clear", "/quit", "/exit", "second"}) {
+		t.Fatalf("messages = %q, error = %v", messages, err)
+	}
+	for _, want := range []string{"chat provider", "Type a message, then press Enter.", "Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello", "assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear", "assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit", "assistant [gpt-6.1-sol]> received second"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q: %s", want, &output)
+		}
 	}
 }
 
 func TestLoopShowsFallback(t *testing.T) {
 	var output bytes.Buffer
+	provider := providerFunc(func(_ context.Context, model, message string) (string, error) {
+		if model == DefaultPrimaryModel {
+			return "", ErrModelUnavailable
+		}
+		return "reply to " + message, nil
+	})
 	err := Run(context.Background(), strings.NewReader("hello\nagain"), &output,
-		NewSession(defaultConfig(t), EchoProvider{UnavailableModel: DefaultPrimaryModel}))
+		NewSession(defaultConfig(t), provider))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Active model: gpt-5.6-luna", "Fallback reason: gpt-6.1-sol failed: model unavailable", "assistant [gpt-5.6-luna]> Echo: hello", "assistant [gpt-5.6-luna]> Echo: again"} {
+	for _, want := range []string{"Active model: gpt-5.6-luna", "Fallback reason: gpt-6.1-sol failed: model unavailable", "assistant [gpt-5.6-luna]> reply to hello", "assistant [gpt-5.6-luna]> reply to again"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
@@ -169,14 +153,15 @@ func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
 func TestLoopErrors(t *testing.T) {
 	failure := errors.New("broken stream or provider")
+	provider := providerFunc(func(context.Context, string, string) (string, error) { return "response", nil })
 	for _, tc := range []struct {
 		name     string
 		input    io.Reader
 		output   io.Writer
 		provider Provider
 	}{
-		{"input", failingReader{failure}, io.Discard, EchoProvider{}},
-		{"output", strings.NewReader("hello\n"), failingWriter{failure}, EchoProvider{}},
+		{"input", failingReader{failure}, io.Discard, provider},
+		{"output", strings.NewReader("hello\n"), failingWriter{failure}, provider},
 		{"provider", strings.NewReader("hello\n"), io.Discard, providerFunc(func(context.Context, string, string) (string, error) { return "", failure })},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

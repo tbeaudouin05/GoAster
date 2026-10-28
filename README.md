@@ -29,9 +29,10 @@ tokens and ChatGPT account ID are saved locally in `~/.goaster/auth.json` with
 GoAster continues directly into chat. Existing credentials are refreshed when
 needed and then chat starts directly.
 
-Enter one message per line. Blank lines are ignored. Use `/quit`, `/exit`, or
-EOF (Ctrl-D on Unix) to exit. A different credential file can be selected with
-the configuration flag:
+Enter one message per line. Blank lines are ignored. End the input stream with
+EOF (Ctrl-D on Unix) to exit. Ctrl-C or closing the terminal also stops the
+process where supported. A different credential file can be selected with the
+configuration flag:
 
 ```sh
 ./goaster -auth-file /path/to/auth.json
@@ -49,15 +50,7 @@ Provider errors wrapping `ErrModelUnavailable` trigger one retry on the
 fallback model. The fallback remains active for the session and its reason is
 displayed. Other provider errors terminate the loop with a nonzero exit status.
 
-The deterministic local echo flow remains available without credentials:
-
-```sh
-./goaster -offline
-./goaster -offline -echo-unavailable-model gpt-6.1-sol
-```
-
-The second command simulates an unavailable primary model and demonstrates the
-same fallback behavior. Input lines are limited to roughly 1 MiB.
+Input lines are limited to roughly 1 MiB.
 
 ```sh
 go test ./...

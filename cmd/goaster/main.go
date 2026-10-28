@@ -27,19 +27,13 @@ func run(ctx context.Context, args []string, input io.Reader, output, errorOutpu
 		return err
 	}
 
-	var provider chat.Provider
-	if runtimeConfig.Offline || runtimeConfig.EchoUnavailableModel != "" {
-		provider = chat.EchoProvider{UnavailableModel: runtimeConfig.EchoUnavailableModel}
-	} else {
-		store, err := chat.NewCredentialStore(runtimeConfig.AuthFile)
-		if err != nil {
-			return err
-		}
-		codexProvider := chat.NewCodexProvider(store)
-		provider = codexProvider
-		if err := codexProvider.EnsureAuth(ctx, output); err != nil {
-			return err
-		}
+	store, err := chat.NewCredentialStore(runtimeConfig.AuthFile)
+	if err != nil {
+		return err
 	}
-	return chat.Run(ctx, input, output, chat.NewSession(runtimeConfig.Config, provider))
+	codexProvider := chat.NewCodexProvider(store)
+	if err := codexProvider.EnsureAuth(ctx, output); err != nil {
+		return err
+	}
+	return chat.Run(ctx, input, output, chat.NewSession(runtimeConfig.Config, codexProvider))
 }
