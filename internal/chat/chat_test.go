@@ -120,7 +120,7 @@ func TestLoop(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(messages, []string{"hello", "/history", "/clear", "/quit", "/exit", "second"}) {
 		t.Fatalf("messages = %q, error = %v", messages, err)
 	}
-	for _, want := range []string{"chat provider", "Type a message, then press Enter.", "OVH onboarding:", "Create an OVHcloud account.", "creating your remote agent", "enter /env and select it in the file picker", "details on obtaining OVH credentials", "Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello", "assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear", "assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit", "assistant [gpt-6.1-sol]> received second"} {
+	for _, want := range []string{"chat provider", "Type a message, then press Enter.", "OVH onboarding:", "Create an OVHcloud account.", "creating your remote agent", "Next command: /env", "select the file in the file picker", "details on obtaining OVH credentials", "Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello", "assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear", "assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit", "assistant [gpt-6.1-sol]> received second"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
@@ -319,6 +319,7 @@ func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
 		"OVH_REGION=********",
 		"Save these values? [y/N]",
 		"Environment values saved locally.",
+		"Next command: /ovh",
 		"Next: choose your local OVH KEY=VALUE file in the file picker.",
 		"OVH_APPLICATION_SECRET=replace-with-your-application-secret",
 	} {
@@ -493,7 +494,7 @@ func TestOVHCommandUsesLocalConfigAndDoesNotSendValuesToProvider(t *testing.T) {
 	if !reflect.DeepEqual(messages, []string{"hello"}) {
 		t.Fatal("local OVH command was sent to the chat provider")
 	}
-	if !strings.Contains(output.String(), "OVH configuration rejected") || strings.Contains(output.String(), "fake-secret") {
+	if !strings.Contains(output.String(), "OVH configuration rejected") || !strings.Contains(output.String(), "Run /env first to select and save valid OVH settings locally.") || strings.Contains(output.String(), "fake-secret") {
 		t.Fatal("unexpected OVH configuration output")
 	}
 }

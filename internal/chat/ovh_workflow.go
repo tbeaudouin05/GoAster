@@ -28,7 +28,7 @@ func runOVHSetupWithDependenciesAndOptions(ctx context.Context, scanner *bufio.S
 	}
 	config, err := ovh.ConfigFromValues(store.Values())
 	if err != nil {
-		fmt.Fprintf(out, "OVH configuration rejected: %v\n", err)
+		fmt.Fprintf(out, "OVH configuration rejected: %v. Run /env first to select and save valid OVH settings locally.\n", err)
 		return out.Flush()
 	}
 	pair, err := keyPair()

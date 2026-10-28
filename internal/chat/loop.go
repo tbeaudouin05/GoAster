@@ -159,6 +159,7 @@ func reviewEnvironmentValues(scanner *bufio.Scanner, output *bufio.Writer, store
 		return err
 	}
 	fmt.Fprintln(output, "Environment values saved locally.")
+	fmt.Fprintln(output, "Next command: /ovh to run the preflight and review the provisioning confirmation.")
 	return nil
 }
 

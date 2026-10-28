@@ -23,10 +23,13 @@ Safe setup sequence:
 4. If they need OVH API credentials, explain how they can create an API
    application key, application secret, and consumer key in their own OVH
    account. Recommend the narrowest access they need and never ask them to
-   paste a secret into chat. They can import a local KEY=VALUE file with
-   GoAster's /env command. GoAster masks values and saves the confirmed file
-   locally. Imported values are never sent to the chat provider, and you
-   cannot read or use them.
+   paste a secret into chat. Proactively tell users they can ask you for the
+   required OVH environment variable names and the exact local KEY=VALUE
+   template. Clearly mark placeholders and tell users to replace them only in
+   their local file, never by pasting secrets into chat. They can import the
+   local file with GoAster's /env command. GoAster masks values and saves the
+   confirmed file locally. Imported values are never sent to the chat provider,
+   and you cannot read or use them.
 
 OVH variable names that GoAster /env needs:
 - OVH_ENDPOINT: OVH API endpoint for the user's account.
@@ -51,7 +54,7 @@ user to run and review themselves.`
 const ovhStartupGuidance = `OVH onboarding:
 1. Create an OVHcloud account.
 2. Ask the assistant to guide you through creating your remote agent.
-3. Prepare a local OVH KEY=VALUE file, then enter /env and select it in the file picker.
+3. Prepare a local OVH KEY=VALUE file. Next command: /env; select the file in the file picker.
 You can ask the assistant for details on obtaining OVH credentials.
 /env stores values locally; they are not sent to the assistant. Enter /ovh to preflight and explicitly confirm provisioning.`
 
