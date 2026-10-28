@@ -3,6 +3,8 @@ package chat
 import (
 	"errors"
 	"fmt"
+	"os/exec"
+	"runtime"
 
 	"github.com/ncruces/zenity"
 )
@@ -10,6 +12,8 @@ import (
 // ErrEnvironmentFilePickerCanceled indicates that the user closed the file
 // picker without choosing a file.
 var ErrEnvironmentFilePickerCanceled = errors.New("environment file selection canceled")
+
+var errEnvironmentFilePickerUnavailable = errors.New("environment file picker unavailable")
 
 // EnvironmentFilePicker selects a local environment file.
 type EnvironmentFilePicker interface {
@@ -38,7 +42,14 @@ func (nativeEnvironmentFilePicker) Pick() (string, error) {
 		return "", ErrEnvironmentFilePickerCanceled
 	}
 	if err != nil {
-		return "", fmt.Errorf("open environment file picker: %w", err)
+		return "", wrapNativeEnvironmentFilePickerError(err)
 	}
 	return path, nil
+}
+
+func wrapNativeEnvironmentFilePickerError(err error) error {
+	if runtime.GOOS == "linux" && errors.Is(err, exec.ErrNotFound) {
+		return errEnvironmentFilePickerUnavailable
+	}
+	return fmt.Errorf("open environment file picker: %w", err)
 }
