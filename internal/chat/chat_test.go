@@ -132,11 +132,11 @@ func TestLoop(t *testing.T) {
 				messages = append(messages, message)
 				return "received " + message, nil
 			})
-			err := Run(context.Background(), strings.NewReader("\n hello \nsecond\n"+ending), &output, NewSession(defaultConfig(t), provider))
-			if err != nil || !reflect.DeepEqual(messages, []string{"hello", "second"}) {
+			err := Run(context.Background(), strings.NewReader("\n hello \n/history\n/clear\nsecond\n"+ending), &output, NewSession(defaultConfig(t), provider))
+			if err != nil || !reflect.DeepEqual(messages, []string{"hello", "/history", "/clear", "second"}) {
 				t.Fatalf("messages = %q, error = %v", messages, err)
 			}
-			for _, want := range []string{"local echo provider (offline)", "Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello", "received second"} {
+			for _, want := range []string{"local echo provider (offline)", "Type a message, /quit or /exit to exit.", "Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello", "assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear", "received second"} {
 				if !strings.Contains(output.String(), want) {
 					t.Errorf("output missing %q: %s", want, &output)
 				}

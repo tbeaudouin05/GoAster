@@ -18,7 +18,7 @@ func Run(ctx context.Context, input io.Reader, output io.Writer, session *Sessio
 		}
 	}
 	fmt.Fprintln(w, "GoAster — local echo provider (offline)")
-	fmt.Fprintln(w, "Type a message, /history to view history, /clear to clear history, or /quit to exit.")
+	fmt.Fprintln(w, "Type a message, /quit or /exit to exit.")
 	status()
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
@@ -43,21 +43,6 @@ func Run(ctx context.Context, input io.Reader, output io.Writer, session *Sessio
 			return w.Flush()
 		}
 		if message == "" {
-			continue
-		}
-		switch message {
-		case "/history":
-			history := session.History()
-			if len(history) == 0 {
-				fmt.Fprintln(w, "History is empty.")
-			}
-			for i, entry := range history {
-				fmt.Fprintf(w, "%d. %s: %s\n", i+1, entry.Role, entry.Content)
-			}
-			continue
-		case "/clear":
-			session.ClearHistory()
-			fmt.Fprintln(w, "History cleared.")
 			continue
 		}
 		previousModel := session.active
