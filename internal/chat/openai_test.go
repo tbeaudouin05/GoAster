@@ -282,6 +282,24 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		if request.Model != "gpt-test" || request.Instructions == "" || !request.Stream || request.Store || len(request.Input) != 1 || request.Input[0].Type != "message" || request.Input[0].Content[0].Text != "hello" {
 			t.Errorf("Codex request = %+v", request)
 		}
+		for _, want := range []string{
+			"OVH remote-agent setup",
+			"Goal: help the user plan and create a remote agent hosted on OVHcloud.",
+			"Safe setup sequence:",
+			"OVH_ENDPOINT",
+			"OVH_APPLICATION_KEY",
+			"OVH_APPLICATION_SECRET",
+			"OVH_CONSUMER_KEY",
+			"OVH_PROJECT_ID",
+			"OVH_REGION",
+			"Imported values are never sent to the chat",
+			"They execute the steps themselves",
+			"Do not claim to browse OVH pages",
+		} {
+			if !strings.Contains(request.Instructions, want) {
+				t.Errorf("Codex instructions missing %q", want)
+			}
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}\n\n")
 		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\" from Codex\"}\n\n")

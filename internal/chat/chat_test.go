@@ -120,7 +120,7 @@ func TestLoop(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(messages, []string{"hello", "/history", "/clear", "/quit", "/exit", "second"}) {
 		t.Fatalf("messages = %q, error = %v", messages, err)
 	}
-	for _, want := range []string{"chat provider", "Type a message, then press Enter.", "Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello", "assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear", "assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit", "assistant [gpt-6.1-sol]> received second"} {
+	for _, want := range []string{"chat provider", "Type a message, then press Enter.", "OVH onboarding:", "Create an OVHcloud account.", "creating your remote agent", "enter /env and select it in the file picker", "details on obtaining OVH credentials", "Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello", "assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear", "assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit", "assistant [gpt-6.1-sol]> received second"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
@@ -277,7 +277,7 @@ func TestEnvFileCancellationPreservesSavedValues(t *testing.T) {
 func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
 	directory := t.TempDir()
 	filePath := filepath.Join(directory, "settings to import.txt")
-	if err := os.WriteFile(filePath, []byte("OVH_REGION=gva\nAPI_TOKEN=file-secret-value\n"), 0600); err != nil {
+	if err := os.WriteFile(filePath, []byte("OVH_ENDPOINT=ovh-eu\nOVH_APPLICATION_KEY=test-application-key\nOVH_APPLICATION_SECRET=test-application-secret\nOVH_CONSUMER_KEY=test-consumer-key\nOVH_PROJECT_ID=test-project-id\nOVH_REGION=gra11\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	store := localenv.NewStoreAt(filepath.Join(directory, "saved", "env"))
@@ -296,19 +296,37 @@ func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantValues := map[string]string{"OVH_REGION": "gva", "API_TOKEN": "file-secret-value"}
+	wantValues := map[string]string{
+		"OVH_ENDPOINT":           "ovh-eu",
+		"OVH_APPLICATION_KEY":    "test-application-key",
+		"OVH_APPLICATION_SECRET": "test-application-secret",
+		"OVH_CONSUMER_KEY":       "test-consumer-key",
+		"OVH_PROJECT_ID":         "test-project-id",
+		"OVH_REGION":             "gra11",
+	}
 	if !reflect.DeepEqual(store.Values(), wantValues) {
 		t.Fatalf("saved variable names = %v, want %v", localenvNames(store.Values()), localenvNames(wantValues))
 	}
 	if !reflect.DeepEqual(messages, []string{"hello"}) {
 		t.Fatalf("provider messages = %q, want only the ordinary chat message", messages)
 	}
-	for _, want := range []string{"OVH_REGION=********", "API_TOKEN=********", "Save these values? [y/N]", "Environment values saved locally."} {
+	for _, want := range []string{
+		"OVH_ENDPOINT=********",
+		"OVH_APPLICATION_KEY=********",
+		"OVH_APPLICATION_SECRET=********",
+		"OVH_CONSUMER_KEY=********",
+		"OVH_PROJECT_ID=********",
+		"OVH_REGION=********",
+		"Save these values? [y/N]",
+		"Environment values saved locally.",
+		"Next: choose your local OVH KEY=VALUE file in the file picker.",
+		"OVH_APPLICATION_SECRET=replace-with-your-application-secret",
+	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
 	}
-	for _, secret := range []string{"gva", "file-secret-value"} {
+	for _, secret := range []string{"test-application-key", "test-application-secret", "test-consumer-key", "test-project-id", "gra11"} {
 		if strings.Contains(output.String(), secret) {
 			t.Errorf("output exposed a file value %q", secret)
 		}

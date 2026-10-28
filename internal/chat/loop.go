@@ -47,6 +47,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 	}
 	fmt.Fprintf(w, "GoAster — %s\n", session.description())
 	fmt.Fprintln(w, "Type a message, then press Enter.")
+	fmt.Fprintln(w, ovhStartupGuidance)
 	status()
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
@@ -97,6 +98,10 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 }
 
 func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker) error {
+	fmt.Fprintln(output, ovhEnvironmentFileGuidance)
+	if err := output.Flush(); err != nil {
+		return err
+	}
 	path, err := picker.Pick()
 	if err != nil {
 		if errors.Is(err, ErrEnvironmentFilePickerCanceled) {

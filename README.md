@@ -38,17 +38,39 @@ configuration flag:
 ./goaster -auth-file /path/to/auth.json
 ```
 
-## Local environment settings
+## OVH remote-agent setup
 
-In chat, enter `/env` to load local settings for a future OVH integration. A
-native file picker opens; choose the local environment text file there. Do not
-type or paste a file path or `KEY=VALUE` entries into chat. The file must contain
-one `KEY=VALUE` pair per line and be no larger than 1 MiB. GoAster reads it
-locally, validates it, then shows the variable names with masked values and asks
-for `y/N` confirmation. Only `y` saves the set; any other response, including
-canceling the picker, leaves the saved settings unchanged. Unreadable,
-malformed, duplicate-key, oversized, symbolic-link, or non-regular files are
-rejected without changing the saved settings.
+At chat startup, GoAster prompts you to create an OVHcloud account, ask the
+assistant to guide you through creating a remote agent, and then import a local
+environment file with `/env`. You can ask the assistant for details on
+obtaining OVH credentials. GoAster currently provides guidance only: it does
+not browse the web, call the OVH API, or provision OVH resources.
+
+The OVH API credential names supported by `/env` are `OVH_ENDPOINT`,
+`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, and `OVH_CONSUMER_KEY`. For a
+Public Cloud target, include `OVH_PROJECT_ID` and `OVH_REGION` as needed. The
+importer also accepts other valid `KEY=VALUE` names.
+
+Prepare a local text file with one `KEY=VALUE` pair per line. For example, use
+this template and replace each placeholder in your local file:
+
+```text
+OVH_ENDPOINT=replace-with-your-ovh-endpoint
+OVH_APPLICATION_KEY=replace-with-your-application-key
+OVH_APPLICATION_SECRET=replace-with-your-application-secret
+OVH_CONSUMER_KEY=replace-with-your-consumer-key
+OVH_PROJECT_ID=replace-with-your-public-cloud-project-id
+OVH_REGION=replace-with-your-public-cloud-region
+```
+
+In chat, enter `/env`; the exact next step is to choose that local file in the
+native file picker. Do not type or paste a file path or `KEY=VALUE` entries into
+chat. The file must contain one pair per line and be no larger than 1 MiB.
+GoAster reads it locally, validates it, then shows the variable names with
+masked values and asks for `y/N` confirmation. Only `y` saves the set; any other
+response, including canceling the picker, leaves saved settings unchanged.
+Unreadable, malformed, duplicate-key, oversized, symbolic-link, or non-regular
+files are rejected without changing the saved settings.
 
 On Linux, the desktop must provide a Zenity-compatible dialog helper such as
 `zenity`, `qarma`, or `matedialog`.
@@ -56,7 +78,7 @@ On Linux, the desktop must provide a Zenity-compatible dialog helper such as
 Confirmed settings are stored in `~/.goaster/env` with `0600` file permissions
 inside a `0700` directory. They are loaded locally at startup and are never sent
 to the chat provider. Each confirmed `/env` setup replaces the previous saved
-set.
+set. The current GoAster provider cannot read or use these values to access OVH.
 
 ## Models and fallback
 

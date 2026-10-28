@@ -23,7 +23,7 @@ const (
 	openAICodexURL      = "https://chatgpt.com/backend-api/codex/responses"
 	openAIClientID      = "app_EMoamEEZ73f0CkXaXp7hrann"
 	openAIOriginator    = "codex_cli_rs"
-	openAIInstructions  = "You are Codex, a coding assistant."
+	openAIInstructions  = "You are Codex, a coding assistant." + ovhSetupInstructions
 	credentialDirectory = ".goaster"
 	credentialFilename  = "auth.json"
 
