@@ -474,3 +474,26 @@ func runWithTestEnvStoreAndPicker(t *testing.T, ctx context.Context, input io.Re
 	}
 	return RunWithEnvStoreAndPicker(ctx, input, output, session, store, picker)
 }
+
+func TestOVHCommandUsesLocalConfigAndDoesNotSendValuesToProvider(t *testing.T) {
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Save(map[string]string{"OVH_APPLICATION_SECRET": "fake-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	picker := EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled })
+	if err := RunWithEnvStoreAndPicker(context.Background(), strings.NewReader("/ovh\nhello\n"), &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(messages, []string{"hello"}) {
+		t.Fatal("local OVH command was sent to the chat provider")
+	}
+	if !strings.Contains(output.String(), "OVH configuration rejected") || strings.Contains(output.String(), "fake-secret") {
+		t.Fatal("unexpected OVH configuration output")
+	}
+}

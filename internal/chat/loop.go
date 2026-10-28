@@ -70,6 +70,12 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		if message == "" {
 			continue
 		}
+		if message == "/ovh" {
+			if err := runOVHSetup(ctx, scanner, w, store); err != nil {
+				return err
+			}
+			continue
+		}
 		if message == "/env" {
 			if err := runEnvironmentFileSetup(scanner, w, store, picker); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
