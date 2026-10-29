@@ -20,12 +20,16 @@ func response(status int, body string) *http.Response {
 }
 
 func privateMessage(id int64, text string) *message {
+	return textMessage(id, id, "private", text)
+}
+
+func textMessage(userID, chatID int64, chatType, text string) *message {
 	m := &message{Text: text}
-	m.Chat.ID, m.Chat.Type = id, "private"
+	m.Chat.ID, m.Chat.Type = chatID, chatType
 	m.From = &struct {
 		ID    int64 `json:"id"`
 		IsBot bool  `json:"is_bot"`
-	}{ID: id}
+	}{ID: userID}
 	return m
 }
 
@@ -40,7 +44,10 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 		ChatID int64  `json:"chat_id"`
 		Text   string `json:"text"`
 	}
-	var forwarded []string
+	var forwarded []struct {
+		Message string `json:"message"`
+		ChatID  int64  `json:"chat_id"`
+	}
 	a := &adapter{token: testToken, pairing: p, apiBase: "https://example.invalid", client: doerFunc(func(r *http.Request) (*http.Response, error) {
 		var payload struct {
 			ChatID int64  `json:"chat_id"`
@@ -52,11 +59,14 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 		sent = append(sent, payload)
 		return response(200, `{"ok":true,"result":{}}`), nil
 	}), agent: doerFunc(func(r *http.Request) (*http.Response, error) {
-		var request struct{ Message string }
+		var request struct {
+			Message string `json:"message"`
+			ChatID  int64  `json:"chat_id"`
+		}
 		if r.URL.String() != "http://127.0.0.1:8765/chat" || json.NewDecoder(r.Body).Decode(&request) != nil {
 			t.Fatal("unexpected agent request")
 		}
-		forwarded = append(forwarded, request.Message)
+		forwarded = append(forwarded, request)
 		return response(200, `{"reply":"hello back"}`), nil
 	})}
 
@@ -93,7 +103,7 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 		t.Fatal("a pasted bot token reached the agent or was echoed")
 	}
 	a.handle(context.Background(), privateMessage(42, "Hello"))
-	if len(forwarded) != 1 || forwarded[0] != "Hello" || len(sent) != 4 || sent[3].ChatID != 42 || sent[3].Text != "hello back" {
+	if len(forwarded) != 1 || forwarded[0].Message != "Hello" || forwarded[0].ChatID != 42 || len(sent) != 4 || sent[3].ChatID != 42 || sent[3].Text != "hello back" {
 		t.Fatal("paired user's private message was not answered")
 	}
 	reloaded, err := loadPairing(paths)
@@ -103,8 +113,57 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 	a.pairing = reloaded
 	a.handle(context.Background(), privateMessage(99, "another user"))
 	a.handle(context.Background(), privateMessage(42, "after restart"))
-	if len(forwarded) != 2 || forwarded[1] != "after restart" {
+	if len(forwarded) != 2 || forwarded[1].Message != "after restart" || forwarded[1].ChatID != 42 {
 		t.Fatal("authorization did not persist across restart")
+	}
+}
+
+func TestPairedGroupMessagesForwardChatIDAndReplyToOriginatingChat(t *testing.T) {
+	var sent []struct {
+		ChatID int64  `json:"chat_id"`
+		Text   string `json:"text"`
+	}
+	var forwarded []struct {
+		Message string `json:"message"`
+		ChatID  int64  `json:"chat_id"`
+	}
+	a := &adapter{
+		token:   testToken,
+		pairing: &pairing{userID: 42},
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var payload struct {
+				ChatID int64  `json:"chat_id"`
+				Text   string `json:"text"`
+			}
+			if !strings.HasSuffix(r.URL.Path, "/sendMessage") || json.NewDecoder(r.Body).Decode(&payload) != nil {
+				t.Fatal("unexpected Telegram request")
+			}
+			sent = append(sent, payload)
+			return response(200, `{"ok":true,"result":{}}`), nil
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var request struct {
+				Message string `json:"message"`
+				ChatID  int64  `json:"chat_id"`
+			}
+			if json.NewDecoder(r.Body).Decode(&request) != nil {
+				t.Fatal("invalid agent request")
+			}
+			forwarded = append(forwarded, request)
+			return response(200, `{"reply":"group reply"}`), nil
+		}),
+	}
+
+	a.handle(context.Background(), textMessage(42, -100123, "group", "group hello"))
+	a.handle(context.Background(), textMessage(42, -100456, "supergroup", "supergroup hello"))
+	a.handle(context.Background(), textMessage(99, -100123, "group", "unauthorized"))
+
+	if len(forwarded) != 2 || forwarded[0].ChatID != -100123 || forwarded[1].ChatID != -100456 {
+		t.Fatalf("forwarded group requests = %#v", forwarded)
+	}
+	if len(sent) != 2 || sent[0].ChatID != -100123 || sent[1].ChatID != -100456 {
+		t.Fatalf("group replies were not sent to their originating chats: %#v", sent)
 	}
 }
 

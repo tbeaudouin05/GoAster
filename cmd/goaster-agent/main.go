@@ -33,7 +33,18 @@ func handler(provider chat.Provider) http.Handler {
 }
 
 func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore) http.Handler {
-	var mu sync.Mutex // serialize credential refreshes
+	var sessionsMu sync.Mutex
+	sessions := make(map[int64]*chat.Session)
+	sessionFor := func(chatID int64) *chat.Session {
+		sessionsMu.Lock()
+		defer sessionsMu.Unlock()
+		if session := sessions[chatID]; session != nil {
+			return session
+		}
+		session := chat.NewSessionWithMemory(chat.Config{PrimaryModel: chat.DefaultPrimaryModel, FallbackModel: chat.DefaultFallbackModel}, provider, memory)
+		sessions[chatID] = session
+		return session
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -53,10 +64,11 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore) http.Ha
 		}
 		var request struct {
 			Message string `json:"message"`
+			ChatID  int64  `json:"chat_id"`
 		}
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024*1024))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&request); err != nil || strings.TrimSpace(request.Message) == "" {
+		if err := dec.Decode(&request); err != nil || strings.TrimSpace(request.Message) == "" || request.ChatID == 0 {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -64,9 +76,7 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore) http.Ha
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		session := chat.NewSessionWithMemory(chat.Config{PrimaryModel: chat.DefaultPrimaryModel, FallbackModel: chat.DefaultFallbackModel}, provider, memory)
+		session := sessionFor(request.ChatID)
 		reply, err := session.Reply(r.Context(), request.Message)
 		if err != nil {
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)

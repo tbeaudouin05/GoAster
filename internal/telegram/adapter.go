@@ -147,7 +147,13 @@ func (a *adapter) call(ctx context.Context, method string, payload any, result a
 }
 
 func (a *adapter) handle(ctx context.Context, m *message) {
-	if m == nil || m.Chat.Type != "private" || m.From == nil || m.From.IsBot || m.From.ID <= 0 || m.From.ID != m.Chat.ID || len(m.SenderChat) != 0 && string(m.SenderChat) != "null" {
+	if m == nil || m.From == nil || m.From.IsBot || m.From.ID <= 0 || m.Chat.ID == 0 || len(m.SenderChat) != 0 && string(m.SenderChat) != "null" {
+		return
+	}
+	if m.Chat.Type != "private" && m.Chat.Type != "group" && m.Chat.Type != "supergroup" {
+		return
+	}
+	if m.Chat.Type == "private" && m.From.ID != m.Chat.ID {
 		return
 	}
 	text := strings.TrimSpace(m.Text)
@@ -155,12 +161,15 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		return
 	}
 	if a.pairing.userID == 0 {
+		if m.Chat.Type != "private" {
+			return
+		}
 		if text == "/start" {
 			a.send(ctx, m.Chat.ID, "Send /start followed by the one-time pairing code shown in GoAster.")
 			return
 		}
 		if strings.HasPrefix(text, "/start ") && a.pairing.tryPair(m.From.ID, strings.TrimSpace(strings.TrimPrefix(text, "/start "))) {
-			a.send(ctx, m.Chat.ID, "Paired. Send a private text message to chat.")
+			a.send(ctx, m.Chat.ID, "Paired. Send a text message to chat.")
 		}
 		return
 	}
@@ -168,7 +177,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		return
 	}
 	if text == "/start" || strings.HasPrefix(text, "/start ") {
-		a.send(ctx, m.Chat.ID, "GoAster is ready for private text messages.")
+		a.send(ctx, m.Chat.ID, "GoAster is ready for text messages.")
 		return
 	}
 	if strings.HasPrefix(text, "/") {
@@ -178,7 +187,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		a.send(ctx, m.Chat.ID, "That message contains the bot token and was not sent to the agent.")
 		return
 	}
-	reply, err := a.askAgent(ctx, text)
+	reply, err := a.askAgent(ctx, text, m.Chat.ID)
 	if err != nil {
 		a.send(ctx, m.Chat.ID, "The remote agent could not answer. Check its remote authentication.")
 		return
@@ -202,10 +211,11 @@ func (a *adapter) send(ctx context.Context, userID int64, text string) {
 	}{userID, text}, nil)
 }
 
-func (a *adapter) askAgent(ctx context.Context, text string) (string, error) {
+func (a *adapter) askAgent(ctx context.Context, text string, chatID int64) (string, error) {
 	body, err := json.Marshal(struct {
 		Message string `json:"message"`
-	}{text})
+		ChatID  int64  `json:"chat_id"`
+	}{text, chatID})
 	if err != nil {
 		return "", fmt.Errorf("agent request failed")
 	}
