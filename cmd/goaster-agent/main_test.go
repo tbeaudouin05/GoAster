@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"goaster/internal/attachment"
 	"goaster/internal/chat"
 )
 
@@ -124,6 +125,23 @@ func postChat(t testing.TB, h http.Handler, chatID int64, message string) *httpt
 	return w
 }
 
+func postChatWithAttachments(t testing.TB, h http.Handler, chatID int64, message string, attachments []attachment.Metadata) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		Message     string                `json:"message"`
+		ChatID      int64                 `json:"chat_id"`
+		Attachments []attachment.Metadata `json:"attachments,omitempty"`
+	}{message, chatID, attachments})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", strings.NewReader(string(body)))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
 func TestAgentLoopbackHandler(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path, host, contentType, body string
@@ -189,6 +207,46 @@ func TestAgentSessionsReuseHistoryAndIsolateChats(t *testing.T) {
 				t.Fatalf("history %d message %d = %#v, want %#v", i, j, histories[i][j], want[i][j])
 			}
 		}
+	}
+}
+
+func TestAgentForwardsSafeAttachmentReferencesForMediaOnlyMessage(t *testing.T) {
+	provider := &historyProvider{}
+	h := handler(provider, readyAuth)
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	pathName := filepath.Join(directory, "notes.txt")
+	data := []byte("attachment text")
+	if err := os.WriteFile(pathName, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	metadata := attachment.Metadata{Type: "document", Filename: "notes.txt", Path: pathName, MIMEType: "text/plain", Size: int64(len(data))}
+	response := postChatWithAttachments(t, h, 404, "", []attachment.Metadata{metadata})
+	if response.Code != http.StatusOK {
+		t.Fatalf("media-only request status = %d, body = %q", response.Code, response.Body.String())
+	}
+	histories := provider.snapshot()
+	if len(histories) != 1 || len(histories[0]) != 1 {
+		t.Fatalf("provider histories = %#v", histories)
+	}
+	for _, want := range []string{"notes.txt", pathName, "text/plain", "15"} {
+		if !strings.Contains(histories[0][0].Content, want) {
+			t.Errorf("provider history missing %q: %q", want, histories[0][0].Content)
+		}
+	}
+	if _, err := os.Stat(pathName); err != nil {
+		t.Fatalf("agent unexpectedly removed the adapter-owned attachment: %v", err)
+	}
+
+	if response := postChat(t, h, 405, ""); response.Code != http.StatusBadRequest {
+		t.Fatalf("empty request without attachment status = %d, want 400", response.Code)
+	}
+	unsafe := metadata
+	unsafe.Path = "/etc/passwd"
+	if response := postChatWithAttachments(t, h, 406, "inspect", []attachment.Metadata{unsafe}); response.Code != http.StatusBadRequest {
+		t.Fatalf("unsafe attachment request status = %d, want 400", response.Code)
 	}
 }
 

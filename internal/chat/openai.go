@@ -863,7 +863,7 @@ var webFetchCodexTool = codexTool{
 var shellExecuteCodexTool = codexTool{
 	Type:        "function",
 	Name:        "shell_execute",
-	Description: "Run a command through the platform's native shell. Returns stdout, stderr, and the exit code.",
+	Description: "Run a command through the platform's native shell, including commands that inspect a safe local attachment path supplied in the current message. Returns stdout, stderr, and the exit code.",
 	Parameters: map[string]any{
 		"type": "object",
 		"properties": map[string]any{

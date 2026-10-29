@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"goaster/internal/attachment"
 	"goaster/internal/chat"
 )
 
@@ -97,12 +98,16 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 			return
 		}
 		var request struct {
-			Message string `json:"message"`
-			ChatID  int64  `json:"chat_id"`
+			Message     string                `json:"message"`
+			ChatID      int64                 `json:"chat_id"`
+			Attachments []attachment.Metadata `json:"attachments,omitempty"`
 		}
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024*1024))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&request); err != nil || strings.TrimSpace(request.Message) == "" || request.ChatID == 0 {
+		if err := dec.Decode(&request); err != nil ||
+			request.ChatID == 0 ||
+			(strings.TrimSpace(request.Message) == "" && len(request.Attachments) == 0) ||
+			len(request.Attachments) > attachment.MaxAttachments {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -110,12 +115,18 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		for _, item := range request.Attachments {
+			if err := item.Validate(); err != nil {
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+		}
 		if checkAuth == nil || checkAuth(r.Context()) != nil {
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
 			return
 		}
 		session := sessionFor(request.ChatID)
-		reply, err := session.Reply(r.Context(), request.Message)
+		reply, err := session.ReplyWithAttachments(r.Context(), request.Message, request.Attachments)
 		if err != nil {
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
 			return

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"goaster/internal/attachment"
 )
 
 // Providers wrap ErrModelUnavailable when switching models may help.
@@ -61,6 +63,26 @@ func NewSessionWithMemory(config Config, provider Provider, memory *MemoryStore)
 }
 
 func (s *Session) Reply(ctx context.Context, message string) (string, error) {
+	return s.replyWithAttachments(ctx, message, nil)
+}
+
+// ReplyWithAttachments sends one current-turn message with temporary local
+// attachment references. The references are added only to the provider input;
+// the persisted conversation keeps the original user text and never retains
+// temporary paths.
+func (s *Session) ReplyWithAttachments(ctx context.Context, message string, attachments []attachment.Metadata) (string, error) {
+	if len(attachments) > attachment.MaxAttachments {
+		return "", fmt.Errorf("too many attachments")
+	}
+	for _, item := range attachments {
+		if err := item.ValidateMetadata(); err != nil {
+			return "", fmt.Errorf("invalid attachment metadata")
+		}
+	}
+	return s.replyWithAttachments(ctx, message, attachments)
+}
+
+func (s *Session) replyWithAttachments(ctx context.Context, message string, attachments []attachment.Metadata) (string, error) {
 	// A session is a single ordered conversation. Serializing its turns also
 	// ensures that only one caller summarizes a given history.
 	s.mu.Lock()
@@ -129,6 +151,12 @@ func (s *Session) Reply(ctx context.Context, message string) (string, error) {
 	requestMessage := message
 	if len(bounded) > 0 {
 		requestMessage = bounded[len(bounded)-1].Content
+	}
+	if len(attachments) > 0 {
+		requestMessage = attachment.AddReferences(requestMessage, attachments)
+		if len(requestHistory) > 0 && requestHistory[len(requestHistory)-1].Role == "user" {
+			requestHistory[len(requestHistory)-1].Content = attachment.AddReferences(requestHistory[len(requestHistory)-1].Content, attachments)
+		}
 	}
 
 	replyContext := ctx

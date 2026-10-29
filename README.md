@@ -220,13 +220,14 @@ service restarts. There is no automatic code timeout: keep the code private
 and use it only for the intended account. If it may have been exposed, do not
 use it; stop and review a separately approved pairing reset.
 
-After pairing, only that numeric user ID can send ordinary text for the agent
-to process. The paired user may chat privately or in a group where the bot can
-receive messages; group delivery may require Telegram Group Privacy Mode to be
-turned off. Other Telegram accounts are ignored. The adapter forwards text to
-the remote agent and sends the reply back to the originating chat. Pairing
-does not grant SSH access, server administration, or access to another
-Telegram account.
+After pairing, only that numeric user ID can send ordinary text or one image or
+document attachment, with an optional caption, for the agent to process. The
+paired user may chat privately or in a group where the bot can receive
+messages; group delivery may require Telegram Group Privacy Mode to be turned
+off. Other Telegram accounts are ignored. The adapter forwards the message to
+the remote agent and sends the reply back to the originating chat. Pairing does
+not grant SSH access, server administration, or access to another Telegram
+account.
 
 The token installation, pairing-state setup, and service start or restart are
 remote changes: review their exact scope and obtain fresh explicit approval
