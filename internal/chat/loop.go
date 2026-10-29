@@ -141,6 +141,10 @@ func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store
 			fmt.Fprintln(output, "Environment setup canceled.")
 			return nil
 		}
+		if errors.Is(err, errEnvironmentFilePickerUnavailable) {
+			fmt.Fprintln(output, "File picker unavailable. Install zenity (or a compatible package such as qarma or matedialog); for example: sudo apt install zenity")
+			return nil
+		}
 		fmt.Fprintf(output, "Environment file selection failed: %v\n", err)
 		return nil
 	}

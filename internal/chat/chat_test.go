@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -201,6 +203,43 @@ func TestEnvPickerCancellationPreservesSavedValues(t *testing.T) {
 		if strings.Contains(output.String(), unwanted) {
 			t.Errorf("canceled /env entered an unexpected flow: %s", &output)
 		}
+	}
+}
+
+func TestEnvPickerUnavailableShowsInstallInstructionsAndContinues(t *testing.T) {
+	missingPicker := &exec.Error{Name: "zenity", Err: exec.ErrNotFound}
+	err := wrapNativeEnvironmentFilePickerError(missingPicker)
+	if runtime.GOOS != "linux" {
+		if errors.Is(err, errEnvironmentFilePickerUnavailable) {
+			t.Fatalf("non-Linux picker error was classified as unavailable: %v", err)
+		}
+		if !errors.Is(err, exec.ErrNotFound) {
+			t.Fatalf("wrapped picker error = %v, want exec.ErrNotFound", err)
+		}
+		return
+	}
+	if !errors.Is(err, errEnvironmentFilePickerUnavailable) {
+		t.Fatalf("Linux missing-picker error = %v, want unavailable sentinel", err)
+	}
+
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	picker := EnvironmentFilePickerFunc(func() (string, error) { return "", err })
+	input := strings.NewReader("/env\nhello\n")
+	if runErr := runWithTestEnvStoreAndPicker(t, context.Background(), input, &output, NewSession(defaultConfig(t), provider), picker); runErr != nil {
+		t.Fatal(runErr)
+	}
+	for _, want := range []string{"File picker unavailable", "Install zenity", "qarma", "matedialog", "sudo apt install zenity"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q: %s", want, &output)
+		}
+	}
+	if !reflect.DeepEqual(messages, []string{"hello"}) {
+		t.Fatalf("provider messages = %q, want chat to continue after /env", messages)
 	}
 }
 
