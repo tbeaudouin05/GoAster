@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=GoAster
+Comment=Start the GoAster terminal chat app
+Exec=sh -c "exec \"\$(dirname \"\$1\")/payload/goaster\"" GoAster %k
+Terminal=true
+Categories=Utility;
