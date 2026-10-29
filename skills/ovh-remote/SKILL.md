@@ -26,6 +26,13 @@ private-key file. Do not weaken host verification with
 a first connection, obtain and compare the host-key fingerprint through a
 trusted channel and get explicit approval before accepting it.
 
+If setup needs environment variables, name each one, briefly explain its
+purpose and where to find its value (the remote service docs or host
+configuration), and invite the user to ask for more explanation. Secret values
+must be entered only through GoAster's local `/env` environment-file flow;
+never ask for or accept them in chat. Keep values on the host and out of SSH
+arguments, scripts, and output.
+
 ## Run SSH through `shell_execute`
 
 Call GoAster's built-in `shell_execute` with a JSON object containing the

@@ -36,6 +36,14 @@ tokens and ChatGPT account ID are saved locally in `~/.goaster/auth.json` with
 GoAster continues directly into chat. Existing credentials are refreshed when
 needed and then chat starts directly.
 
+## Environment variables
+
+When setup needs environment variables, GoAster explains each one's purpose and
+where to find its value, and invites you to ask for more explanation of any
+variable. Enter secret values only through GoAster's local `/env`
+environment-file flow; never paste them into chat. GoAster masks imported
+values before saving them locally.
+
 The terminal conversation is saved automatically in `~/.goaster/session.json`
 with `0600` permissions. It contains bounded user/assistant conversation text
 and any generated summary; OAuth credentials and tool-call internals are not

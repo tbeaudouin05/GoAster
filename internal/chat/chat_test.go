@@ -359,7 +359,8 @@ func TestEnvFileCommandReviewsAndSavesLocally(t *testing.T) {
 		"Save these values? [y/N]",
 		"Environment values saved locally.",
 		"Next: choose your local KEY=VALUE file in the file picker.",
-		"never paste credentials or secrets into chat",
+		"where to find its value; ask me to explain any variable",
+		"Enter secret values only through this local environment-file flow; never paste them into chat.",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)

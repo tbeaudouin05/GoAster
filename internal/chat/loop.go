@@ -13,8 +13,9 @@ import (
 )
 
 const environmentFileGuidance = `Next: choose your local KEY=VALUE file in the file picker.
-Use a local file for environment values; never paste credentials or secrets into chat.
-GoAster displays variable names with masked values and saves confirmed values locally.`
+Check the relevant service docs or dashboard for each variable's purpose and where to find its value; ask me to explain any variable.
+Enter secret values only through this local environment-file flow; never paste them into chat.
+GoAster masks values and saves confirmed settings locally.`
 
 // Run accepts one message per line and ends the session at EOF.
 func Run(ctx context.Context, input io.Reader, output io.Writer, session *Session) error {

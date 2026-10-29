@@ -15,7 +15,13 @@ Read the complete result: `stdout`, `stderr`, and `exit_code`; an `execution_err
 
 ## Provisioning workflow
 
-1. Clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. Use credentials only from a user-approved local credential source already available to the host. If none is available, stop and explain how the user can configure one locally; never ask them to paste secrets into chat.
+When environment variables are needed, name each one, briefly explain its
+purpose and where to find its value (the selected OVH client's docs or
+OVHcloud credential settings), and invite the user to ask for more explanation.
+Secret values must be entered only through GoAster's local `/env`
+environment-file flow; never ask for or accept them in chat.
+
+1. Clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. Use credentials only from a user-approved local credential source already available to the host. If none is available, stop and direct the user to configure one through the local `/env` environment-file flow.
 2. Use read-only checks to confirm the project, quota, available regions, images, sizes, and required network and SSH options. Resolve ambiguous choices with the user. Present the exact proposed resources and current price estimate before changing OVH state.
 3. Before creating or changing any billable resource, deleting or replacing data or resources, or changing access or network exposure, explain the exact action, affected resources, costs or consequences, and obtain explicit user confirmation. Confirmation for one action does not authorize a different action.
 4. After confirmation, run the requested OVH API or installed client steps through `shell_execute`. Wait for the resource to become ready, then verify its ID, state, address, and requested access or setup. Do not retry an uncertain mutation blindly or delete a partially provisioned resource without confirmation.
