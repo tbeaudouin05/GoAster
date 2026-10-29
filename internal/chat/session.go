@@ -17,12 +17,16 @@ const (
 	sessionFilename      = "session.json"
 	sessionFormatVersion = 1
 
-	// The file limit is an additional guard around the bounded history. It
-	// protects startup from an unexpectedly large or replaced file.
-	maxSessionFileBytes    = 256 << 10
+	// The file limit leaves room for a full context window after JSON escaping
+	// while keeping reads and writes bounded.
+	maxSessionFileBytes    = 8 << 20
 	maxSessionMessages     = 256
 	maxSessionMessageBytes = 32 << 10
-	maxContextTokens       = 8192
+	// These fixed defaults track PicoClaw. GoAster trims against the full
+	// context window until it has a summarizer that can use the 75% trigger.
+	contextWindowTokens   = 300_000
+	summarizeTokenPercent = 75
+	maxContextTokens      = contextWindowTokens
 )
 
 const (

@@ -13,6 +13,18 @@ type historyTestProvider struct {
 	histories [][]ChatMessage
 }
 
+func TestFixedContextBudgetMatchesPicoClawDefaults(t *testing.T) {
+	if contextWindowTokens != 300_000 {
+		t.Fatalf("context window = %d, want 300000", contextWindowTokens)
+	}
+	if summarizeTokenPercent != 75 {
+		t.Fatalf("summarize token percent = %d, want 75", summarizeTokenPercent)
+	}
+	if maxContextTokens != contextWindowTokens {
+		t.Fatalf("trimming budget = %d, want full context window %d", maxContextTokens, contextWindowTokens)
+	}
+}
+
 func (p *historyTestProvider) Reply(_ context.Context, _ string, message string) (string, error) {
 	return "reply to " + message, nil
 }
@@ -189,13 +201,64 @@ func TestSessionStoreBoundsPersistedSizeAndKeepsNewestMessages(t *testing.T) {
 	}
 }
 
+func TestSessionStorePersistsFullContextBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	store := NewSessionStoreAt(path)
+	content := strings.Repeat("<", 10_000)
+	messages := make([]ChatMessage, 120)
+	for index := range messages {
+		role := "user"
+		if index%2 == 1 {
+			role = "assistant"
+		}
+		messages[index] = ChatMessage{Role: role, Content: content}
+	}
+	if got := totalMessageTokens(messages); got != contextWindowTokens {
+		t.Fatalf("input history token estimate = %d, want %d", got, contextWindowTokens)
+	}
+
+	if err := store.Save(messages); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() <= 256<<10 {
+		t.Fatalf("conversation file size = %d, want more than the previous 256 KiB cap", info.Size())
+	}
+	if info.Size() > maxSessionFileBytes {
+		t.Fatalf("conversation file size = %d, exceeds %d", info.Size(), maxSessionFileBytes)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Recovered || loaded.Trimmed {
+		t.Fatalf("load status = %+v, want an unchanged full-window conversation", loaded)
+	}
+	if got := totalMessageTokens(loaded.Messages); got != contextWindowTokens {
+		t.Fatalf("persisted history token estimate = %d, want %d", got, contextWindowTokens)
+	}
+}
+
 func TestSessionTrimsOutboundContextAndExplainsIt(t *testing.T) {
 	provider := &historyTestProvider{}
 	session := NewSession(Config{PrimaryModel: "primary", FallbackModel: "fallback"}, provider)
-	session.history = []ChatMessage{
-		{Role: "user", Content: strings.Repeat("oldest context ", 2500)},
-		{Role: "assistant", Content: "recent useful answer"},
+	session.history = make([]ChatMessage, 0, 38)
+	for index := 0; index < 37; index++ {
+		role := "user"
+		content := strings.Repeat("padding context ", 2500)
+		if index%2 == 1 {
+			role = "assistant"
+		}
+		if index == 0 {
+			content = "oldest context " + strings.Repeat("old context ", 2500)
+		}
+		session.history = append(session.history, ChatMessage{Role: role, Content: content})
 	}
+	session.history = append(session.history, ChatMessage{Role: "assistant", Content: "recent useful answer"})
 	if _, err := session.Reply(context.Background(), "new question"); err != nil {
 		t.Fatal(err)
 	}
