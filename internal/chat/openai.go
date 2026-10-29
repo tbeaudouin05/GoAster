@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"goaster/internal/attachment"
 	"goaster/internal/command"
 )
 
@@ -798,8 +799,9 @@ type codexInputItem struct {
 }
 
 type codexInputContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 type codexTool struct {
@@ -1011,7 +1013,10 @@ func (p *CodexProvider) executeWebFetchTool(ctx context.Context, arguments strin
 }
 
 func (p *CodexProvider) requestReply(ctx context.Context, credential Credential, model string, history []ChatMessage, allowTools bool) (string, int, error) {
-	input := codexInputFromHistory(history)
+	input, err := codexInputFromHistory(ctx, history)
+	if err != nil {
+		return "", 0, err
+	}
 	webSearchCallCount := 0
 	webFetchCallCount := 0
 	for {
@@ -1076,20 +1081,45 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 	}
 }
 
-func codexInputFromHistory(history []ChatMessage) []codexInputItem {
+func codexInputFromHistory(ctx context.Context, history []ChatMessage) ([]codexInputItem, error) {
 	input := make([]codexInputItem, 0, len(history))
-	for _, message := range history {
+	imageAttachments := currentTurnAttachments(ctx)
+	lastUser := -1
+	for index, message := range history {
+		if message.Role == "user" {
+			lastUser = index
+		}
+	}
+	for _, attachmentMetadata := range imageAttachments {
+		if attachmentMetadata.Type == "image" && lastUser < 0 {
+			return nil, fmt.Errorf("image attachment has no current user message")
+		}
+	}
+	for index, message := range history {
 		contentType := "input_text"
 		if message.Role == "assistant" {
 			contentType = "output_text"
 		}
+		content := []codexInputContent{{Type: contentType, Text: message.Content}}
+		if index == lastUser {
+			for _, attachmentMetadata := range imageAttachments {
+				if attachmentMetadata.Type != "image" {
+					continue
+				}
+				imageURL, err := attachment.ReadImageDataURL(attachmentMetadata)
+				if err != nil {
+					return nil, err
+				}
+				content = append(content, codexInputContent{Type: "input_image", ImageURL: imageURL})
+			}
+		}
 		input = append(input, codexInputItem{
 			Type:    "message",
 			Role:    message.Role,
-			Content: []codexInputContent{{Type: contentType, Text: message.Content}},
+			Content: content,
 		})
 	}
-	return input
+	return input, nil
 }
 
 func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential, model string, input []codexInputItem, allowTools bool) (codexParsedResponse, int, error) {

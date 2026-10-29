@@ -1,12 +1,14 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -60,12 +62,12 @@ func TestTelegramAttachmentMessageDecodingSelectsLargestPhoto(t *testing.T) {
 	}
 }
 
-func TestPairedAttachmentDownloadsForwardsCaptionAndCleansUp(t *testing.T) {
+func TestPairedAttachmentDownloadsAndForwardsBytesAndCaption(t *testing.T) {
 	payload := []byte("document payload")
 	var forwarded struct {
 		Message     string                `json:"message"`
 		ChatID      int64                 `json:"chat_id"`
-		Attachments []attachment.Metadata `json:"attachments"`
+		Attachments []attachment.Incoming `json:"attachments"`
 	}
 	var sent []string
 	a := &adapter{
@@ -102,7 +104,11 @@ func TestPairedAttachmentDownloadsForwardsCaptionAndCleansUp(t *testing.T) {
 			if r.URL.String() != "http://127.0.0.1:8765/chat" {
 				t.Fatalf("unexpected agent request %s", r.URL)
 			}
-			if err := json.NewDecoder(r.Body).Decode(&forwarded); err != nil {
+			body, err := io.ReadAll(r.Body)
+			if err != nil || bytes.Contains(body, []byte(`"path"`)) {
+				t.Fatalf("wire request contained a path or could not be read: %v", err)
+			}
+			if err := json.Unmarshal(body, &forwarded); err != nil {
 				t.Fatal(err)
 			}
 			if len(forwarded.Attachments) != 1 {
@@ -112,16 +118,8 @@ func TestPairedAttachmentDownloadsForwardsCaptionAndCleansUp(t *testing.T) {
 			if item.Filename != "notes.txt" || item.Type != "document" || item.MIMEType != "text/plain" || item.Size != int64(len(payload)) {
 				t.Fatalf("forwarded metadata = %+v", item)
 			}
-			if got, err := os.ReadFile(item.Path); err != nil || string(got) != string(payload) {
-				t.Fatalf("downloaded attachment = %q, err = %v", got, err)
-			}
-			fileInfo, err := os.Stat(item.Path)
-			if err != nil || fileInfo.Mode().Perm() != 0600 {
-				t.Fatalf("attachment file mode = %v, err = %v", fileInfo.Mode().Perm(), err)
-			}
-			directoryInfo, err := os.Stat(filepath.Dir(item.Path))
-			if err != nil || directoryInfo.Mode().Perm() != 0700 {
-				t.Fatalf("attachment directory mode = %v, err = %v", directoryInfo.Mode().Perm(), err)
+			if !bytes.Equal(item.Data, payload) {
+				t.Fatalf("forwarded bytes = %q, want %q", item.Data, payload)
 			}
 			return response(http.StatusOK, `{"reply":"processed"}`), nil
 		}),
@@ -134,15 +132,90 @@ func TestPairedAttachmentDownloadsForwardsCaptionAndCleansUp(t *testing.T) {
 	if len(forwarded.Attachments) != 1 || forwarded.Message != "please inspect" || forwarded.ChatID != 42 || len(sent) != 1 || sent[0] != "processed" {
 		t.Fatalf("forwarded message = %+v, sent = %q", forwarded, sent)
 	}
-	if _, err := os.Stat(forwarded.Attachments[0].Path); !os.IsNotExist(err) {
-		t.Fatalf("temporary attachment was not cleaned up, stat error = %v", err)
+}
+
+func TestTelegramDocumentImageIsClassifiedFromBytes(t *testing.T) {
+	payload := testPNGBytes(t)
+	var forwarded struct {
+		Attachments []attachment.Incoming `json:"attachments"`
+	}
+	a := &adapter{
+		token:   testToken,
+		pairing: &pairing{userID: 42},
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/getFile"):
+				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/photo.bin"}}`), nil
+			case strings.HasPrefix(r.URL.Path, "/file/bot"):
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64(len(payload))}, nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if err := json.NewDecoder(r.Body).Decode(&forwarded); err != nil {
+				t.Fatal(err)
+			}
+			return response(http.StatusOK, `{"reply":"image received"}`), nil
+		}),
+	}
+	m := textMessage(42, 42, "private", "inspect")
+	m.Document = &document{FileID: "photo-document", FileName: "photo.txt", MIMEType: "text/plain", FileSize: int64(len(payload))}
+	a.handle(context.Background(), m)
+	if len(forwarded.Attachments) != 1 || forwarded.Attachments[0].Type != "image" || forwarded.Attachments[0].MIMEType != "image/png" {
+		t.Fatalf("document image metadata = %+v", forwarded.Attachments)
+	}
+}
+
+func TestUnsupportedImageIsReportedExplicitly(t *testing.T) {
+	payload := []byte("not an image")
+	var sent string
+	a := &adapter{
+		token:   testToken,
+		pairing: &pairing{userID: 42},
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/getFile"):
+				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/bad.png"}}`), nil
+			case strings.HasPrefix(r.URL.Path, "/file/bot"):
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64(len(payload))}, nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var request struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				sent = request.Text
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("unsupported image reached the agent")
+			return nil, nil
+		}),
+	}
+	m := textMessage(42, 42, "private", "inspect")
+	m.Document = &document{FileID: "bad-image", FileName: "bad.png", MIMEType: "image/png", FileSize: int64(len(payload))}
+	a.handle(context.Background(), m)
+	if !strings.Contains(sent, "unsupported") || !strings.Contains(sent, "JPEG") || !strings.Contains(sent, "WebP") {
+		t.Fatalf("unsupported-image response = %q", sent)
 	}
 }
 
 func TestPairedMediaOnlyMessageIsForwarded(t *testing.T) {
+	payload := testPNGBytes(t)
 	var forwarded struct {
 		Message     string                `json:"message"`
-		Attachments []attachment.Metadata `json:"attachments"`
+		Attachments []attachment.Incoming `json:"attachments"`
 	}
 	a := &adapter{
 		token:   testToken,
@@ -153,7 +226,7 @@ func TestPairedMediaOnlyMessageIsForwarded(t *testing.T) {
 				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"photos/file.jpg"}}`), nil
 			}
 			if strings.HasPrefix(r.URL.Path, "/file/bot") {
-				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("image")), ContentLength: 5}, nil
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64(len(payload))}, nil
 			}
 			if strings.HasSuffix(r.URL.Path, "/sendMessage") {
 				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
@@ -174,6 +247,17 @@ func TestPairedMediaOnlyMessageIsForwarded(t *testing.T) {
 	if forwarded.Message != "" || len(forwarded.Attachments) != 1 || forwarded.Attachments[0].Type != "image" {
 		t.Fatalf("media-only forwarding = %+v", forwarded)
 	}
+}
+
+func testPNGBytes(t *testing.T) []byte {
+	t.Helper()
+	imageData := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	imageData.Set(0, 0, color.RGBA{R: 0x22, G: 0x66, B: 0xaa, A: 0xff})
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, imageData); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
 }
 
 func TestUnauthorizedAttachmentIsNotDownloaded(t *testing.T) {
@@ -197,6 +281,24 @@ func TestUnauthorizedAttachmentIsNotDownloaded(t *testing.T) {
 	if called {
 		t.Fatal("unauthorized attachment was downloaded")
 	}
+}
+
+func TestMediaAlbumIsIgnored(t *testing.T) {
+	a := &adapter{
+		pairing: &pairing{userID: 42},
+		client: doerFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("album reached Telegram API")
+			return nil, nil
+		}),
+		agent: doerFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("album reached agent")
+			return nil, nil
+		}),
+	}
+	m := textMessage(42, 42, "private", "")
+	m.MediaGroupID = "album-1"
+	m.Photo = []photoSize{{FileID: "photo-1"}}
+	a.handle(context.Background(), m)
 }
 
 func TestAttachmentDownloadEnforcesBoundedSizeAndRedactsErrors(t *testing.T) {

@@ -7,16 +7,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"goaster/internal/attachment"
 )
 
 func TestCredentialStoreSaveAndLoadIsPrivate(t *testing.T) {
@@ -427,6 +433,175 @@ func TestCodexProviderSendsConversationHistory(t *testing.T) {
 	if reply != "ok" {
 		t.Fatalf("reply = %q, want ok", reply)
 	}
+}
+
+func TestCodexProviderSendsCurrentTurnImageAndNotLaterTextTurns(t *testing.T) {
+	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(Credential{
+		AccessToken: "access-token",
+		AccountID:   "account-123",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	imageBytes := testOpenAIImageBytes(t)
+	pathName := filepath.Join(directory, "claimed.jpg")
+	if err := os.WriteFile(pathName, imageBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	metadata := attachment.Metadata{
+		Type:     "image",
+		Filename: "claimed.jpg",
+		Path:     pathName,
+		MIMEType: "image/jpeg",
+		Size:     int64(len(imageBytes)),
+	}
+	var requests []codexRequest
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request codexRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Codex request: %v", err)
+			return
+		}
+		requests = append(requests, request)
+		switch len(requests) {
+		case 1:
+			if len(request.Input) != 1 || request.Input[0].Role != "user" {
+				t.Errorf("image request input = %+v", request.Input)
+			} else {
+				if len(request.Input[0].Content) != 2 || request.Input[0].Content[0].Type != "input_text" || request.Input[0].Content[1].Type != "input_image" {
+					t.Errorf("image request content = %+v", request.Input[0].Content)
+				}
+				imageURL := request.Input[0].Content[1].ImageURL
+				if !strings.HasPrefix(imageURL, "data:image/png;base64,") {
+					t.Errorf("image URL = %q, want byte-derived PNG data URL", imageURL)
+				} else if decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(imageURL, "data:image/png;base64,")); err != nil || !bytes.Equal(decoded, imageBytes) {
+					t.Errorf("image payload decode error = %v or bytes changed", err)
+				}
+			}
+			fmt.Fprint(w, `{"output_text":"image received"}`)
+		case 2:
+			if strings.Contains(string(mustMarshalJSON(t, request)), pathName) {
+				t.Errorf("temporary image path persisted into later request: %+v", request.Input)
+			}
+			for _, item := range request.Input {
+				for _, content := range item.Content {
+					if content.Type == "input_image" || content.ImageURL != "" {
+						t.Errorf("stale image content in later request: %+v", request.Input)
+					}
+				}
+			}
+			fmt.Fprint(w, `{"output_text":"text received"}`)
+		default:
+			t.Errorf("unexpected backend request %d", len(requests))
+			fmt.Fprint(w, `{"output_text":"unexpected"}`)
+		}
+	}))
+	defer backend.Close()
+
+	provider := NewCodexProvider(store)
+	provider.backendURL = backend.URL
+	provider.httpClient = backend.Client()
+	session := NewSession(Config{PrimaryModel: "gpt-test", FallbackModel: "gpt-test"}, provider)
+	if reply, err := session.ReplyWithAttachments(context.Background(), "inspect this image", []attachment.Metadata{metadata}); err != nil || reply != "image received" {
+		t.Fatalf("image reply = %q, error = %v", reply, err)
+	}
+	if reply, err := session.Reply(context.Background(), "now answer in text"); err != nil || reply != "text received" {
+		t.Fatalf("text reply = %q, error = %v", reply, err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("backend requests = %d, want 2", len(requests))
+	}
+}
+
+func TestCodexProviderShellReadsCurrentTurnDocumentBytes(t *testing.T) {
+	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(Credential{
+		AccessToken: "access-token",
+		AccountID:   "account-123",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	content := "real downloaded text bytes\n"
+	pathName := filepath.Join(directory, "downloaded.txt")
+	if err := os.WriteFile(pathName, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	metadata := attachment.Metadata{Type: "document", Filename: "downloaded.txt", Path: pathName, MIMEType: "text/plain", Size: int64(len(content))}
+	arguments, err := json.Marshal(map[string]string{"command": readDocumentCommand(pathName)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests []codexRequest
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request codexRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Codex request: %v", err)
+			return
+		}
+		requests = append(requests, request)
+		switch len(requests) {
+		case 1:
+			writeCodexFunctionCall(t, w, "read-document", "shell_execute", string(arguments))
+		case 2:
+			if len(request.Input) != 3 || !strings.Contains(request.Input[2].Output, content) {
+				t.Errorf("shell output did not contain downloaded document bytes: %+v", request.Input)
+			}
+			fmt.Fprint(w, `{"output_text":"document read"}`)
+		default:
+			t.Errorf("unexpected backend request %d", len(requests))
+			fmt.Fprint(w, `{"output_text":"unexpected"}`)
+		}
+	}))
+	defer backend.Close()
+
+	provider := NewCodexProvider(store)
+	provider.backendURL = backend.URL
+	provider.httpClient = backend.Client()
+	session := NewSession(Config{PrimaryModel: "gpt-test", FallbackModel: "gpt-test"}, provider)
+	reply, err := session.ReplyWithAttachments(context.Background(), "read this document", []attachment.Metadata{metadata})
+	if err != nil || reply != "document read" {
+		t.Fatalf("document reply = %q, error = %v", reply, err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("backend requests = %d, want 2", len(requests))
+	}
+}
+
+func testOpenAIImageBytes(t *testing.T) []byte {
+	t.Helper()
+	imageData := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	imageData.Set(0, 0, color.RGBA{R: 0x22, G: 0x66, B: 0xaa, A: 0xff})
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, imageData); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
+}
+
+func readDocumentCommand(pathName string) string {
+	if runtime.GOOS == "windows" {
+		return "Get-Content -Raw -LiteralPath '" + strings.ReplaceAll(pathName, "'", "''") + "'"
+	}
+	return "cat -- '" + strings.ReplaceAll(pathName, "'", "'\\''") + "'"
+}
+
+func mustMarshalJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testing.T) {

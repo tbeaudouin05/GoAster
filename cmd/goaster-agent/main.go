@@ -3,7 +3,9 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +18,19 @@ import (
 	"goaster/internal/attachment"
 	"goaster/internal/chat"
 )
+
+const maxChatEnvelopeBytes int64 = 1 << 20
+
+type countingReader struct {
+	io.Reader
+	bytesRead int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.bytesRead += int64(n)
+	return n, err
+}
 
 func main() {
 	store, err := agentCredentialStore(os.UserHomeDir)
@@ -100,9 +115,11 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 		var request struct {
 			Message     string                `json:"message"`
 			ChatID      int64                 `json:"chat_id"`
-			Attachments []attachment.Metadata `json:"attachments,omitempty"`
+			Attachments []attachment.Incoming `json:"attachments,omitempty"`
 		}
-		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024*1024))
+		maxBodyBytes := int64(base64.StdEncoding.EncodedLen(int(attachment.MaxBytes))) + maxChatEnvelopeBytes
+		body := &countingReader{Reader: http.MaxBytesReader(w, r.Body, maxBodyBytes)}
+		dec := json.NewDecoder(body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&request); err != nil ||
 			request.ChatID == 0 ||
@@ -115,19 +132,73 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		// Preserve the original request envelope limit for text and metadata;
+		// only the base64 representation of attachment bytes adds to it.
+		envelopeBytes := body.bytesRead
 		for _, item := range request.Attachments {
-			if err := item.Validate(); err != nil {
+			envelopeBytes -= int64(base64.StdEncoding.EncodedLen(len(item.Data)))
+		}
+		if envelopeBytes > maxChatEnvelopeBytes {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		metadata := make([]attachment.Metadata, 0, len(request.Attachments))
+		for _, item := range request.Attachments {
+			validated, err := item.Validate()
+			if errors.Is(err, attachment.ErrUnsupportedImage) {
+				http.Error(w, "unsupported image format", http.StatusUnsupportedMediaType)
+				return
+			}
+			if err != nil {
 				http.Error(w, "invalid request", http.StatusBadRequest)
 				return
 			}
+			metadata = append(metadata, validated)
 		}
 		if checkAuth == nil || checkAuth(r.Context()) != nil {
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
 			return
 		}
+		if len(metadata) > 0 {
+			root, err := filepath.Abs(os.TempDir())
+			if err != nil {
+				http.Error(w, "agent request failed", http.StatusServiceUnavailable)
+				return
+			}
+			directory, err := os.MkdirTemp(root, attachment.AgentTemporaryDirectoryPrefix)
+			if err != nil {
+				http.Error(w, "agent request failed", http.StatusServiceUnavailable)
+				return
+			}
+			defer func() { _ = os.RemoveAll(directory) }()
+			if err := os.Chmod(directory, 0700); err != nil {
+				http.Error(w, "agent request failed", http.StatusServiceUnavailable)
+				return
+			}
+			for index := range metadata {
+				metadata[index].Path = filepath.Join(directory, metadata[index].Filename)
+				file, err := os.OpenFile(metadata[index].Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+				if err != nil {
+					http.Error(w, "agent request failed", http.StatusServiceUnavailable)
+					return
+				}
+				if err = file.Chmod(0600); err == nil {
+					_, err = file.Write(request.Attachments[index].Data)
+				}
+				closeErr := file.Close()
+				if err != nil || closeErr != nil {
+					http.Error(w, "agent request failed", http.StatusServiceUnavailable)
+					return
+				}
+			}
+		}
 		session := sessionFor(request.ChatID)
-		reply, err := session.ReplyWithAttachments(r.Context(), request.Message, request.Attachments)
+		reply, err := session.ReplyWithAttachments(r.Context(), request.Message, metadata)
 		if err != nil {
+			if errors.Is(err, attachment.ErrUnsupportedImage) {
+				http.Error(w, "unsupported image format", http.StatusUnsupportedMediaType)
+				return
+			}
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
 			return
 		}

@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +21,7 @@ import (
 
 	"goaster/internal/attachment"
 	"goaster/internal/chat"
+	"goaster/internal/command"
 )
 
 type fakeProvider struct{ err error }
@@ -125,12 +129,12 @@ func postChat(t testing.TB, h http.Handler, chatID int64, message string) *httpt
 	return w
 }
 
-func postChatWithAttachments(t testing.TB, h http.Handler, chatID int64, message string, attachments []attachment.Metadata) *httptest.ResponseRecorder {
+func postChatWithAttachments(t testing.TB, h http.Handler, chatID int64, message string, attachments []attachment.Incoming) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(struct {
 		Message     string                `json:"message"`
 		ChatID      int64                 `json:"chat_id"`
-		Attachments []attachment.Metadata `json:"attachments,omitempty"`
+		Attachments []attachment.Incoming `json:"attachments,omitempty"`
 	}{message, chatID, attachments})
 	if err != nil {
 		t.Fatal(err)
@@ -210,43 +214,235 @@ func TestAgentSessionsReuseHistoryAndIsolateChats(t *testing.T) {
 	}
 }
 
-func TestAgentForwardsSafeAttachmentReferencesForMediaOnlyMessage(t *testing.T) {
-	provider := &historyProvider{}
-	h := handler(provider, readyAuth)
-	directory := t.TempDir()
-	if err := os.Chmod(directory, 0700); err != nil {
-		t.Fatal(err)
+type inspectingProvider func(context.Context, string) (string, error)
+
+func (p inspectingProvider) Reply(ctx context.Context, _ string, message string) (string, error) {
+	return p(ctx, message)
+}
+
+func attachmentPath(message string) string {
+	_, path, ok := strings.Cut(message, "local_path: ")
+	if !ok {
+		return ""
 	}
-	pathName := filepath.Join(directory, "notes.txt")
+	path, _, _ = strings.Cut(path, "\n")
+	return path
+}
+
+func TestAgentCreatesPrivateAttachmentForTurn(t *testing.T) {
+	tempRoot := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("TMP", tempRoot)
+	} else {
+		t.Setenv("TMPDIR", tempRoot)
+	}
 	data := []byte("attachment text")
-	if err := os.WriteFile(pathName, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	metadata := attachment.Metadata{Type: "document", Filename: "notes.txt", Path: pathName, MIMEType: "text/plain", Size: int64(len(data))}
-	response := postChatWithAttachments(t, h, 404, "", []attachment.Metadata{metadata})
+	item := attachment.Incoming{Type: "document", Filename: "notes.txt", MIMEType: "text/plain", Size: int64(len(data)), Data: data}
+	var pathName string
+	provider := inspectingProvider(func(ctx context.Context, message string) (string, error) {
+		pathName = attachmentPath(message)
+		if filepath.Dir(filepath.Dir(pathName)) != tempRoot {
+			t.Fatalf("attachment not in agent temporary directory: %q", pathName)
+		}
+		if got, err := os.ReadFile(pathName); err != nil || !bytes.Equal(got, data) {
+			t.Fatalf("agent attachment = %q, error = %v", got, err)
+		}
+		fileInfo, err := os.Stat(pathName)
+		if err != nil || fileInfo.Mode().Perm() != 0600 {
+			t.Fatalf("attachment file mode or stat error: %v, %v", fileInfo, err)
+		}
+		dirInfo, err := os.Stat(filepath.Dir(pathName))
+		if err != nil || dirInfo.Mode().Perm() != 0700 {
+			t.Fatalf("attachment directory mode or stat error: %v, %v", dirInfo, err)
+		}
+		cmd := "cat -- '" + strings.ReplaceAll(pathName, "'", "'\\''") + "'"
+		if runtime.GOOS == "windows" {
+			cmd = "Get-Content -Raw -LiteralPath '" + strings.ReplaceAll(pathName, "'", "''") + "'"
+		}
+		result, err := command.Execute(ctx, command.Request{Command: cmd})
+		if err != nil || !strings.Contains(result.Stdout, string(data)) {
+			t.Fatalf("shell could not read attachment: %+v, %v", result, err)
+		}
+		return "document read", nil
+	})
+	h := handler(provider, readyAuth)
+	response := postChatWithAttachments(t, h, 404, "", []attachment.Incoming{item})
 	if response.Code != http.StatusOK {
 		t.Fatalf("media-only request status = %d, body = %q", response.Code, response.Body.String())
 	}
-	histories := provider.snapshot()
-	if len(histories) != 1 || len(histories[0]) != 1 {
-		t.Fatalf("provider histories = %#v", histories)
+	if pathName == "" {
+		t.Fatal("provider did not receive a local attachment path")
 	}
-	for _, want := range []string{"notes.txt", pathName, "text/plain", "15"} {
-		if !strings.Contains(histories[0][0].Content, want) {
-			t.Errorf("provider history missing %q: %q", want, histories[0][0].Content)
-		}
+	if _, err := os.Stat(filepath.Dir(pathName)); !os.IsNotExist(err) {
+		t.Fatalf("agent did not clean up its attachment directory: %v", err)
 	}
-	if _, err := os.Stat(pathName); err != nil {
-		t.Fatalf("agent unexpectedly removed the adapter-owned attachment: %v", err)
-	}
-
 	if response := postChat(t, h, 405, ""); response.Code != http.StatusBadRequest {
 		t.Fatalf("empty request without attachment status = %d, want 400", response.Code)
 	}
-	unsafe := metadata
-	unsafe.Path = "/etc/passwd"
-	if response := postChatWithAttachments(t, h, 406, "inspect", []attachment.Metadata{unsafe}); response.Code != http.StatusBadRequest {
-		t.Fatalf("unsafe attachment request status = %d, want 400", response.Code)
+}
+
+func TestAgentRecognizesImageDocumentAndMakesItReadable(t *testing.T) {
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	item := attachment.Incoming{Type: "document", Filename: "image.txt", MIMEType: "text/plain", Size: int64(data.Len()), Data: data.Bytes()}
+	var pathName string
+	provider := inspectingProvider(func(_ context.Context, message string) (string, error) {
+		pathName = attachmentPath(message)
+		if !strings.Contains(message, "type: image") || !strings.Contains(message, "mime_type: image/png") {
+			t.Fatalf("image document classified incorrectly: %q", message)
+		}
+		metadata := attachment.Metadata{Type: "image", Filename: item.Filename, Path: pathName, MIMEType: "image/png", Size: item.Size}
+		dataURL, err := attachment.ReadImageDataURL(metadata)
+		if err != nil || !strings.HasPrefix(dataURL, "data:image/png;base64,") {
+			t.Fatalf("agent image unavailable for input_image: %q %v", dataURL, err)
+		}
+		return "image read", nil
+	})
+	response := postChatWithAttachments(t, handler(provider, readyAuth), 1, "", []attachment.Incoming{item})
+	if response.Code != http.StatusOK || pathName == "" {
+		t.Fatalf("image request status = %d, body = %q", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Dir(pathName)); !os.IsNotExist(err) {
+		t.Fatalf("image directory remains after the turn: %v", err)
+	}
+}
+
+func TestAgentRejectsUntrustedAttachmentMetadata(t *testing.T) {
+	h := handler(fakeProvider{}, readyAuth)
+	for name, body := range map[string]string{
+		"path authority":  `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":1,"data":"eA==","path":"/etc/passwd"}]}`,
+		"unsafe filename": `{"chat_id":1,"attachments":[{"type":"document","filename":"../x","size":1,"data":"eA=="}]}`,
+		"wrong size":      `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":2,"data":"eA=="}]}`,
+		"missing data":    `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":0}]}`,
+		"bad base64":      `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":1,"data":"%%%"}]}`,
+		"invalid mime":    `{"chat_id":1,"attachments":[{"type":"document","filename":"x","mime_type":"text/plain\nextra","size":1,"data":"eA=="}]}`,
+		"multiple":        `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":1,"data":"eA=="},{"type":"document","filename":"y","size":1,"data":"eQ=="}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", strings.NewReader(body))
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, body = %q", w.Code, w.Body.String())
+			}
+		})
+	}
+	invalidImage := attachment.Incoming{Type: "image", Filename: "x.png", Size: 3, Data: []byte("bad")}
+	if response := postChatWithAttachments(t, h, 1, "", []attachment.Incoming{invalidImage}); response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("invalid image status = %d, body = %q", response.Code, response.Body.String())
+	}
+}
+
+func TestAgentAttachmentAndEnvelopeSizeLimits(t *testing.T) {
+	h := handler(inspectingProvider(func(context.Context, string) (string, error) { return "ok", nil }), readyAuth)
+	data := bytes.Repeat([]byte("x"), int(attachment.MaxBytes)+1)
+	item := attachment.Incoming{Type: "document", Filename: "large.bin", Size: attachment.MaxBytes, Data: data[:attachment.MaxBytes]}
+	if response := postChatWithAttachments(t, h, 1, "read", []attachment.Incoming{item}); response.Code != http.StatusOK {
+		t.Fatalf("20 MiB attachment status = %d, body = %q", response.Code, response.Body.String())
+	}
+	item.Data, item.Size = data, int64(len(data))
+	if response := postChatWithAttachments(t, h, 1, "read", []attachment.Incoming{item}); response.Code != http.StatusBadRequest {
+		t.Fatalf("oversized attachment status = %d", response.Code)
+	}
+	// The old 1 MiB body limit remains in force for text-only requests.
+	body := `{"chat_id":1,"message":"` + strings.Repeat("x", int(maxChatEnvelopeBytes)) + `"}`
+	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("oversized text-only request status = %d", w.Code)
+	}
+}
+
+func TestAgentCleansAttachmentAfterProviderError(t *testing.T) {
+	for name, providerErr := range map[string]error{"error": errors.New("fake-secret"), "timeout": context.DeadlineExceeded} {
+		t.Run(name, func(t *testing.T) {
+			var pathName string
+			h := handler(inspectingProvider(func(_ context.Context, message string) (string, error) {
+				pathName = attachmentPath(message)
+				return "", providerErr
+			}), readyAuth)
+			item := attachment.Incoming{Type: "document", Filename: "x.txt", Size: 1, Data: []byte("x")}
+			response := postChatWithAttachments(t, h, 1, "read", []attachment.Incoming{item})
+			if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "fake-secret") {
+				t.Fatalf("provider error response = %d %q", response.Code, response.Body.String())
+			}
+			if pathName == "" {
+				t.Fatal("provider did not receive the attachment")
+			}
+			if _, err := os.Stat(filepath.Dir(pathName)); !os.IsNotExist(err) {
+				t.Fatalf("attachment directory remains after provider error: %v", err)
+			}
+		})
+	}
+}
+
+func TestAgentKeepsAttachmentUntilCanceledTurnReturns(t *testing.T) {
+	entered := make(chan string, 1)
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseProvider := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseProvider()
+	provider := inspectingProvider(func(ctx context.Context, message string) (string, error) {
+		pathName := attachmentPath(message)
+		entered <- pathName
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		if _, err := os.ReadFile(pathName); err != nil {
+			return "", fmt.Errorf("attachment disappeared before turn finished: %w", err)
+		}
+		return "", ctx.Err()
+	})
+	item := attachment.Incoming{Type: "document", Filename: "x.txt", Size: 4, Data: []byte("data")}
+	body, err := json.Marshal(struct {
+		ChatID      int64                 `json:"chat_id"`
+		Attachments []attachment.Incoming `json:"attachments"`
+	}{1, []attachment.Incoming{item}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", bytes.NewReader(body)).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		handler(provider, readyAuth).ServeHTTP(w, r)
+		done <- w
+	}()
+	var pathName string
+	select {
+	case pathName = <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider did not enter attachment turn")
+	}
+	cancel()
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider did not observe cancellation")
+	}
+	if _, err := os.ReadFile(pathName); err != nil {
+		t.Fatalf("attachment disappeared before the turn returned: %v", err)
+	}
+	releaseProvider()
+	select {
+	case response := <-done:
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("canceled request status = %d", response.Code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled handler did not finish")
+	}
+	if _, err := os.Stat(filepath.Dir(pathName)); !os.IsNotExist(err) {
+		t.Fatalf("attachment directory remains after canceled turn: %v", err)
 	}
 }
 

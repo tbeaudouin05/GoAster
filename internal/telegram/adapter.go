@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -265,16 +264,21 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if text == "" && !hasAttachment {
 		return
 	}
-	attachments, temporaryDir, err := a.downloadAttachments(ctx, m)
+	attachments, err := a.downloadAttachments(ctx, m)
 	if err != nil {
+		if errors.Is(err, attachment.ErrUnsupportedImage) {
+			a.send(ctx, m.Chat.ID, "That image format is unsupported. Supported image formats are JPEG, PNG, GIF, and WebP.")
+			return
+		}
 		a.send(ctx, m.Chat.ID, "The Telegram attachment could not be downloaded safely.")
 		return
 	}
-	if temporaryDir != "" {
-		defer func() { _ = attachment.CleanupTemporaryDir(temporaryDir) }()
-	}
 	reply, err := a.askAgent(ctx, text, m.Chat.ID, attachments)
 	if err != nil {
+		if errors.Is(err, attachment.ErrUnsupportedImage) {
+			a.send(ctx, m.Chat.ID, "That image format is unsupported. Supported image formats are JPEG, PNG, GIF, and WebP.")
+			return
+		}
 		a.send(ctx, m.Chat.ID, "The remote agent could not answer. Check its remote authentication.")
 		return
 	}
@@ -297,34 +301,42 @@ func (a *adapter) send(ctx context.Context, userID int64, text string) {
 	}{userID, text}, nil)
 }
 
-func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attachments []attachment.Metadata) (string, error) {
+func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attachments []attachment.Incoming) (string, error) {
 	body, err := json.Marshal(struct {
 		Message     string                `json:"message"`
 		ChatID      int64                 `json:"chat_id"`
-		Attachments []attachment.Metadata `json:"attachments,omitempty"`
+		Attachments []attachment.Incoming `json:"attachments,omitempty"`
 	}{text, chatID, attachments})
 	if err != nil {
-		return "", fmt.Errorf("agent request failed")
+		return "", fmt.Errorf("agent request failed: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:8765/chat", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("agent request failed")
+		return "", fmt.Errorf("agent request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.agent.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("agent request failed")
+		return "", fmt.Errorf("agent request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnsupportedMediaType {
+		return "", attachment.ErrUnsupportedImage
+	}
 	var result struct {
 		Reply string `json:"reply"`
 	}
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&result) != nil || strings.TrimSpace(result.Reply) == "" {
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("agent request failed")
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&result); err != nil {
+		return "", fmt.Errorf("agent request failed: %w", err)
+	}
+	if strings.TrimSpace(result.Reply) == "" {
 		return "", fmt.Errorf("agent request failed")
 	}
 	return result.Reply, nil
 }
-
 func (m *message) hasAttachment() bool {
 	return m != nil && (len(m.Photo) > 0 || m.Document != nil)
 }
@@ -369,105 +381,72 @@ func (m *message) attachmentSource() (attachmentSource, error) {
 	return attachmentSource{}, fmt.Errorf("message has no supported attachment")
 }
 
-func (a *adapter) downloadAttachments(ctx context.Context, m *message) ([]attachment.Metadata, string, error) {
+func (a *adapter) downloadAttachments(ctx context.Context, m *message) ([]attachment.Incoming, error) {
 	if !m.hasAttachment() {
-		return nil, "", nil
+		return nil, nil
 	}
 	source, err := m.attachmentSource()
 	if err != nil || strings.TrimSpace(source.fileID) == "" {
-		return nil, "", fmt.Errorf("attachment download failed")
+		return nil, fmt.Errorf("attachment download failed")
 	}
 	limit := a.maxAttachmentBytes()
 	if source.fileSize < 0 || source.fileSize > limit {
-		return nil, "", fmt.Errorf("attachment exceeds the size limit")
+		return nil, fmt.Errorf("attachment exceeds the size limit")
 	}
-	directory, err := os.MkdirTemp("", "goaster-telegram-attachment-")
-	if err != nil {
-		return nil, "", fmt.Errorf("attachment download failed")
-	}
-	if err := os.Chmod(directory, 0700); err != nil {
-		_ = attachment.CleanupTemporaryDir(directory)
-		return nil, "", fmt.Errorf("attachment download failed")
-	}
-	cleanupOnError := true
-	defer func() {
-		if cleanupOnError {
-			_ = attachment.CleanupTemporaryDir(directory)
-		}
-	}()
 
 	var file telegramFile
 	if err := a.call(ctx, "getFile", struct {
 		FileID string `json:"file_id"`
 	}{source.fileID}, &file); err != nil || file.FilePath == "" || file.FileSize < 0 || file.FileSize > limit {
-		return nil, "", fmt.Errorf("attachment download failed")
+		return nil, fmt.Errorf("attachment download failed")
 	}
 	downloadURL, err := telegramFileURL(a.apiBase, a.token, file.FilePath)
 	if err != nil {
-		return nil, "", fmt.Errorf("attachment download failed")
+		return nil, fmt.Errorf("attachment download failed")
 	}
-	filename := attachment.SanitizeFilename(source.filename)
-	localPath := filepath.Join(directory, filename)
-	size, err := a.downloadFile(ctx, downloadURL, localPath, limit)
+	data, err := a.downloadFile(ctx, downloadURL, limit)
 	if err != nil {
-		return nil, "", fmt.Errorf("attachment download failed")
+		return nil, fmt.Errorf("attachment download failed")
 	}
-	metadata := attachment.Metadata{
-		Type:     source.kind,
-		Filename: filename,
-		Path:     localPath,
-		MIMEType: source.mimeType,
-		Size:     size,
+	item := attachment.Incoming{
+		Type: source.kind, Filename: source.filename, MIMEType: source.mimeType,
+		Size: int64(len(data)), Data: data,
 	}
-	if err := metadata.Validate(); err != nil {
-		return nil, "", fmt.Errorf("attachment download failed")
+	metadata, err := item.Validate()
+	if err != nil {
+		if errors.Is(err, attachment.ErrUnsupportedImage) {
+			return nil, attachment.ErrUnsupportedImage
+		}
+		return nil, fmt.Errorf("attachment download failed")
 	}
-	cleanupOnError = false
-	return []attachment.Metadata{metadata}, directory, nil
+	item.Type, item.MIMEType = metadata.Type, metadata.MIMEType
+	return []attachment.Incoming{item}, nil
 }
 
-func (a *adapter) downloadFile(ctx context.Context, downloadURL, localPath string, limit int64) (int64, error) {
+func (a *adapter) downloadFile(ctx context.Context, downloadURL string, limit int64) ([]byte, error) {
 	if limit <= 0 {
-		return 0, fmt.Errorf("attachment size limit is invalid")
+		return nil, fmt.Errorf("attachment size limit is invalid")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return 0, fmt.Errorf("attachment download failed")
+		return nil, fmt.Errorf("attachment download failed")
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("attachment download failed")
+		return nil, fmt.Errorf("attachment download failed")
 	}
 	if resp.Body == nil {
-		return 0, fmt.Errorf("attachment download failed")
+		return nil, fmt.Errorf("attachment download failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || resp.ContentLength > limit {
-		return 0, fmt.Errorf("attachment download failed")
+		return nil, fmt.Errorf("attachment download failed")
 	}
-	file, err := os.OpenFile(localPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return 0, fmt.Errorf("attachment download failed")
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil || int64(len(data)) > limit {
+		return nil, fmt.Errorf("attachment download failed")
 	}
-	removeFile := true
-	defer func() {
-		_ = file.Close()
-		if removeFile {
-			_ = os.Remove(localPath)
-		}
-	}()
-	size, err := io.Copy(file, io.LimitReader(resp.Body, limit+1))
-	if err != nil || size > limit {
-		return 0, fmt.Errorf("attachment download failed")
-	}
-	if err := file.Chmod(0600); err != nil {
-		return 0, fmt.Errorf("attachment download failed")
-	}
-	if err := file.Close(); err != nil {
-		return 0, fmt.Errorf("attachment download failed")
-	}
-	removeFile = false
-	return size, nil
+	return data, nil
 }
 
 func (a *adapter) maxAttachmentBytes() int64 {

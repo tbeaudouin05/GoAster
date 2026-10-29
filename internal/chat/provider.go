@@ -3,8 +3,10 @@ package chat
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -52,6 +54,8 @@ type Session struct {
 	contextNotice string
 }
 
+type currentTurnAttachmentsKey struct{}
+
 func NewSession(config Config, provider Provider) *Session {
 	return NewSessionWithMemory(config, provider, nil)
 }
@@ -60,6 +64,15 @@ func NewSession(config Config, provider Provider) *Session {
 // keeping it out of conversation history and persisted summaries.
 func NewSessionWithMemory(config Config, provider Provider, memory *MemoryStore) *Session {
 	return &Session{provider: provider, config: config, active: config.PrimaryModel, memory: memory}
+}
+
+func withCurrentTurnAttachments(ctx context.Context, attachments []attachment.Metadata) context.Context {
+	return context.WithValue(ctx, currentTurnAttachmentsKey{}, append([]attachment.Metadata(nil), attachments...))
+}
+
+func currentTurnAttachments(ctx context.Context) []attachment.Metadata {
+	attachments, _ := ctx.Value(currentTurnAttachmentsKey{}).([]attachment.Metadata)
+	return attachments
 }
 
 func (s *Session) Reply(ctx context.Context, message string) (string, error) {
@@ -92,7 +105,8 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		return "", err
 	}
 
-	candidate := append(cloneChatMessages(s.history), ChatMessage{Role: "user", Content: message})
+	historyMessage := attachment.HistoryPlaceholder(message, attachments)
+	candidate := append(cloneChatMessages(s.history), ChatMessage{Role: "user", Content: historyMessage})
 	normalized, trimmed, err := normalizeChatMessages(candidate, false)
 	if err != nil {
 		normalized, trimmed = boundChatHistory(candidate)
@@ -159,10 +173,10 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		}
 	}
 
-	replyContext := ctx
+	replyContext := withCurrentTurnAttachments(ctx, attachments)
 	if s.memory != nil {
 		if memoryContext := s.memory.GetMemoryContext(); memoryContext != "" {
-			replyContext = WithMemoryContext(ctx, memoryContext)
+			replyContext = WithMemoryContext(replyContext, memoryContext)
 		}
 	}
 	reply, err := s.replyWithHistory(replyContext, requestMessage, requestHistory)
@@ -170,7 +184,24 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		return "", err
 	}
 
-	completedCandidate := append(cloneChatMessages(bounded), ChatMessage{Role: "assistant", Content: reply})
+	// A provider can quote the current-turn reference or image data in its
+	// answer. Do not return or retain either after this turn.
+	historyReply := reply
+	for _, item := range attachments {
+		historyReply = strings.ReplaceAll(historyReply, item.Path, "[temporary attachment]")
+		directory := filepath.Dir(item.Path)
+		if strings.HasPrefix(filepath.Base(directory), attachment.AgentTemporaryDirectoryPrefix) {
+			historyReply = strings.ReplaceAll(historyReply, directory, "[temporary attachment directory]")
+		}
+		if item.Type == "image" && len(historyReply) >= base64.StdEncoding.EncodedLen(int(item.Size)) {
+			if dataURL, err := attachment.ReadImageDataURL(item); err == nil {
+				historyReply = strings.ReplaceAll(historyReply, dataURL, "[image data]")
+				_, encoded, _ := strings.Cut(dataURL, ",")
+				historyReply = strings.ReplaceAll(historyReply, encoded, "[image data]")
+			}
+		}
+	}
+	completedCandidate := append(cloneChatMessages(bounded), ChatMessage{Role: "assistant", Content: historyReply})
 	completed, completedTrimmed, err := normalizeChatMessages(completedCandidate, false)
 	if err != nil {
 		completed, completedTrimmed = boundChatHistory(completedCandidate)
@@ -186,7 +217,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 	}
 	s.history = completed
 	s.summary = summary
-	return reply, nil
+	return historyReply, nil
 }
 
 func shouldSummarize(summary string, messages []ChatMessage) bool {

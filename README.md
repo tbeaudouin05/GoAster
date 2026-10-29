@@ -229,6 +229,20 @@ the remote agent and sends the reply back to the originating chat. Pairing does
 not grant SSH access, server administration, or access to another Telegram
 account.
 
+Images are fully decoded and validated from their downloaded bytes, including
+images sent as Telegram documents; supported formats are JPEG, PNG, GIF, and
+WebP. Images are limited to 8192 pixels per dimension and 20 million pixels;
+for animated GIFs the 20 million pixel limit applies across all frames, with
+at most 1000 frames. Telegram downloads are limited to 20 MiB. The adapter
+sends the bytes as base64 in the loopback request; the unprivileged agent
+creates its own private temporary directory and 0600 file for the current
+turn, and removes them when the request finishes, including on errors or
+timeouts. No shared temporary directory or adapter-owned file is needed. The
+agent passes supported images to the current Responses request as an
+`input_image`, and the current-turn `shell_execute` tool can read documents.
+Encoded image data and temporary paths are not stored as conversation history.
+Telegram media albums are unsupported and ignored.
+
 The token installation, pairing-state setup, and service start or restart are
 remote changes: review their exact scope and obtain fresh explicit approval
 immediately before each mutation. For the detailed SSH workflow and the
