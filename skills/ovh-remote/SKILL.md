@@ -1,6 +1,6 @@
 ---
 name: ovh-remote
-description: Bootstrap and operate an existing OVHcloud host over SSH through GoAster's shell_execute, building pinned GoAster agent binaries remotely with explicit approval for changes.
+description: Bootstrap and operate an existing OVHcloud host over SSH through GoAster's shell_execute, building GoAster agent binaries remotely from the latest main branch with explicit approval for changes.
 ---
 
 # Existing OVH remote SSH
@@ -114,11 +114,12 @@ to guess at a destructive scope.
 
 The local packaged GoAster app does not need Go installed. For this manual
 bootstrap, download source and compile only on the already-existing OVH Linux
-host. Do not create OVH resources or add a local installer. The bootstrap pins
-these inputs:
+host. Do not create OVH resources or add a local installer. The bootstrap uses
+the latest `main` branch available from the repository when the host clones
+it, while pinning the Go toolchain:
 
 - Repository: `https://github.com/tbeaudouin05/GoAster.git`
-- Source commit: `46656dd244941025adecde581d8707491badd62f`
+- Source branch: `main` (resolved to a commit at bootstrap time)
 - Go toolchain: `go1.27.3`
 - Official Go archive SHA-256 values from [go.dev/dl](https://go.dev/dl/):
   - Linux amd64: `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`
@@ -128,10 +129,9 @@ Before proposing a bootstrap, use read-only checks to confirm the host is
 Linux, its architecture is `x86_64` or `aarch64`, the SSH deployment user's
 home directory and available disk space, and whether `git`, `curl`, `tar`,
 `sha256sum`, and `sudo` are available. Check whether the Go toolchain path,
-source directory
-`$HOME/src/GoAster-46656dd244941025adecde581d8707491badd62f`, build staging
-directory `$HOME/.cache/goaster-build-46656dd244941025adecde581d8707491badd62f`,
-or either target binary already exists. If a requirement is missing, a path
+source directory `$HOME/src/GoAster`, build staging directory
+`$HOME/.cache/goaster-build`, or either target binary already exists. If a
+requirement is missing, a path
 conflicts, or an existing install would be replaced, stop and report what
 needs inspection or separate approval; do not install prerequisites or
 overwrite files automatically.
@@ -143,14 +143,14 @@ and clean temporary archives. Before each stage, show the exact script,
 target, files/directories and privilege level affected, and obtain fresh
 explicit approval immediately before running it. One approval does not
 authorize a later stage. The SSH user's home holds a user-scoped Go toolchain
-when needed, the pinned checkout, and Go's module/build cache. The Go archive
-is about 64–67 MB, plus repository/module downloads and extracted
+when needed, the `main` branch checkout, and Go's module/build cache. The Go
+archive is about 64–67 MB, plus repository/module downloads and extracted
 toolchain/build-cache space; these host file operations have no OVH resource
 cost. If `sudo -n` is unavailable for the final binary installation, stop; do
 not put a sudo password in a script, command, or chat.
 
 Apply approval separately to: installing Go when the pinned toolchain is not
-already available; cloning and checking out the pinned source; building both
+already available; cloning the latest fetched `main` branch; building both
 binaries and writing their staging files; installing the root-owned binaries
 at `/usr/local/bin/goaster-agent` and `/usr/local/bin/goaster-telegram` (state
 clearly whether either destination will be replaced); and any service-unit or
@@ -172,34 +172,39 @@ checksum verification fails, stop without extracting or building.
 When installing Go, select `$HOME/.local/opt/go1.27.3/bin/go` as `GO_BIN`;
 when reusing system Go, set `GO_BIN` to the path returned by `command -v go`
 after verifying its version and architecture. Create the source parent
-`$HOME/src`, then clone and checkout with the pinned values:
+`$HOME/src`, then clone the `main` branch:
 
 ```sh
-git clone --no-checkout https://github.com/tbeaudouin05/GoAster.git "$SOURCE_DIR"
-git -C "$SOURCE_DIR" checkout --detach 46656dd244941025adecde581d8707491badd62f
-test "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = 46656dd244941025adecde581d8707491badd62f
+git clone --single-branch --branch main https://github.com/tbeaudouin05/GoAster.git "$SOURCE_DIR"
+test "$(git -C "$SOURCE_DIR" branch --show-current)" = main
+SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+test "$SOURCE_COMMIT" = "$(git -C "$SOURCE_DIR" rev-parse refs/remotes/origin/main)"
 ```
 
-Set `SOURCE_DIR` to
-`$HOME/src/GoAster-46656dd244941025adecde581d8707491badd62f`. Do not build
-from the current branch tip. Create the private build staging directory
-`$HOME/.cache/goaster-build-46656dd244941025adecde581d8707491badd62f` and
-set `BUILD_DIR` to that path with mode `0700`; it must not already exist.
-Build both binaries on the host from the checkout:
+Set `SOURCE_DIR` to `$HOME/src/GoAster`. `SOURCE_COMMIT` identifies the
+resolved `origin/main` commit fetched by this clone. Create the private build
+staging directory
+`$HOME/.cache/goaster-build` and set `BUILD_DIR` to that path with mode `0700`;
+it must not already exist. Build both binaries on the host from the checkout:
 
 ```sh
 GOTOOLCHAIN=local "$GO_BIN" build -trimpath -o "$BUILD_DIR/goaster-agent" ./cmd/goaster-agent
 GOTOOLCHAIN=local "$GO_BIN" build -trimpath -o "$BUILD_DIR/goaster-telegram" ./cmd/goaster-telegram
+test "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$SOURCE_COMMIT"
+test -z "$(git -C "$SOURCE_DIR" status --porcelain)"
+printf 'Built source commit: %s\n' "$SOURCE_COMMIT"
 ```
 
 Run these commands with the checkout as the working directory and the pinned
-Go executable selected explicitly. Use a private staging directory for build
+Go executable selected explicitly. The final checks record the exact commit
+that both builds used and confirm the checkout remained unchanged. Use a
+private staging directory for build
 outputs. On build failure, keep it for inspection and report its path; do not
 retry blindly. After an approved installation, compare each installed file
 with its build output and verify root ownership and mode `0755`, then include
 removal of that exact staging directory in the reviewed install script. Keep
 the verified source checkout and user-scoped Go toolchain on the host. Report
-the verified commit, Go version, and binary paths without including
+the captured `SOURCE_COMMIT`, Go version, and binary paths without including
 environment values or secret-bearing output.
 
 Do not create or modify service units as an implicit part of this bootstrap.

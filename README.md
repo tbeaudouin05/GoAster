@@ -149,11 +149,12 @@ It runs approved SSH checks and changes through GoAster's `shell_execute` using
 temporary host scripts, keeps credentials on the host, and requires explicit
 approval immediately before remote mutations. The local package does not need
 Go to bootstrap the remote agent: the skill verifies or installs pinned Go
-1.27.3 on the existing Linux host, clones this repository there, checks out
-commit `46656dd244941025adecde581d8707491badd62f`, builds `goaster-agent` and
-`goaster-telegram` on that host, then installs the resulting binaries. The Go
-archive checksums and remote build steps are documented in the skill. This is a
-manual SSH workflow, not an OVH API provisioner or an agent self-update feature.
+1.27.3 on the existing Linux host, clones the latest `main` branch from this
+repository at bootstrap time, records the resolved commit, builds
+`goaster-agent` and `goaster-telegram` from that checkout on the host, then
+installs the resulting binaries. The Go archive checksums and remote build
+steps are documented in the skill. This is a manual SSH workflow, not an OVH
+API provisioner or an agent self-update feature.
 
 The terminal and remote agent require **two independent OpenAI device logins**.
 The local terminal login described above stays local. Never copy or send its
