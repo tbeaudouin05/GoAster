@@ -105,6 +105,31 @@ to guess at a destructive scope.
 
 ## Telegram setup
 
+The terminal's OpenAI subscription login and the OVH agent's login are
+independent. Never copy or transfer the local `~/.goaster/auth.json`, any
+custom `-auth-file`, OAuth tokens, or the terminal's saved session to the
+remote. A freshly installed agent starts without subscription credentials;
+do not reuse a terminal credential that happens to be present on the host.
+
+After installation, direct the user to open a separate SSH terminal and run
+`goaster-agent login` on the remote as the agent service user with the same
+`HOME` as the service. The user opens the displayed verification URL and enters
+the remote device's one-time code. Do not run this login through `shell_execute`
+or any chat tool that would relay the code or login output to the model. Do not
+ask the user to paste the code or tokens into chat. The login writes the remote
+service user's `~/.goaster/agent-auth.json` with `0600` permissions in a
+`0700` directory. For reauthentication, stop the agent service before the login
+and restart it afterward, with the approvals required above.
+
+Do not claim the agent is ready for Telegram chat until remote login succeeds
+and the running agent's loopback `http://127.0.0.1:8765/healthz` returns `ok`.
+That check verifies the stored credential and refreshes it if needed; it is not
+a successful model request. Configure a systemd adapter service as
+`Type=notify` for readiness reporting; the adapter requires this health check
+and an initial successful poll before sending its ready notification. If it was
+started before remote login, restart it after the agent is ready, with the
+required approval. Preserve the existing Telegram token and pairing boundaries.
+
 Whenever configuring GoAster's Telegram adapter on an OVH remote, explicitly
 mention the packaged [Telegram BotFather Group Privacy Mode skill](../telegram-group-privacy/SKILL.md).
 If they want GoAster to receive ordinary text messages they send in a group,

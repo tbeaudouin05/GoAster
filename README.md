@@ -120,8 +120,52 @@ The chat application does not provision OVHcloud resources. To connect to an
 existing OVH remote, use the [OVH remote SSH skill](skills/ovh-remote/SKILL.md).
 It runs approved SSH checks and changes through GoAster's `shell_execute` using
 temporary host scripts, keeps credentials on the host, and requires explicit
-approval immediately before remote mutations. When configuring Telegram on
-that remote, it directs the agent to the packaged
+approval immediately before remote mutations. This repository does not include
+an automated OVH installer; the following applies when setting up the packaged
+remote agent and Telegram adapter on an existing host.
+
+The terminal and remote agent require **two independent OpenAI device logins**.
+The local terminal login described above stays local. Never copy or send its
+`auth.json`, a custom `-auth-file`, its OAuth tokens, or its saved session to the
+OVH host. A freshly installed remote agent has no subscription credentials and
+does not use the terminal's credential file. The agent can run while waiting
+for login, but its loopback `/healthz` and `/chat` endpoints return unavailable.
+
+After the remote agent is installed, open a separate SSH terminal to the OVH
+host and run `goaster-agent login` as the same user and with the same `HOME`
+that the agent service uses. For example, if the service runs as `goaster`,
+uses `/var/lib/goaster` as its home, and the binary is installed in
+`/usr/local/bin`:
+
+```sh
+ssh -t USER@OVH_HOST 'sudo -u goaster env HOME=/var/lib/goaster /usr/local/bin/goaster-agent login'
+```
+
+Use the URL and one-time code displayed in that SSH terminal to authorize the
+remote device. Do not paste the code, tokens, or login output into GoAster or
+Telegram chat, and do not run this interactive login through a chat tool that
+would relay its output to the model. The remote login saves its own credentials
+as `~/.goaster/agent-auth.json` under the service user's remote home, with
+`0600` file and `0700` directory permissions. This file is separate from
+`~/.goaster/auth.json`, even if both programs use the same home. If login fails
+or is canceled, run the remote login again; keep the host and any separately
+configured Telegram state for inspection. The same command can reauthenticate
+the remote agent later; stop the agent service first and restart it afterward.
+
+After login completes and the agent is running, check its readiness on the OVH
+host with `curl --fail http://127.0.0.1:8765/healthz`. It returns `ok` only
+when the agent can load its separate subscription credential, refreshing it if
+needed; this does not test a model response or detect every revoked token.
+Start or restart the Telegram adapter after the check succeeds. For systemd
+readiness reporting, configure its service as `Type=notify`: the adapter sends
+the ready notification only after the agent is ready and the first Telegram
+poll succeeds. It also checks agent readiness before telling a paired user
+that chat is ready. If the adapter was started too early, restart it after
+login. Continue to use the existing private Telegram token and pairing setup;
+neither the OpenAI device code nor the subscription tokens belong in Telegram.
+
+When configuring Telegram on that remote, the SSH skill directs the agent to
+the packaged
 [Telegram BotFather Group Privacy Mode skill](skills/telegram-group-privacy/SKILL.md),
 which explains the `/setprivacy` → **Turn off** option for users who want
 ordinary group messages.

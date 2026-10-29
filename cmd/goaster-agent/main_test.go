@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +20,18 @@ import (
 )
 
 type fakeProvider struct{ err error }
+
+func readyAuth(context.Context) error { return nil }
+
+func testAgentStore(t *testing.T) (string, chat.CredentialStore) {
+	t.Helper()
+	home := t.TempDir()
+	store, err := agentCredentialStore(func() (string, error) { return home, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return home, store
+}
 
 func (p fakeProvider) Reply(_ context.Context, _ string, message string) (string, error) {
 	if p.err != nil {
@@ -126,7 +143,7 @@ func TestAgentLoopbackHandler(t *testing.T) {
 			r := httptest.NewRequest(tc.method, "http://"+tc.host+tc.path, strings.NewReader(tc.body))
 			r.Header.Set("Content-Type", tc.contentType)
 			w := httptest.NewRecorder()
-			handler(tc.provider).ServeHTTP(w, r)
+			handler(tc.provider, readyAuth).ServeHTTP(w, r)
 			if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.want) {
 				t.Errorf("status %d, body %q", w.Code, w.Body.String())
 			}
@@ -139,7 +156,7 @@ func TestAgentLoopbackHandler(t *testing.T) {
 
 func TestAgentSessionsReuseHistoryAndIsolateChats(t *testing.T) {
 	provider := &historyProvider{}
-	h := handler(provider)
+	h := handler(provider, readyAuth)
 	if response := postChat(t, h, 101, "first"); response.Code != http.StatusOK {
 		t.Fatalf("first chat status = %d, body = %q", response.Code, response.Body.String())
 	}
@@ -179,7 +196,7 @@ func TestAgentSessionsSerializeSameChatAndRunDifferentChatsConcurrently(t *testi
 	t.Run("same chat is serialized", func(t *testing.T) {
 		provider := newBlockingHistoryProvider()
 		started := make(chan struct{}, 2)
-		base := handler(provider)
+		base := handler(provider, readyAuth)
 		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			started <- struct{}{}
 			base.ServeHTTP(w, r)
@@ -231,7 +248,7 @@ func TestAgentSessionsSerializeSameChatAndRunDifferentChatsConcurrently(t *testi
 
 	t.Run("different chats run concurrently", func(t *testing.T) {
 		provider := newBlockingHistoryProvider()
-		h := handler(provider)
+		h := handler(provider, readyAuth)
 		responses := make(chan *httptest.ResponseRecorder, 2)
 		go func() { responses <- postChat(t, h, 404, "one") }()
 		go func() { responses <- postChat(t, h, 505, "two") }()
@@ -255,4 +272,250 @@ func TestAgentSessionsSerializeSameChatAndRunDifferentChatsConcurrently(t *testi
 	})
 }
 
-var _ http.Handler = handler(fakeProvider{})
+var _ http.Handler = handler(fakeProvider{}, readyAuth)
+
+func TestRemoteLoginIsIndependentAndGatesReadiness(t *testing.T) {
+	home, remoteStore := testAgentStore(t)
+	localStore, err := chat.NewCredentialStore(filepath.Join(home, ".goaster", "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	localCredential := chat.Credential{AccessToken: "local-access", RefreshToken: "local-refresh", ExpiresAt: time.Now().Add(time.Hour).UTC().Truncate(time.Second)}
+	if err := localStore.Save(localCredential); err != nil {
+		t.Fatal(err)
+	}
+	customStore := chat.CredentialStore{Path: filepath.Join(filepath.Dir(localStore.Path), "custom-auth.json")}
+	if err := customStore.Save(chat.Credential{AccessToken: "custom-local-access"}); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(filepath.Dir(localStore.Path), "session.json")
+	if err := os.WriteFile(sessionPath, []byte("local-session"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if remoteStore.Path == localStore.Path || remoteStore.Path != filepath.Join(home, ".goaster", "agent-auth.json") {
+		t.Fatalf("remote credential path is not separate: %q", remoteStore.Path)
+	}
+	provider := chat.NewCodexProvider(remoteStore)
+	h := handler(fakeProvider{}, provider.CheckAuth)
+	check := func(want int) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765/healthz", nil))
+		if w.Code != want {
+			t.Fatalf("health status = %d, want %d", w.Code, want)
+		}
+		if response := postChat(t, h, 42, "hello"); response.Code != want {
+			t.Fatalf("chat status = %d, want %d", response.Code, want)
+		}
+	}
+	check(http.StatusServiceUnavailable)
+
+	pollStarted := make(chan struct{})
+	allowLogin := make(chan struct{})
+	release := sync.OnceFunc(func() { close(allowLogin) })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read remote login request: %v", err)
+		}
+		for _, value := range []string{"local-access", "local-refresh", "custom-local-access", "local-session"} {
+			if strings.Contains(string(body), value) || strings.Contains(r.Header.Get("Authorization"), value) || strings.Contains(r.URL.String(), value) {
+				t.Error("local authentication or session was sent during remote login")
+			}
+		}
+		switch r.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			fmt.Fprint(w, `{"device_auth_id":"remote-device","user_code":"REMOTE-CODE","interval":1}`)
+		case "/api/accounts/deviceauth/token":
+			close(pollStarted)
+			<-allowLogin
+			fmt.Fprint(w, `{"authorization_code":"remote-code","code_verifier":"verifier"}`)
+		case "/oauth/token":
+			fmt.Fprint(w, `{"access_token":"remote-access","refresh_token":"remote-refresh","expires_in":3600}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	defer release()
+	auth := chat.NewOpenAIAuthenticator(remoteStore)
+	auth.AuthBaseURL, auth.HTTPClient = server.URL, server.Client()
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- run(context.Background(), []string{"login"}, &output, auth, func(chat.CredentialStore) error {
+			return errors.New("login unexpectedly started the server")
+		})
+	}()
+	select {
+	case <-pollStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote device login did not start")
+	}
+	if !strings.Contains(output.String(), server.URL+"/codex/device") || !strings.Contains(output.String(), "REMOTE-CODE") {
+		t.Fatalf("remote login did not present its device instructions: %q", output.String())
+	}
+	check(http.StatusServiceUnavailable)
+	if _, err := os.Lstat(remoteStore.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("credentials existed before login completed: %v", err)
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatalf("remote login: %v", err)
+	}
+	check(http.StatusOK)
+	remoteCredential, err := remoteStore.Load()
+	if err != nil || remoteCredential.AccessToken != "remote-access" || remoteCredential.RefreshToken != "remote-refresh" {
+		t.Fatalf("remote credential was not created by its login: %v", err)
+	}
+	gotLocal, err := localStore.Load()
+	if err != nil || gotLocal != localCredential {
+		t.Fatalf("local credential changed: %v", err)
+	}
+	gotCustom, err := customStore.Load()
+	if err != nil || gotCustom.AccessToken != "custom-local-access" {
+		t.Fatalf("custom local credential changed: %v", err)
+	}
+	if session, err := os.ReadFile(sessionPath); err != nil || string(session) != "local-session" {
+		t.Fatalf("local session changed: %v", err)
+	}
+	for path, want := range map[string]os.FileMode{remoteStore.Path: 0600, filepath.Dir(remoteStore.Path): 0700} {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != want {
+			t.Fatalf("permissions for %s: %v, want %04o", path, err, want)
+		}
+	}
+}
+
+func TestAgentStartsUnauthenticatedAndRejectsOtherCommands(t *testing.T) {
+	_, store := testAgentStore(t)
+	auth := chat.NewOpenAIAuthenticator(store)
+	starts := 0
+	start := func(got chat.CredentialStore) error {
+		starts++
+		if got.Path != store.Path {
+			t.Fatal("server received a different credential store")
+		}
+		return nil
+	}
+	if err := run(context.Background(), nil, io.Discard, auth, start); err != nil || starts != 1 {
+		t.Fatalf("start: error=%v starts=%d", err, starts)
+	}
+	if _, err := os.Lstat(store.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("startup created a credential: %v", err)
+	}
+	if err := run(context.Background(), []string{"setup-runtime"}, io.Discard, auth, start); err == nil || starts != 1 {
+		t.Fatal("agent accepted a runtime credential transfer command")
+	}
+}
+
+func TestRemoteLoginFailureDoesNotCreateCredentialOrReportReady(t *testing.T) {
+	_, store := testAgentStore(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			fmt.Fprint(w, `{"device_auth_id":"device","user_code":"CODE","interval":1}`)
+		default:
+			http.Error(w, "denied", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	auth := chat.NewOpenAIAuthenticator(store)
+	auth.AuthBaseURL, auth.HTTPClient = server.URL, server.Client()
+	if err := run(context.Background(), []string{"login"}, io.Discard, auth, nil); err == nil {
+		t.Fatal("failed login was accepted")
+	}
+	if _, err := os.Lstat(store.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed login created a credential: %v", err)
+	}
+	provider := chat.NewCodexProvider(store)
+	w := httptest.NewRecorder()
+	handler(fakeProvider{}, provider.CheckAuth).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765/healthz", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("failed login health status = %d", w.Code)
+	}
+}
+
+func TestCanceledRemoteLoginRemainsUnavailable(t *testing.T) {
+	_, store := testAgentStore(t)
+	pollStarted := make(chan struct{})
+	endPoll := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			fmt.Fprint(w, `{"device_auth_id":"device","user_code":"CODE","interval":1}`)
+		case "/api/accounts/deviceauth/token":
+			close(pollStarted)
+			select {
+			case <-r.Context().Done():
+			case <-endPoll:
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	defer close(endPoll)
+	auth := chat.NewOpenAIAuthenticator(store)
+	auth.AuthBaseURL, auth.HTTPClient = server.URL, server.Client()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, []string{"login"}, io.Discard, auth, nil) }()
+	select {
+	case <-pollStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote device login did not start")
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("canceled login succeeded")
+	}
+	if _, err := os.Lstat(store.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled login created a credential: %v", err)
+	}
+	provider := chat.NewCodexProvider(store)
+	w := httptest.NewRecorder()
+	handler(fakeProvider{}, provider.CheckAuth).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765/healthz", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("canceled login health status = %d", w.Code)
+	}
+}
+
+func TestAgentDoesNotAcceptExpiredOrInsecureCredentials(t *testing.T) {
+	_, store := testAgentStore(t)
+	provider := chat.NewCodexProvider(store)
+	h := handler(fakeProvider{}, provider.CheckAuth)
+	checkUnavailable := func() {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765/healthz", nil))
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("health status = %d, want unavailable", w.Code)
+		}
+	}
+	if err := store.Save(chat.Credential{AccessToken: "expired", ExpiresAt: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	checkUnavailable()
+	if err := store.Save(chat.Credential{AccessToken: "unexpired", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(store.Path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	checkUnavailable()
+}
+
+func TestAgentAuthErrorsAreRedactedAndGateChat(t *testing.T) {
+	check := func(context.Context) error { return errors.New("private credential detail") }
+	h := handler(fakeProvider{}, check)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765/healthz", nil))
+	chatResponse := postChat(t, h, 42, "hello")
+	for _, response := range []*httptest.ResponseRecorder{w, chatResponse} {
+		if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "private credential detail") {
+			t.Fatalf("authentication response = %d %q", response.Code, response.Body.String())
+		}
+	}
+}

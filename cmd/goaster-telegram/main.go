@@ -38,7 +38,7 @@ func main() {
 	}
 }
 
-// systemd waits for the first successful Telegram request before reporting active.
+// systemd waits for agent authentication and a successful Telegram request.
 func notifyReady() error {
 	address := os.Getenv("NOTIFY_SOCKET")
 	if address == "" {

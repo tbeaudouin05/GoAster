@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"goaster/internal/command"
@@ -170,6 +171,7 @@ func (c Credential) needsRefresh(now time.Time) bool {
 }
 
 type OpenAIAuthenticator struct {
+	mu          sync.Mutex
 	Store       CredentialStore
 	HTTPClient  *http.Client
 	AuthBaseURL string
@@ -190,6 +192,8 @@ func NewOpenAIAuthenticator(store CredentialStore) *OpenAIAuthenticator {
 }
 
 func (a *OpenAIAuthenticator) Credential(ctx context.Context) (Credential, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	credential, err := a.Store.Load()
 	if err != nil {
 		return Credential{}, err
@@ -205,6 +209,8 @@ func (a *OpenAIAuthenticator) Credential(ctx context.Context) (Credential, error
 }
 
 func (a *OpenAIAuthenticator) Refresh(ctx context.Context) (Credential, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	credential, err := a.Store.Load()
 	if err != nil {
 		return Credential{}, err
@@ -677,6 +683,13 @@ func (p *CodexProvider) mustRegisterBuiltInTool(definition codexTool, handler To
 
 func (p *CodexProvider) Description() string {
 	return "OpenAI subscription via ChatGPT/Codex backend"
+}
+
+// CheckAuth checks the saved subscription and refreshes it when necessary,
+// without starting an interactive login.
+func (p *CodexProvider) CheckAuth(ctx context.Context) error {
+	_, err := p.auth.Credential(ctx)
+	return err
 }
 
 func (p *CodexProvider) EnsureAuth(ctx context.Context, outputs ...io.Writer) error {

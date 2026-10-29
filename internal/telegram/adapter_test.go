@@ -59,6 +59,9 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 		sent = append(sent, payload)
 		return response(200, `{"ok":true,"result":{}}`), nil
 	}), agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+			return response(200, "ok\n"), nil
+		}
 		var request struct {
 			Message string `json:"message"`
 			ChatID  int64  `json:"chat_id"`
@@ -176,7 +179,12 @@ func TestPollingReadinessOffsetAndRedactedErrors(t *testing.T) {
 		AllowedUpdates []string `json:"allowed_updates"`
 	}
 	ready := false
-	a := &adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid", client: doerFunc(func(r *http.Request) (*http.Response, error) {
+	a := &adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid", agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.String() != "http://127.0.0.1:8765/healthz" {
+			t.Fatal("unexpected agent health request")
+		}
+		return response(200, "ok\n"), nil
+	}), client: doerFunc(func(r *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
 			return response(200, `{"ok":true,"result":{}}`), nil
 		}
@@ -214,5 +222,94 @@ func TestPollingReadinessOffsetAndRedactedErrors(t *testing.T) {
 	})
 	if err := a.run(context.Background(), func() error { ready = true; return nil }); err == nil || ready {
 		t.Fatal("invalid polling response was accepted as ready")
+	}
+}
+
+func TestPollingDoesNotReportReadyWithoutAgentAuthentication(t *testing.T) {
+	var healthRequests, polls int
+	agentStatus := http.StatusServiceUnavailable
+	a := &adapter{agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+		healthRequests++
+		if agentStatus == http.StatusOK {
+			return response(agentStatus, "ok\n"), nil
+		}
+		return response(agentStatus, "private credential detail"), nil
+	}), client: doerFunc(func(*http.Request) (*http.Response, error) {
+		polls++
+		return response(200, `{"ok":true,"result":[]}`), nil
+	})}
+	ready := false
+	err := a.run(context.Background(), func() error { ready = true; return nil })
+	if err == nil || ready || polls != 0 || strings.Contains(err.Error(), "private credential detail") {
+		t.Fatalf("unavailable agent: error=%v ready=%v polls=%d", err, ready, polls)
+	}
+
+	// The agent can become unavailable while the initial Telegram poll runs.
+	healthRequests, polls = 0, 0
+	agentStatus = http.StatusOK
+	a.client = doerFunc(func(*http.Request) (*http.Response, error) {
+		polls++
+		agentStatus = http.StatusServiceUnavailable
+		return response(200, `{"ok":true,"result":[]}`), nil
+	})
+	err = a.run(context.Background(), func() error { ready = true; return nil })
+	if err == nil || ready || polls != 1 || healthRequests != 2 {
+		t.Fatalf("agent became unavailable: error=%v ready=%v polls=%d checks=%d", err, ready, polls, healthRequests)
+	}
+}
+
+func TestStartReportsCurrentAgentReadiness(t *testing.T) {
+	available := false
+	var sent []string
+	a := &adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid",
+		agent: doerFunc(func(*http.Request) (*http.Response, error) {
+			if available {
+				return response(200, "ok\n"), nil
+			}
+			return response(503, "unavailable"), nil
+		}),
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			sent = append(sent, payload.Text)
+			return response(200, `{"ok":true,"result":{}}`), nil
+		}),
+	}
+	a.handle(context.Background(), privateMessage(42, "/start"))
+	available = true
+	a.handle(context.Background(), privateMessage(42, "/start"))
+	if len(sent) != 2 || !strings.Contains(sent[0], "not ready") || !strings.Contains(sent[1], "ready for text messages") {
+		t.Fatalf("readiness messages = %q", sent)
+	}
+}
+
+func TestPairingDoesNotAnnounceChatWhenAgentIsUnavailable(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	p, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message string
+	a := &adapter{token: testToken, pairing: p, apiBase: "https://example.invalid",
+		agent: doerFunc(func(*http.Request) (*http.Response, error) { return response(503, "unavailable"), nil }),
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			message = payload.Text
+			return response(200, `{"ok":true,"result":{}}`), nil
+		}),
+	}
+	a.handle(context.Background(), privateMessage(42, "/start "+testCode))
+	if p.userID != 42 || !strings.Contains(message, "Paired") || !strings.Contains(message, "not ready") {
+		t.Fatalf("pairing readiness message = %q", message)
 	}
 }

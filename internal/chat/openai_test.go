@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -252,6 +253,49 @@ func TestCodexProviderEnsureAuthRefreshesTokensAndKeepsAccount(t *testing.T) {
 	}
 	if got := refreshCount.Load(); got != 1 {
 		t.Fatalf("refresh count = %d, want 1", got)
+	}
+}
+
+func TestConcurrentAuthChecksShareOneRefresh(t *testing.T) {
+	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(Credential{AccessToken: "expired", RefreshToken: "old-refresh", ExpiresAt: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	var refreshes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth/token" {
+			t.Errorf("unexpected authentication request: %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		refreshes.Add(1)
+		fmt.Fprint(w, `{"access_token":"refreshed","refresh_token":"new-refresh","expires_in":3600}`)
+	}))
+	defer server.Close()
+	provider := NewCodexProvider(store)
+	provider.auth.AuthBaseURL = server.URL
+	provider.auth.HTTPClient = server.Client()
+	start := make(chan struct{})
+	errs := make(chan error, 16)
+	var workers sync.WaitGroup
+	for i := 0; i < cap(errs); i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			errs <- provider.CheckAuth(context.Background())
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("authentication check: %v", err)
+		}
+	}
+	if got := refreshes.Load(); got != 1 {
+		t.Fatalf("refreshes = %d, want 1", got)
 	}
 }
 

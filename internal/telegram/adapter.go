@@ -42,7 +42,8 @@ type message struct {
 }
 
 // Run starts polling only after the token and pairing state are protected.
-// ready is called after Telegram accepts an initial getUpdates request.
+// ready is called after the agent is authenticated and Telegram accepts an
+// initial getUpdates request.
 func Run(ctx context.Context, paths Paths, ready func() error) error {
 	token, err := readPrivate(paths.Token)
 	if err != nil || ValidateToken(string(token)) != nil {
@@ -63,9 +64,15 @@ func Run(ctx context.Context, paths Paths, ready func() error) error {
 }
 
 func (a *adapter) run(ctx context.Context, ready func() error) error {
+	if !a.agentReady(ctx) {
+		return fmt.Errorf("remote agent is not ready; check its OpenAI authentication")
+	}
 	updates, err := a.getUpdates(ctx, 0, 0)
 	if err != nil {
 		return fmt.Errorf("Telegram polling could not start; check the bot token, connection and webhook settings")
+	}
+	if !a.agentReady(ctx) {
+		return fmt.Errorf("remote agent is not ready; check its OpenAI authentication")
 	}
 	if ready != nil {
 		if err := ready(); err != nil {
@@ -99,6 +106,25 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 			updates = nil
 		}
 	}
+}
+
+func (a *adapter) agentReady(ctx context.Context) bool {
+	if a.agent == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8765/healthz", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := a.agent.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 33))
+	return err == nil && resp.StatusCode == http.StatusOK && string(body) == "ok\n"
 }
 
 func (a *adapter) getUpdates(ctx context.Context, offset int64, timeout int) ([]update, error) {
@@ -169,7 +195,11 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 			return
 		}
 		if strings.HasPrefix(text, "/start ") && a.pairing.tryPair(m.From.ID, strings.TrimSpace(strings.TrimPrefix(text, "/start "))) {
-			a.send(ctx, m.Chat.ID, "Paired. Send a text message to chat.")
+			if a.agentReady(ctx) {
+				a.send(ctx, m.Chat.ID, "Paired. Send a text message to chat.")
+			} else {
+				a.send(ctx, m.Chat.ID, "Paired. The remote agent is not ready; check its remote authentication.")
+			}
 		}
 		return
 	}
@@ -177,7 +207,11 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		return
 	}
 	if text == "/start" || strings.HasPrefix(text, "/start ") {
-		a.send(ctx, m.Chat.ID, "GoAster is ready for text messages.")
+		if a.agentReady(ctx) {
+			a.send(ctx, m.Chat.ID, "GoAster is ready for text messages.")
+		} else {
+			a.send(ctx, m.Chat.ID, "The remote agent is not ready; check its remote authentication.")
+		}
 		return
 	}
 	if strings.HasPrefix(text, "/") {
