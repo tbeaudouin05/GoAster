@@ -10,6 +10,7 @@ import (
 
 	"goaster/internal/chat"
 	"goaster/internal/localenv"
+	"goaster/internal/scheduler"
 )
 
 func main() {
@@ -48,5 +49,21 @@ func run(ctx context.Context, args []string, input io.Reader, output, errorOutpu
 	if err != nil {
 		return fmt.Errorf("initialize conversation session: %w", err)
 	}
+	cronScheduler, err := scheduler.New(scheduler.Options{
+		Executor: func(ctx context.Context, message string) error {
+			_, err := session.Reply(ctx, message)
+			return err
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("initialize cron scheduler: %w", err)
+	}
+	if err := chat.RegisterCronTool(codexProvider, cronScheduler); err != nil {
+		return fmt.Errorf("register cron tool: %w", err)
+	}
+	if err := cronScheduler.Start(ctx); err != nil {
+		return fmt.Errorf("start cron scheduler: %w", err)
+	}
+	defer cronScheduler.Stop()
 	return chat.RunWithEnvStore(ctx, input, output, session, environmentStore)
 }

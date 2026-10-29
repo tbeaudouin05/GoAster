@@ -75,7 +75,35 @@ in `session.json`; it never rewrites `MEMORY.md`. Use the packaged
 for an optional, user-managed daily maintenance workflow that reviews daily
 notes and promotes only verified durable facts into protected long-term
 memory. Users may invoke it from their own cron or scheduler; GoAster does not
-install or provide a cron subsystem or scheduler implementation.
+install or provide an operating-system cron entry. The skill remains
+user-managed and is not automatically scheduled by GoAster.
+
+## Scheduled chat turns
+
+GoAster includes a small local scheduler for model-requested reminders and
+recurring chat turns. Jobs are saved atomically in
+`~/.goaster/cron/jobs.json` with private `0700` directory and `0600` file
+permissions, so they survive a normal restart. The model uses the built-in
+`cron` tool with `add`, `list`, `get`, `update`, `remove`, `enable`, and
+`disable` actions. Add a job with exactly one of:
+
+```text
+at_seconds     Unix timestamp for a one-time turn
+every_seconds  positive recurring interval
+cron_expr      five-field cron expression (six fields may include seconds)
+```
+
+Each job stores its message, enabled state, next and last run times, status,
+error, run count, and optional `max_runs` (`0` means unlimited). One-time
+`at_seconds` jobs are deleted after their execution. Updates are partial, so
+omitted message, schedule, and `max_runs` fields are preserved.
+
+Due jobs send their saved message through the same terminal chat session as
+interactive input; the session serializes turns so scheduled execution cannot
+corrupt conversation state. This feature deliberately does not schedule shell
+commands, send to Telegram or other channels, install operating-system cron
+entries, or add user-facing scheduler configuration or flags. It only runs
+while the terminal GoAster process is active.
 
 Enter one message per line. Blank lines are ignored. End the input stream with
 EOF (Ctrl-D on Unix) to exit. Ctrl-C or closing the terminal also stops the

@@ -82,5 +82,6 @@ than forcing a weak or uncertain memory update.
 A user may invoke this skill from a daily cron job or another scheduler they
 operate. Keep the job bounded, local to the selected GoAster workspace, and
 idempotent. The scheduler must apply the user's review and approval policy;
-uncertain candidates should be skipped. GoAster itself supplies no cron
-subsystem, scheduler, or automatic memory-consolidation configuration.
+uncertain candidates should be skipped. GoAster's local scheduler is for
+saved chat turns; it does not automatically invoke this skill or configure
+memory consolidation.
