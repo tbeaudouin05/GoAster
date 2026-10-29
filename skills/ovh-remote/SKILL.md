@@ -247,6 +247,60 @@ and an initial successful poll before sending its ready notification. If it was
 started before remote login, restart it after the agent is ready, with the
 required approval. Preserve the existing Telegram token and pairing boundaries.
 
+### Pair one Telegram user
+
+Explain this sequence to the user before setup:
+
+1. The user creates or selects a bot with `@BotFather` and keeps the returned
+   bot token private. The token is not a Telegram pairing code or an OpenAI
+   login credential. Explain the token's purpose and use GoAster's local
+   `/env` flow to receive it; never ask the user to paste it into chat.
+2. Prepare the pairing code locally as part of the reviewed setup: generate
+   24 cryptographically random bytes and encode them as unpadded base64url.
+   This gives the user a 192-bit one-time code. Calculate its lowercase
+   hexadecimal SHA-256 digest for setup; send only the digest and bot token to
+   the remote setup process over the approved SSH flow, using stdin rather
+   than SSH arguments. Do not put either secret in a persistent script or
+   chat. The raw code is shown or handed privately to the intended Telegram
+   user.
+3. After the approved setup has written the protected token and verifier and
+   the adapter is polling, the intended user opens a private chat with the
+   bot, sends `/start`, then sends `/start <PAIRING_CODE>`. For example, using
+   the deliberately invalid placeholder `EXAMPLE_CODE_ONLY`, the message is
+   `/start EXAMPLE_CODE_ONLY`. Never use that placeholder as a real code.
+4. The first private account that submits the correct code is paired. GoAster
+   saves that account's numeric Telegram user ID and deletes the verifier.
+   The user should receive a paired confirmation; the adapter only says chat
+   is ready when the remote agent also passes its readiness check. If the
+   agent is not ready, pairing still succeeds, but the user must wait for
+   remote authentication/readiness before chatting.
+
+The code has no automatic expiration; it remains usable until one account
+successfully pairs or an administrator performs a separately approved reset.
+Treat it as a bearer secret while it is pending. Setup refuses to replace
+existing pairing state. After pairing, only the saved numeric Telegram user ID
+is allowed. The adapter forwards that account's ordinary text messages from
+private chats or groups it receives to the loopback agent and returns replies
+to the originating chat. Other users, bot senders, and group messages from a
+different account are ignored. A pairing does not grant SSH access or host
+privileges. Group delivery of ordinary text may require disabling Telegram
+Group Privacy Mode; follow the approval and membership guidance below.
+
+The remote token is stored at `/etc/goaster/telegram-token`; pairing verifier
+and paired user ID are stored under `/var/lib/goaster-telegram/`. Setup
+protects these files with `0600` permissions and their directories with
+`0700` permissions. A paired ID persists across service restarts. Never
+include the token or pairing code in a status report; report only whether
+setup and pairing completed.
+
+Treat writing the token/verifier and starting or restarting the adapter as
+separate remote mutations. Immediately before each, present the exact
+temporary script, target, privilege level, affected paths or service, and
+expected impact, then obtain fresh explicit approval under the safe workflow
+above. Do not assume that approval to install binaries or authenticate the
+agent also approves Telegram setup. The user sends the pairing command only
+after the adapter is running and ready for Telegram polling.
+
 Whenever configuring GoAster's Telegram adapter on an OVH remote, explicitly
 mention the packaged [Telegram BotFather Group Privacy Mode skill](../telegram-group-privacy/SKILL.md).
 If they want GoAster to receive ordinary text messages they send in a group,

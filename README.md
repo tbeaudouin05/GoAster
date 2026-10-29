@@ -196,6 +196,44 @@ that chat is ready. If the adapter was started too early, restart it after
 login. Continue to use the existing private Telegram token and pairing setup;
 neither the OpenAI device code nor the subscription tokens belong in Telegram.
 
+### Telegram user pairing
+
+Telegram pairing is a separate setup step after the remote agent login passes
+the `/healthz` check. Create or select a bot with `@BotFather` and keep its bot
+token private. During the approved remote setup, the token is installed in a
+root-only file; generate a fresh, cryptographically random one-time pairing
+code locally and send the token plus only the code's SHA-256 verifier to the
+remote setup. The code is a Telegram pairing secret, not an OpenAI device
+code. Enter the token only through GoAster's local `/env` flow. Never put the
+token in any chat, SSH command line, or persistent script; never put the
+pairing code in GoAster chat, a Telegram group, an SSH command line, or a
+persistent script. Hand the pairing code to its intended user privately.
+
+The person being paired then opens a **private chat** with the bot, sends
+`/start`, and follows with `/start <PAIRING_CODE>`. For example, if the
+operator privately gives them the placeholder code `EXAMPLE_CODE_ONLY`, they
+send `/start EXAMPLE_CODE_ONLY` in the bot's private chat. The example is not
+a valid credential. The first valid code received from a private Telegram
+account binds that account's numeric Telegram user ID. The adapter removes the
+stored verifier after pairing, and the allowed user remains saved across
+service restarts. There is no automatic code timeout: keep the code private
+and use it only for the intended account. If it may have been exposed, do not
+use it; stop and review a separately approved pairing reset.
+
+After pairing, only that numeric user ID can send ordinary text for the agent
+to process. The paired user may chat privately or in a group where the bot can
+receive messages; group delivery may require Telegram Group Privacy Mode to be
+turned off. Other Telegram accounts are ignored. The adapter forwards text to
+the remote agent and sends the reply back to the originating chat. Pairing
+does not grant SSH access, server administration, or access to another
+Telegram account.
+
+The token installation, pairing-state setup, and service start or restart are
+remote changes: review their exact scope and obtain fresh explicit approval
+immediately before each mutation. For the detailed SSH workflow and the
+BotFather privacy setting, see the
+[OVH remote SSH skill](skills/ovh-remote/SKILL.md).
+
 When configuring Telegram on that remote, the SSH skill directs the agent to
 the packaged
 [Telegram BotFather Group Privacy Mode skill](skills/telegram-group-privacy/SKILL.md),
