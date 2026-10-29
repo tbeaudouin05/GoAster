@@ -88,7 +88,8 @@ func TestCronToolManagesJobsAndPreservesOmittedFields(t *testing.T) {
 }
 
 func TestCronToolSupportsAtAndCronSchedulesAndRejectsAmbiguousAdd(t *testing.T) {
-	jobs, err := scheduler.New(scheduler.Options{Path: filepath.Join(t.TempDir(), "jobs.json")})
+	clock := time.Unix(1000, 0)
+	jobs, err := scheduler.New(scheduler.Options{Path: filepath.Join(t.TempDir(), "jobs.json"), Now: func() time.Time { return clock }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +97,7 @@ func TestCronToolSupportsAtAndCronSchedulesAndRejectsAmbiguousAdd(t *testing.T) 
 	if err := RegisterCronTool(registrar, jobs); err != nil {
 		t.Fatal(err)
 	}
-	atSeconds := time.Now().Add(time.Hour).Unix()
+	atSeconds := int64(3600)
 	result, err := registrar.tool.Handler(context.Background(), `{"action":"add","at_seconds":`+formatInt64(atSeconds)+`,"message":"later"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -105,8 +106,22 @@ func TestCronToolSupportsAtAndCronSchedulesAndRejectsAmbiguousAdd(t *testing.T) 
 	if err := json.Unmarshal([]byte(result), &atJob); err != nil {
 		t.Fatal(err)
 	}
-	if atJob.Kind != scheduler.ScheduleAt || !atJob.DeleteAfterRun {
+	if atJob.Kind != scheduler.ScheduleAt || atJob.AtSeconds != atSeconds || !atJob.DeleteAfterRun || atJob.NextRun == nil || !atJob.NextRun.Equal(clock.Add(time.Duration(atSeconds)*time.Second)) {
 		t.Fatalf("at job = %+v, want delete-after-run", atJob)
+	}
+	if _, err := registrar.tool.Handler(context.Background(), `{"action":"add","at_seconds":0,"message":"invalid"}`); err == nil {
+		t.Fatal("at_seconds=0 unexpectedly succeeded")
+	}
+	updatedAtSeconds := int64(10)
+	result, err = registrar.tool.Handler(context.Background(), `{"action":"update","id":"`+atJob.ID+`","at_seconds":`+formatInt64(updatedAtSeconds)+`}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(result), &atJob); err != nil {
+		t.Fatal(err)
+	}
+	if atJob.AtSeconds != updatedAtSeconds || atJob.NextRun == nil || !atJob.NextRun.Equal(clock.Add(time.Duration(updatedAtSeconds)*time.Second)) {
+		t.Fatalf("updated at job = %+v, want 10 seconds from now", atJob)
 	}
 	result, err = registrar.tool.Handler(context.Background(), `{"action":"add","cron_expr":"0 9 * * 1","message":"weekly"}`)
 	if err != nil {
@@ -121,6 +136,11 @@ func TestCronToolSupportsAtAndCronSchedulesAndRejectsAmbiguousAdd(t *testing.T) 
 	}
 	if _, err := registrar.tool.Handler(context.Background(), `{"action":"add","every_seconds":10,"cron_expr":"* * * * *","message":"ambiguous"}`); err == nil {
 		t.Fatal("ambiguous cron add unexpectedly succeeded")
+	}
+	if description, ok := registrar.tool.Parameters["properties"].(map[string]any)["at_seconds"].(map[string]any)["description"].(string); !ok || description == "" {
+		t.Fatal("at_seconds tool description is missing")
+	} else if description != "Positive number of seconds from now for a one-time chat turn" {
+		t.Fatalf("at_seconds tool description = %q", description)
 	}
 }
 

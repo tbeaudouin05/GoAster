@@ -89,19 +89,12 @@ func TestNewStoreUsesGoAsterCronPath(t *testing.T) {
 
 func TestNextRunComputesAtEveryAndCronSchedules(t *testing.T) {
 	after := time.Date(2026, time.January, 6, 10, 7, 30, 0, time.UTC)
-	at, err := NextRun(Schedule{Kind: ScheduleAt, AtSeconds: time.Date(2026, time.January, 6, 10, 8, 0, 0, time.UTC).Unix()}, after)
+	at, err := NextRun(Schedule{Kind: ScheduleAt, AtSeconds: 30}, after)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !at.Equal(time.Date(2026, time.January, 6, 10, 8, 0, 0, time.UTC)) {
+	if !at.Equal(after.Add(30 * time.Second)) {
 		t.Fatalf("at next run = %v", at)
-	}
-	past, err := NextRun(Schedule{Kind: ScheduleAt, AtSeconds: after.Add(-time.Minute).Unix()}, after)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !past.IsZero() {
-		t.Fatalf("past at next run = %v, want zero", past)
 	}
 
 	every, err := NextRun(Schedule{Kind: ScheduleEvery, EverySeconds: 15}, after)
@@ -139,6 +132,60 @@ func TestNextRunComputesAtEveryAndCronSchedules(t *testing.T) {
 	}
 	if !sunday.Equal(time.Date(2026, time.January, 11, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("numeric Sunday cron next run = %v", sunday)
+	}
+}
+
+func TestAtScheduleRequiresPositiveBoundedSeconds(t *testing.T) {
+	for _, seconds := range []int64{0, -1, maxEverySeconds + 1} {
+		if _, err := NextRun(Schedule{Kind: ScheduleAt, AtSeconds: seconds}, time.Unix(1000, 0)); err == nil {
+			t.Errorf("NextRun accepted at_seconds=%d", seconds)
+		}
+	}
+}
+
+func TestSchedulerAtAddAndUpdateUseSecondsFromNow(t *testing.T) {
+	clock := time.Unix(1000, 0)
+	path := filepath.Join(t.TempDir(), "jobs.json")
+	scheduler, err := New(Options{Path: path, Now: func() time.Time { return clock }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, seconds := range []int64{0, -1, maxEverySeconds + 1} {
+		if _, err := scheduler.Add(Job{Kind: ScheduleAt, AtSeconds: seconds, Message: "invalid"}); err == nil {
+			t.Errorf("Add accepted at_seconds=%d", seconds)
+		}
+	}
+	job, err := scheduler.Add(Job{Kind: ScheduleAt, AtSeconds: 30, Message: "later"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.AtSeconds != 30 || job.NextRun == nil || !job.NextRun.Equal(clock.Add(30*time.Second)) {
+		t.Fatalf("added at job = %+v, want 30 seconds from now", job)
+	}
+
+	updatedSeconds := int64(5)
+	updated, err := scheduler.Update(job.ID, Patch{AtSeconds: &updatedSeconds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AtSeconds != updatedSeconds || updated.NextRun == nil || !updated.NextRun.Equal(clock.Add(5*time.Second)) {
+		t.Fatalf("updated at job = %+v, want 5 seconds from now", updated)
+	}
+	for _, seconds := range []int64{0, -1, maxEverySeconds + 1} {
+		if _, err := scheduler.Update(job.ID, Patch{AtSeconds: &seconds}); err == nil {
+			t.Errorf("Update accepted at_seconds=%d", seconds)
+		}
+	}
+	persisted, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedJobs, err := persisted.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storedJobs) != 1 || storedJobs[0].AtSeconds != updatedSeconds || storedJobs[0].NextRun == nil || !storedJobs[0].NextRun.Equal(clock.Add(5*time.Second)) {
+		t.Fatalf("persisted at job = %+v, want relative seconds and absolute next_run", storedJobs)
 	}
 }
 
@@ -188,9 +235,10 @@ func TestSchedulerManagementAndPartialUpdate(t *testing.T) {
 func TestSchedulerDeletesOneTimeJobAfterExecution(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.json")
 	var gotMessage atomic.Value
+	clock := time.Unix(1000, 0)
 	scheduler, err := New(Options{
 		Path: path,
-		Now:  func() time.Time { return time.Unix(1000, 0) },
+		Now:  func() time.Time { return clock },
 		Executor: func(_ context.Context, message string) error {
 			gotMessage.Store(message)
 			return nil
@@ -199,10 +247,11 @@ func TestSchedulerDeletesOneTimeJobAfterExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := scheduler.Add(Job{Kind: ScheduleAt, AtSeconds: 999, Message: "one time"})
+	job, err := scheduler.Add(Job{Kind: ScheduleAt, AtSeconds: 1, Message: "one time"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	clock = clock.Add(time.Second)
 	if runs := scheduler.RunDue(context.Background()); runs != 1 {
 		t.Fatalf("due runs = %d, want 1", runs)
 	}
@@ -278,7 +327,7 @@ func TestSchedulerLoopWakesAndExecutesDueJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scheduler.Add(Job{Kind: ScheduleAt, AtSeconds: time.Now().Add(-time.Second).Unix(), Message: "wake up"}); err != nil {
+	if _, err := scheduler.Add(Job{Kind: ScheduleAt, AtSeconds: 1, Message: "wake up"}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

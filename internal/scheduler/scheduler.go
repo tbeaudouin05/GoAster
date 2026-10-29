@@ -46,9 +46,10 @@ var (
 // scheduler never interprets the message as a shell command.
 type Executor func(context.Context, string) error
 
-// Schedule describes one supported schedule kind. AtSeconds is a Unix time;
-// EverySeconds is an interval; CronExpr is a five-field cron expression (or a
-// six-field expression that includes seconds).
+// Schedule describes one supported schedule kind. AtSeconds is a positive
+// delay from now; EverySeconds is a recurring interval; CronExpr is a
+// five-field cron expression (or a six-field expression that includes
+// seconds).
 type Schedule struct {
 	Kind         string
 	AtSeconds    int64
@@ -290,7 +291,12 @@ func validateJob(job Job) error {
 func validateSchedule(schedule Schedule) error {
 	switch schedule.Kind {
 	case ScheduleAt:
-		return nil
+		if schedule.AtSeconds <= 0 {
+			return fmt.Errorf("at_seconds must be positive")
+		}
+		if schedule.AtSeconds > maxEverySeconds {
+			return fmt.Errorf("at_seconds is too large")
+		}
 	case ScheduleEvery:
 		if schedule.EverySeconds <= 0 {
 			return fmt.Errorf("every_seconds must be positive")
@@ -308,20 +314,16 @@ func validateSchedule(schedule Schedule) error {
 	return nil
 }
 
-// NextRun computes the first run strictly after after. An at schedule that is
-// already in the past has no future occurrence; the scheduler still executes
-// overdue newly-added at jobs once by retaining their original timestamp.
+// NextRun computes the next run after after. At schedules run after the
+// requested number of seconds; recurring schedules run after their interval
+// or at the next cron expression match.
 func NextRun(schedule Schedule, after time.Time) (time.Time, error) {
 	if err := validateSchedule(schedule); err != nil {
 		return time.Time{}, err
 	}
 	switch schedule.Kind {
 	case ScheduleAt:
-		at := time.Unix(schedule.AtSeconds, 0)
-		if !at.After(after) {
-			return time.Time{}, nil
-		}
-		return at, nil
+		return after.Add(time.Duration(schedule.AtSeconds) * time.Second), nil
 	case ScheduleEvery:
 		return after.Add(time.Duration(schedule.EverySeconds) * time.Second), nil
 	case ScheduleCron:
@@ -332,10 +334,6 @@ func NextRun(schedule Schedule, after time.Time) (time.Time, error) {
 }
 
 func initialNextRun(schedule Schedule, now time.Time) (*time.Time, error) {
-	if schedule.Kind == ScheduleAt {
-		at := time.Unix(schedule.AtSeconds, 0)
-		return &at, nil
-	}
 	next, err := NextRun(schedule, now)
 	if err != nil {
 		return nil, err
@@ -443,6 +441,7 @@ func (s *Scheduler) Add(job Job) (Job, error) {
 	job.RunCount = 0
 	if job.Kind == ScheduleAt {
 		job.DeleteAfterRun = true
+		job.NextRun = nil
 	}
 	if err := validateJob(job); err != nil {
 		return Job{}, err

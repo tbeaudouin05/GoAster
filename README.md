@@ -88,7 +88,7 @@ permissions, so they survive a normal restart. The model uses the built-in
 `disable` actions. Add a job with exactly one of:
 
 ```text
-at_seconds     Unix timestamp for a one-time turn
+at_seconds     positive number of seconds from now for a one-time turn
 every_seconds  positive recurring interval
 cron_expr      five-field cron expression (six fields may include seconds)
 ```

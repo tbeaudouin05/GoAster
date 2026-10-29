@@ -39,7 +39,8 @@ func RegisterCronTool(registrar ToolRegistrar, jobs *scheduler.Scheduler) error 
 				},
 				"at_seconds": map[string]any{
 					"type":        "integer",
-					"description": "Unix timestamp for a one-time chat turn",
+					"minimum":     1,
+					"description": "Positive number of seconds from now for a one-time chat turn",
 				},
 				"every_seconds": map[string]any{
 					"type":        "integer",
