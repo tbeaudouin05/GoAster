@@ -147,9 +147,13 @@ The chat application does not provision OVHcloud resources. To connect to an
 existing OVH remote, use the [OVH remote SSH skill](skills/ovh-remote/SKILL.md).
 It runs approved SSH checks and changes through GoAster's `shell_execute` using
 temporary host scripts, keeps credentials on the host, and requires explicit
-approval immediately before remote mutations. This repository does not include
-an automated OVH installer; the following applies when setting up the packaged
-remote agent and Telegram adapter on an existing host.
+approval immediately before remote mutations. The local package does not need
+Go to bootstrap the remote agent: the skill verifies or installs pinned Go
+1.27.3 on the existing Linux host, clones this repository there, checks out
+commit `46656dd244941025adecde581d8707491badd62f`, builds `goaster-agent` and
+`goaster-telegram` on that host, then installs the resulting binaries. The Go
+archive checksums and remote build steps are documented in the skill. This is a
+manual SSH workflow, not an OVH API provisioner or an agent self-update feature.
 
 The terminal and remote agent require **two independent OpenAI device logins**.
 The local terminal login described above stays local. Never copy or send its
