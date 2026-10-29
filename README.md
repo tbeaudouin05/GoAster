@@ -120,7 +120,11 @@ The chat application does not provision OVHcloud resources. To connect to an
 existing OVH remote, use the [OVH remote SSH skill](skills/ovh-remote/SKILL.md).
 It runs approved SSH checks and changes through GoAster's `shell_execute` using
 temporary host scripts, keeps credentials on the host, and requires explicit
-approval immediately before remote mutations.
+approval immediately before remote mutations. When configuring Telegram on
+that remote, it directs the agent to the packaged
+[Telegram BotFather Group Privacy Mode skill](skills/telegram-group-privacy/SKILL.md),
+which explains the `/setprivacy` → **Turn off** option for users who want
+ordinary group messages.
 
 ## Models and fallback
 
