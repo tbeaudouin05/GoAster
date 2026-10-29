@@ -43,12 +43,19 @@ type Session struct {
 	history       []ChatMessage
 	summary       string
 	store         *SessionStore
+	memory        *MemoryStore
 	startupNotice string
 	contextNotice string
 }
 
 func NewSession(config Config, provider Provider) *Session {
-	return &Session{provider: provider, config: config, active: config.PrimaryModel}
+	return NewSessionWithMemory(config, provider, nil)
+}
+
+// NewSessionWithMemory adds Markdown memory to normal provider requests while
+// keeping it out of conversation history and persisted summaries.
+func NewSessionWithMemory(config Config, provider Provider, memory *MemoryStore) *Session {
+	return &Session{provider: provider, config: config, active: config.PrimaryModel, memory: memory}
 }
 
 func (s *Session) Reply(ctx context.Context, message string) (string, error) {
@@ -122,7 +129,13 @@ func (s *Session) Reply(ctx context.Context, message string) (string, error) {
 		requestMessage = bounded[len(bounded)-1].Content
 	}
 
-	reply, err := s.replyWithHistory(ctx, requestMessage, requestHistory)
+	replyContext := ctx
+	if s.memory != nil {
+		if memoryContext := s.memory.GetMemoryContext(); memoryContext != "" {
+			replyContext = WithMemoryContext(ctx, memoryContext)
+		}
+	}
+	reply, err := s.replyWithHistory(replyContext, requestMessage, requestHistory)
 	if err != nil {
 		return "", err
 	}

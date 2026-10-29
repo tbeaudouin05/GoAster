@@ -48,6 +48,35 @@ to the model. Session storage remains bounded to 8 MiB and 32 KiB per message.
 If the saved conversation is malformed, GoAster moves it aside safely and
 starts a new conversation.
 
+## Markdown memory
+
+GoAster keeps durable Markdown memory separate from `session.json` under the
+default workspace `~/.goaster`:
+
+```text
+~/.goaster/
+├── session.json
+└── memory/
+    ├── MEMORY.md
+    └── YYYYMM/
+        └── YYYYMMDD.md
+```
+
+`memory/MEMORY.md` is protected long-term knowledge. Daily notes are appended
+to the date-based file, with private directories and restrictive file
+permissions; appends are written through an atomic replacement. Normal model
+requests receive `MEMORY.md` and the three most recent daily notes as clearly
+marked Markdown context, newest note first. If the memory files are empty or
+missing, the existing request behavior is unchanged.
+
+Conversation summarization continues to update only the conversation summary
+in `session.json`; it never rewrites `MEMORY.md`. Use the packaged
+[self-improvement-memory-consolidation skill](skills/self-improvement-memory-consolidation/SKILL.md)
+for an optional, user-managed daily maintenance workflow that reviews daily
+notes and promotes only verified durable facts into protected long-term
+memory. Users may invoke it from their own cron or scheduler; GoAster does not
+install or provide a cron subsystem or scheduler implementation.
+
 Enter one message per line. Blank lines are ignored. End the input stream with
 EOF (Ctrl-D on Unix) to exit. Ctrl-C or closing the terminal also stops the
 process where supported. A different credential file can be selected with the

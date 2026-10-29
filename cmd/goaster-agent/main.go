@@ -20,7 +20,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "agent: cannot initialize credential store")
 		os.Exit(1)
 	}
-	server := &http.Server{Addr: "127.0.0.1:8765", Handler: handler(chat.NewCodexProvider(store)), ReadHeaderTimeout: 10 * time.Second}
+	memory := chat.NewMemoryStore("")
+	server := &http.Server{Addr: "127.0.0.1:8765", Handler: handlerWithMemory(chat.NewCodexProvider(store), memory), ReadHeaderTimeout: 10 * time.Second}
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintln(os.Stderr, "agent: server stopped")
 		os.Exit(1)
@@ -28,6 +29,10 @@ func main() {
 }
 
 func handler(provider chat.Provider) http.Handler {
+	return handlerWithMemory(provider, nil)
+}
+
+func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore) http.Handler {
 	var mu sync.Mutex // serialize credential refreshes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +66,7 @@ func handler(provider chat.Provider) http.Handler {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		session := chat.NewSession(chat.Config{PrimaryModel: chat.DefaultPrimaryModel, FallbackModel: chat.DefaultFallbackModel}, provider)
+		session := chat.NewSessionWithMemory(chat.Config{PrimaryModel: chat.DefaultPrimaryModel, FallbackModel: chat.DefaultFallbackModel}, provider, memory)
 		reply, err := session.Reply(r.Context(), request.Message)
 		if err != nil {
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)

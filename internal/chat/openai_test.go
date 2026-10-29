@@ -304,6 +304,38 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 	}
 }
 
+func TestCodexProviderInjectsMemoryIntoNormalInstructions(t *testing.T) {
+	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(Credential{
+		AccessToken: "access-token",
+		AccountID:   "account-123",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request codexRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Codex request: %v", err)
+		}
+		if !strings.Contains(request.Instructions, "# Memory") || !strings.Contains(request.Instructions, "durable fact") {
+			t.Errorf("memory was not included in model instructions: %q", request.Instructions)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
+		fmt.Fprint(w, "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider(store)
+	provider.backendURL = server.URL
+	provider.httpClient = server.Client()
+	ctx := WithMemoryContext(context.Background(), "# Memory\n\n## Long-term Memory\n\ndurable fact")
+	if reply, err := provider.Reply(ctx, "gpt-test", "hello"); err != nil || reply != "ok" {
+		t.Fatalf("reply = %q, error = %v", reply, err)
+	}
+}
+
 func TestCodexProviderSendsConversationHistory(t *testing.T) {
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
 	if err := store.Save(Credential{

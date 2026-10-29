@@ -83,7 +83,11 @@ func NewPersistentSession(config Config, provider Provider) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewSessionWithStore(config, provider, store)
+	memory, err := NewMemoryStoreWithError("")
+	if err != nil {
+		return nil, fmt.Errorf("initialize Markdown memory store: %w", err)
+	}
+	return NewSessionWithStoreAndMemory(config, provider, store, memory)
 }
 
 // NewPersistentSessionAt creates a persistent session at path for isolated
@@ -95,6 +99,13 @@ func NewPersistentSessionAt(config Config, provider Provider, path string) (*Ses
 // NewSessionWithStore loads a session from store without changing the file.
 // A malformed file is quarantined by the store and starts a fresh session.
 func NewSessionWithStore(config Config, provider Provider, store *SessionStore) (*Session, error) {
+	return NewSessionWithStoreAndMemory(config, provider, store, nil)
+}
+
+// NewSessionWithStoreAndMemory loads a persistent conversation and attaches
+// an independent Markdown memory store. Conversation compaction only saves the
+// SessionStore; it never writes the memory store.
+func NewSessionWithStoreAndMemory(config Config, provider Provider, store *SessionStore, memory *MemoryStore) (*Session, error) {
 	if store == nil {
 		return nil, fmt.Errorf("conversation store is nil")
 	}
@@ -102,7 +113,7 @@ func NewSessionWithStore(config Config, provider Provider, store *SessionStore) 
 	if err != nil {
 		return nil, err
 	}
-	session := NewSession(config, provider)
+	session := NewSessionWithMemory(config, provider, memory)
 	session.store = store
 	session.history = cloneChatMessages(loaded.Messages)
 	session.summary = loaded.Summary
