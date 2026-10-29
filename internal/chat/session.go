@@ -611,22 +611,22 @@ func quarantineSessionFile(path string) error {
 }
 
 // lock coordinates all loads (including quarantine) and saves across processes.
-// Never steal an existing lock: after a crash it must be removed manually once
-// no instance is using this store, rather than risking an overlapping writer.
+// Keep the file in place so every opener locks the same inode. The OS releases
+// the lock when the descriptor is closed, including when the process exits.
 func (s *SessionStore) lock() (func(), error) {
 	if err := validateSessionDirectory(filepath.Dir(s.Path), true); err != nil {
 		return nil, err
 	}
 	path := s.Path + ".lock"
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("lock conversation state (another instance may be using it; a crash may leave %s): %w", path, err)
+		return nil, fmt.Errorf("open conversation lock: %w", err)
 	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("close conversation lock: %w", err)
+	if err := lockSessionFile(file); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock conversation state (another instance may be using it): %w", err)
 	}
-	return func() { _ = os.Remove(path) }, nil
+	return func() { _ = file.Close() }, nil
 }
 
 func sessionVersion(path string) ([sha256.Size]byte, error) {

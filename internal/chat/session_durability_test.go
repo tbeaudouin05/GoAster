@@ -195,6 +195,105 @@ func TestSessionStoreLockPreventsLoadAndSave(t *testing.T) {
 	}
 }
 
+// The child deliberately does not close its lock: process exit must release it.
+func TestSessionStoreProcessLockHolder(t *testing.T) {
+	path := os.Getenv("GOASTER_SESSION_LOCK_TEST_PATH")
+	if path == "" {
+		return
+	}
+	unlock, err := NewSessionStoreAt(path).lock()
+	if err != nil {
+		os.Exit(4)
+	}
+	defer unlock()
+	fmt.Println("ready")
+	if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
+		os.Exit(4)
+	}
+	os.Exit(0)
+}
+
+func TestSessionStoreLockReleasedOnProcessExit(t *testing.T) {
+	for _, kill := range []bool{false, true} {
+		t.Run(fmt.Sprintf("killed=%t", kill), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.json")
+			cmd := exec.Command(os.Args[0], "-test.run=^TestSessionStoreProcessLockHolder$")
+			cmd.Env = append(os.Environ(), "GOASTER_SESSION_LOCK_TEST_PATH="+path)
+			input, err := cmd.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			output, err := cmd.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+			if line, err := bufio.NewReader(output).ReadString('\n'); err != nil || line != "ready\n" {
+				t.Fatalf("child ready: %q, %v", line, err)
+			}
+			store := NewSessionStoreAt(path)
+			if _, err := store.Load(); err == nil {
+				t.Fatal("load ignored another process's lock")
+			}
+			if err := store.Save(nil); err == nil {
+				t.Fatal("save ignored another process's lock")
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("locked operation changed state: %v", err)
+			}
+			if kill {
+				if err := cmd.Process.Kill(); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := fmt.Fprintln(input, "exit"); err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Wait(); !kill && err != nil {
+				t.Fatalf("child exit: %v", err)
+			}
+			// Reuse the existing lock file without deleting or replacing it.
+			if _, err := store.Load(); err != nil {
+				t.Fatalf("load after process exit: %v", err)
+			}
+			if err := store.Save(nil); err != nil {
+				t.Fatalf("save after process exit: %v", err)
+			}
+		})
+	}
+}
+
+func TestSessionStoreHoldsLockThroughSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	store := NewSessionStoreAt(path)
+	called := false
+	store.syncDirectory = func(directory string) error {
+		called = true
+		other := NewSessionStoreAt(path)
+		if _, err := other.Load(); err == nil {
+			t.Fatal("load succeeded before save finished")
+		}
+		if err := other.Save(nil); err == nil {
+			t.Fatal("save succeeded before save finished")
+		}
+		return syncSessionDirectory(directory)
+	}
+	if err := store.Save(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("save did not sync directory")
+	}
+	unlock, err := store.lock()
+	if err != nil {
+		t.Fatalf("lock held after save: %v", err)
+	}
+	unlock()
+}
+
 func TestSessionStoreConcurrentWriters(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.json")
 	stores := []*SessionStore{NewSessionStoreAt(path), NewSessionStoreAt(path)}
@@ -260,10 +359,14 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 				wantHistory = cloneChatMessages(session.history[maxSessionMessages-recentMessagesToKeep+1:])
 				wantSummary = "important earlier facts"
 			}
+			var unlock func()
 			provider.beforeReply = func() {
-				if err := os.WriteFile(path+".lock", nil, 0600); err != nil {
+				var err error
+				unlock, err = session.store.lock()
+				if err != nil {
 					t.Fatal(err)
 				}
+				t.Cleanup(unlock)
 			}
 			reply, err := session.Reply(context.Background(), "undisplayed question")
 			if err == nil || reply != "" {
@@ -272,9 +375,7 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 			if !reflect.DeepEqual(session.history, wantHistory) || session.summary != wantSummary {
 				t.Fatalf("failed save retained turn or lost checkpoint: %q, %+v", session.summary, session.history)
 			}
-			if err := os.Remove(path + ".lock"); err != nil {
-				t.Fatal(err)
-			}
+			unlock()
 			provider.beforeReply = nil
 			if _, err := session.Reply(context.Background(), "retry question"); err != nil {
 				t.Fatal(err)
@@ -343,9 +444,11 @@ func TestSessionSaveReportsDirectorySyncFailure(t *testing.T) {
 	if err := session.store.Save(nil); err == nil {
 		t.Fatal("uncertain replacement allowed another write without reload")
 	}
-	if _, err := os.Stat(path + ".lock"); !errors.Is(err, os.ErrNotExist) {
+	unlock, err := session.store.lock()
+	if err != nil {
 		t.Fatalf("lock leaked: %v", err)
 	}
+	unlock()
 	temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".session-*.tmp"))
 	if err != nil || len(temps) != 0 {
 		t.Fatalf("temporary files = %v, %v", temps, err)
