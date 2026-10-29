@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,6 +44,7 @@ type Session struct {
 	history       []ChatMessage
 	summary       string
 	store         *SessionStore
+	storeVersion  [sha256.Size]byte // Expected persisted version for this session.
 	memory        *MemoryStore
 	startupNotice string
 	contextNotice string
@@ -96,7 +98,7 @@ func (s *Session) Reply(ctx context.Context, message string) (string, error) {
 			// request, without recording a user turn that might fail.
 			previousTurns := cloneChatMessages(candidate[:len(candidate)-1])
 			if s.store != nil {
-				if err := s.store.saveState(summary, previousTurns); err != nil {
+				if err := s.store.saveStateWithVersion(summary, previousTurns, &s.storeVersion); err != nil {
 					return "", fmt.Errorf("save conversation state: %w", err)
 				}
 			}
@@ -146,16 +148,16 @@ func (s *Session) Reply(ctx context.Context, message string) (string, error) {
 		completed, completedTrimmed = boundChatHistory(completedCandidate)
 	}
 	completed, completedBudgetTrimmed := boundSessionMessages(summary, completed, false, maxContextTokens, maxSessionMessages)
-	s.history = completed
-	s.summary = summary
 	if completedTrimmed || completedBudgetTrimmed {
 		s.contextNotice = contextTrimNotice
 	}
 	if s.store != nil {
-		if err := s.store.saveState(s.summary, s.history); err != nil {
+		if err := s.store.saveStateWithVersion(summary, completed, &s.storeVersion); err != nil {
 			return "", fmt.Errorf("save conversation state: %w", err)
 		}
 	}
+	s.history = completed
+	s.summary = summary
 	return reply, nil
 }
 
