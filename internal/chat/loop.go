@@ -44,9 +44,10 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 	}
 	w := bufio.NewWriter(output)
 	status := func() {
-		fmt.Fprintf(w, "Active model: %s\n", session.active)
-		if session.reason != "" {
-			fmt.Fprintf(w, "Fallback reason: %s\n", session.reason)
+		model, reason := session.modelStatus()
+		fmt.Fprintf(w, "Active model: %s\n", model)
+		if reason != "" {
+			fmt.Fprintf(w, "Fallback reason: %s\n", reason)
 		}
 	}
 	fmt.Fprintf(w, "GoAster — %s\n", session.description())
@@ -88,12 +89,13 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			}
 			continue
 		}
-		previousModel := session.active
+		previousModel, _ := session.modelStatus()
 		reply, err := session.Reply(ctx, message)
 		if notice := session.consumeContextNotice(); notice != "" {
 			fmt.Fprintf(w, "Context notice: %s\n", notice)
 		}
-		if session.active != previousModel {
+		model, _ := session.modelStatus()
+		if model != previousModel {
 			status()
 		}
 		if err != nil {
@@ -102,17 +104,27 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			}
 			return err
 		}
-		fmt.Fprintf(w, "assistant [%s]> %s\n", session.active, reply)
+		fmt.Fprintf(w, "assistant [%s]> %s\n", model, reply)
 	}
 }
 
+func (s *Session) modelStatus() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active, s.reason
+}
+
 func (s *Session) consumeStartupNotice() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	notice := s.startupNotice
 	s.startupNotice = ""
 	return notice
 }
 
 func (s *Session) consumeContextNotice() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	notice := s.contextNotice
 	s.contextNotice = ""
 	return notice

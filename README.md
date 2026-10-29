@@ -37,16 +37,16 @@ GoAster continues directly into chat. Existing credentials are refreshed when
 needed and then chat starts directly.
 
 The terminal conversation is saved automatically in `~/.goaster/session.json`
-with `0600` permissions. It contains only bounded user/assistant conversation
-text; OAuth credentials and tool-call internals are not copied into it. Older
-messages or oversized message text are trimmed automatically when the fixed
-300,000-token context window is reached, matching PicoClaw's `context_window`
-default. PicoClaw's `summarize_token_percent` default is 75%; GoAster does not
-yet summarize, so it retains its safe trimming behavior at the full context
-limit. Trimming is reported in the terminal and to the model. Session storage
-remains bounded to 8 MiB, 256 messages, and 32 KiB per message. If the saved
-conversation is malformed, GoAster moves it aside safely and starts a new
-conversation.
+with `0600` permissions. It contains bounded user/assistant conversation text
+and any generated summary; OAuth credentials and tool-call internals are not
+copied into it. At 75% of the fixed 300,000-token context window, or when the
+256-message limit is reached, the active subscription-backed model summarizes
+older messages while recent messages remain available. The summary is saved
+and included in future requests. If summarization fails, GoAster trims older
+messages to keep context bounded and reports the trimming in the terminal and
+to the model. Session storage remains bounded to 8 MiB and 32 KiB per message.
+If the saved conversation is malformed, GoAster moves it aside safely and
+starts a new conversation.
 
 Enter one message per line. Blank lines are ignored. End the input stream with
 EOF (Ctrl-D on Unix) to exit. Ctrl-C or closing the terminal also stops the

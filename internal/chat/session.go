@@ -22,11 +22,13 @@ const (
 	maxSessionFileBytes    = 8 << 20
 	maxSessionMessages     = 256
 	maxSessionMessageBytes = 32 << 10
-	// These fixed defaults track PicoClaw. GoAster trims against the full
-	// context window until it has a summarizer that can use the 75% trigger.
+	maxSummaryBytes        = 8 << 10
+	// These fixed defaults track PicoClaw's context window and summary trigger.
 	contextWindowTokens   = 300_000
 	summarizeTokenPercent = 75
 	maxContextTokens      = contextWindowTokens
+	summarizeTokens       = contextWindowTokens * summarizeTokenPercent / 100
+	recentMessagesToKeep  = 16
 )
 
 const (
@@ -44,12 +46,14 @@ type SessionStore struct {
 // an invalid file was moved aside without exposing its contents.
 type SessionLoadResult struct {
 	Messages  []ChatMessage
+	Summary   string
 	Recovered bool
 	Trimmed   bool
 }
 
 type sessionFile struct {
 	Version  int           `json:"version"`
+	Summary  string        `json:"summary,omitempty"`
 	Messages []ChatMessage `json:"messages"`
 }
 
@@ -101,6 +105,7 @@ func NewSessionWithStore(config Config, provider Provider, store *SessionStore) 
 	session := NewSession(config, provider)
 	session.store = store
 	session.history = cloneChatMessages(loaded.Messages)
+	session.summary = loaded.Summary
 	if loaded.Recovered {
 		session.startupNotice = "The saved conversation was invalid, so it was moved aside and a new conversation was started."
 	} else if loaded.Trimmed {
@@ -168,16 +173,22 @@ func (s *SessionStore) Load() (SessionLoadResult, error) {
 	if err != nil {
 		return s.recoverInvalid()
 	}
-	bounded, budgetTrimmed := trimNormalizedChatMessages(messages, maxContextTokens)
+	summary, summaryTrimmed := normalizeSummary(disk.Summary)
+	bounded, budgetTrimmed := boundSessionMessages(summary, messages, false, maxContextTokens, maxSessionMessages)
 	return SessionLoadResult{
 		Messages: bounded,
-		Trimmed:  normalized || budgetTrimmed,
+		Summary:  summary,
+		Trimmed:  normalized || summaryTrimmed || budgetTrimmed,
 	}, nil
 }
 
 // Save atomically replaces the private conversation file. It trims the input
 // before encoding, so callers cannot make persisted history grow unbounded.
 func (s *SessionStore) Save(messages []ChatMessage) error {
+	return s.saveState("", messages)
+}
+
+func (s *SessionStore) saveState(summary string, messages []ChatMessage) error {
 	if err := s.validatePath(); err != nil {
 		return err
 	}
@@ -185,8 +196,9 @@ func (s *SessionStore) Save(messages []ChatMessage) error {
 	if err != nil {
 		return fmt.Errorf("conversation contains unsupported message data")
 	}
-	bounded, _ := trimNormalizedChatMessages(normalized, maxContextTokens)
-	data, err := encodeSessionFile(bounded)
+	summary, _ = normalizeSummary(summary)
+	bounded, _ := boundSessionMessages(summary, normalized, false, maxContextTokens, maxSessionMessages)
+	data, err := encodeSessionFile(summary, bounded)
 	if err != nil {
 		return fmt.Errorf("encode conversation state: %w", err)
 	}
@@ -267,8 +279,8 @@ func decodeSessionFile(data []byte) (sessionFile, error) {
 	return disk, nil
 }
 
-func encodeSessionFile(messages []ChatMessage) ([]byte, error) {
-	data, err := json.MarshalIndent(sessionFile{Version: sessionFormatVersion, Messages: messages}, "", "  ")
+func encodeSessionFile(summary string, messages []ChatMessage) ([]byte, error) {
+	data, err := json.MarshalIndent(sessionFile{Version: sessionFormatVersion, Summary: summary, Messages: messages}, "", "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -316,6 +328,10 @@ func boundChatHistory(messages []ChatMessage) ([]ChatMessage, bool) {
 }
 
 func trimNormalizedChatMessages(messages []ChatMessage, budget int) ([]ChatMessage, bool) {
+	return trimNormalizedChatMessagesToLimit(messages, budget, maxSessionMessages)
+}
+
+func trimNormalizedChatMessagesToLimit(messages []ChatMessage, budget, maxMessages int) ([]ChatMessage, bool) {
 	if len(messages) == 0 {
 		return nil, false
 	}
@@ -342,8 +358,8 @@ func trimNormalizedChatMessages(messages []ChatMessage, budget int) ([]ChatMessa
 		keptReverse = append(keptReverse, message)
 		used += cost
 	}
-	if len(keptReverse) > maxSessionMessages {
-		keptReverse = keptReverse[:maxSessionMessages]
+	if len(keptReverse) > maxMessages {
+		keptReverse = keptReverse[:maxMessages]
 		trimmed = true
 	}
 	if len(keptReverse) == 0 {
@@ -357,6 +373,35 @@ func trimNormalizedChatMessages(messages []ChatMessage, budget int) ([]ChatMessa
 		bounded[len(keptReverse)-1-index] = keptReverse[index]
 	}
 	return bounded, trimmed || len(bounded) != len(messages)
+}
+
+func normalizeSummary(summary string) (string, bool) {
+	trimmed := false
+	if !utf8.ValidString(summary) {
+		summary = strings.ToValidUTF8(summary, "\uFFFD")
+		trimmed = true
+	}
+	summary = strings.TrimSpace(summary)
+	summary, limited := limitMessageText(summary, maxSummaryBytes)
+	return summary, trimmed || limited
+}
+
+func summaryMessage(summary string) ChatMessage {
+	return ChatMessage{Role: "system", Content: "Summary of earlier conversation:\n" + summary}
+}
+
+// Reserve room for the summary and any trimming notice so neither can be
+// displaced by recent messages when the provider applies its own bounds.
+func boundSessionMessages(summary string, messages []ChatMessage, notice bool, budget, maxMessages int) ([]ChatMessage, bool) {
+	if summary != "" {
+		budget -= estimateMessageTokens(summaryMessage(summary))
+		maxMessages--
+	}
+	if notice {
+		budget -= estimateMessageTokens(ChatMessage{Role: "system", Content: contextTrimNotice})
+		maxMessages--
+	}
+	return trimNormalizedChatMessagesToLimit(messages, budget, maxMessages)
 }
 
 func estimateMessageTokens(message ChatMessage) int {
@@ -373,7 +418,7 @@ func historyWithContextNotice(messages []ChatMessage) []ChatMessage {
 	if budget < 1 {
 		budget = 1
 	}
-	bounded, _ := trimNormalizedChatMessages(messages, budget)
+	bounded, _ := trimNormalizedChatMessagesToLimit(messages, budget, maxSessionMessages-1)
 	result := make([]ChatMessage, 0, len(bounded)+1)
 	result = append(result, notice)
 	result = append(result, bounded...)

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
+	"unicode/utf8"
 )
 
 // Providers wrap ErrModelUnavailable when switching models may help.
@@ -14,7 +17,8 @@ type Provider interface {
 }
 
 // ChatMessage is a conversation message that can be sent to a history-aware
-// provider. Session persistence stores only user and assistant messages.
+// provider. Session persistence stores user and assistant messages separately
+// from the summary supplied as context.
 type ChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -26,12 +30,18 @@ type HistoryProvider interface {
 	ReplyWithHistory(ctx context.Context, model string, history []ChatMessage) (string, error)
 }
 
+type conversationSummarizer interface {
+	SummarizeConversation(ctx context.Context, model, previousSummary string, messages []ChatMessage) (string, error)
+}
+
 type Session struct {
+	mu            sync.Mutex
 	provider      Provider
 	config        Config
 	active        string
 	reason        string
 	history       []ChatMessage
+	summary       string
 	store         *SessionStore
 	startupNotice string
 	contextNotice string
@@ -42,14 +52,71 @@ func NewSession(config Config, provider Provider) *Session {
 }
 
 func (s *Session) Reply(ctx context.Context, message string) (string, error) {
+	// A session is a single ordered conversation. Serializing its turns also
+	// ensures that only one caller summarizes a given history.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.contextNotice = ""
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	candidate := append(cloneChatMessages(s.history), ChatMessage{Role: "user", Content: message})
-	bounded, trimmed := boundChatHistory(candidate)
-	requestHistory := bounded
+	normalized, trimmed, err := normalizeChatMessages(candidate, false)
+	if err != nil {
+		normalized, trimmed = boundChatHistory(candidate)
+	}
+	candidate = normalized
+	summary := s.summary
+	if shouldSummarize(summary, candidate) {
+		keepFrom := len(candidate) - recentMessagesToKeep
+		provider, canSummarize := s.provider.(conversationSummarizer)
+		_, canUseHistory := s.provider.(HistoryProvider)
+		var compact string
+		if canSummarize && canUseHistory {
+			compact, err = provider.SummarizeConversation(ctx, s.active, summary, cloneChatMessages(candidate[:keepFrom]))
+		} else {
+			err = errors.New("provider cannot summarize conversation history")
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		compact = strings.TrimSpace(compact)
+		if err == nil && compact != "" && utf8.ValidString(compact) && len(compact) <= maxSummaryBytes {
+			summary = compact
+			candidate = cloneChatMessages(candidate[keepFrom:])
+			// Checkpoint the compacted old conversation before the next model
+			// request, without recording a user turn that might fail.
+			previousTurns := cloneChatMessages(candidate[:len(candidate)-1])
+			if s.store != nil {
+				if err := s.store.saveState(summary, previousTurns); err != nil {
+					return "", fmt.Errorf("save conversation state: %w", err)
+				}
+			}
+			s.summary, s.history = summary, previousTurns
+		} else {
+			// Leave room for the next turns if compaction is unavailable. The
+			// prior summary remains useful even when newer history is trimmed.
+			var fallbackTrimmed bool
+			candidate, fallbackTrimmed = boundSessionMessages(summary, candidate, true, maxContextTokens/2, maxSessionMessages/2)
+			trimmed = trimmed || fallbackTrimmed
+		}
+	}
+
+	bounded, budgetTrimmed := boundSessionMessages(summary, candidate, trimmed, maxContextTokens, maxSessionMessages)
+	trimmed = trimmed || budgetTrimmed
 	if trimmed {
-		requestHistory = historyWithContextNotice(bounded)
+		bounded, _ = boundSessionMessages(summary, candidate, true, maxContextTokens, maxSessionMessages)
 		s.contextNotice = contextTrimNotice
 	}
+	requestHistory := make([]ChatMessage, 0, len(bounded)+2)
+	if summary != "" {
+		requestHistory = append(requestHistory, summaryMessage(summary))
+	}
+	if trimmed {
+		requestHistory = append(requestHistory, ChatMessage{Role: "system", Content: contextTrimNotice})
+	}
+	requestHistory = append(requestHistory, bounded...)
 	requestMessage := message
 	if len(bounded) > 0 {
 		requestMessage = bounded[len(bounded)-1].Content
@@ -60,17 +127,39 @@ func (s *Session) Reply(ctx context.Context, message string) (string, error) {
 		return "", err
 	}
 
-	completed, completedTrimmed := boundChatHistory(append(cloneChatMessages(bounded), ChatMessage{Role: "assistant", Content: reply}))
+	completedCandidate := append(cloneChatMessages(bounded), ChatMessage{Role: "assistant", Content: reply})
+	completed, completedTrimmed, err := normalizeChatMessages(completedCandidate, false)
+	if err != nil {
+		completed, completedTrimmed = boundChatHistory(completedCandidate)
+	}
+	completed, completedBudgetTrimmed := boundSessionMessages(summary, completed, false, maxContextTokens, maxSessionMessages)
 	s.history = completed
-	if completedTrimmed {
+	s.summary = summary
+	if completedTrimmed || completedBudgetTrimmed {
 		s.contextNotice = contextTrimNotice
 	}
 	if s.store != nil {
-		if err := s.store.Save(s.history); err != nil {
+		if err := s.store.saveState(s.summary, s.history); err != nil {
 			return "", fmt.Errorf("save conversation state: %w", err)
 		}
 	}
 	return reply, nil
+}
+
+func shouldSummarize(summary string, messages []ChatMessage) bool {
+	if len(messages) <= recentMessagesToKeep {
+		return false
+	}
+	count := len(messages)
+	tokens := 0
+	if summary != "" {
+		count++
+		tokens += estimateMessageTokens(summaryMessage(summary))
+	}
+	for _, message := range messages {
+		tokens += estimateMessageTokens(message)
+	}
+	return count >= maxSessionMessages || tokens >= summarizeTokens
 }
 
 func (s *Session) reply(ctx context.Context, message string) (string, error) {
