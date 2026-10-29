@@ -44,5 +44,9 @@ func run(ctx context.Context, args []string, input io.Reader, output, errorOutpu
 	if err := codexProvider.EnsureAuth(ctx, output); err != nil {
 		return err
 	}
-	return chat.RunWithEnvStore(ctx, input, output, chat.NewSession(runtimeConfig.Config, codexProvider), environmentStore)
+	session, err := chat.NewPersistentSession(runtimeConfig.Config, codexProvider)
+	if err != nil {
+		return fmt.Errorf("initialize conversation session: %w", err)
+	}
+	return chat.RunWithEnvStore(ctx, input, output, session, environmentStore)
 }

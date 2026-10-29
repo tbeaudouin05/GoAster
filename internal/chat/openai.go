@@ -695,6 +695,25 @@ func (p *CodexProvider) EnsureAuth(ctx context.Context, outputs ...io.Writer) er
 }
 
 func (p *CodexProvider) Reply(ctx context.Context, model, message string) (string, error) {
+	return p.ReplyWithHistory(ctx, model, []ChatMessage{{Role: "user", Content: message}})
+}
+
+// ReplyWithHistory sends the bounded terminal conversation to the
+// subscription-backed Codex service. The optional history seam keeps callers
+// that only implement Provider compatible with Session.
+func (p *CodexProvider) ReplyWithHistory(ctx context.Context, model string, history []ChatMessage) (string, error) {
+	normalized, normalizedTrimmed, err := normalizeChatMessages(history, true)
+	if err != nil {
+		return "", fmt.Errorf("invalid conversation history")
+	}
+	bounded, trimmed := trimNormalizedChatMessages(normalized, maxContextTokens)
+	if (normalizedTrimmed || trimmed) && !containsContextNotice(bounded) {
+		bounded = historyWithContextNotice(bounded)
+	}
+	return p.replyWithHistory(ctx, model, bounded)
+}
+
+func (p *CodexProvider) replyWithHistory(ctx context.Context, model string, history []ChatMessage) (string, error) {
 	credential, err := p.auth.Credential(ctx)
 	if err != nil {
 		if errors.Is(err, ErrLoginRequired) {
@@ -702,13 +721,13 @@ func (p *CodexProvider) Reply(ctx context.Context, model, message string) (strin
 		}
 		return "", fmt.Errorf("OpenAI subscription authentication failed: %w", err)
 	}
-	reply, status, err := p.requestReply(ctx, credential, model, message)
+	reply, status, err := p.requestReply(ctx, credential, model, history)
 	if status == http.StatusUnauthorized {
 		refreshed, refreshErr := p.auth.Refresh(ctx)
 		if refreshErr != nil {
 			return "", fmt.Errorf("OpenAI session expired; restart GoAster to authenticate: %w", refreshErr)
 		}
-		reply, status, err = p.requestReply(ctx, refreshed, model, message)
+		reply, status, err = p.requestReply(ctx, refreshed, model, history)
 	}
 	if err != nil {
 		if status == http.StatusUnauthorized {
@@ -954,12 +973,8 @@ func (p *CodexProvider) executeWebFetchTool(ctx context.Context, arguments strin
 	return fmt.Sprintf("web_fetch error: %v", err), nil
 }
 
-func (p *CodexProvider) requestReply(ctx context.Context, credential Credential, model, message string) (string, int, error) {
-	input := []codexInputItem{{
-		Type:    "message",
-		Role:    "user",
-		Content: []codexInputContent{{Type: "input_text", Text: message}},
-	}}
+func (p *CodexProvider) requestReply(ctx context.Context, credential Credential, model string, history []ChatMessage) (string, int, error) {
+	input := codexInputFromHistory(history)
 	webSearchCallCount := 0
 	webFetchCallCount := 0
 	for {
@@ -1019,6 +1034,22 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 		input = append(input, callItems...)
 		input = append(input, outputItems...)
 	}
+}
+
+func codexInputFromHistory(history []ChatMessage) []codexInputItem {
+	input := make([]codexInputItem, 0, len(history))
+	for _, message := range history {
+		contentType := "input_text"
+		if message.Role == "assistant" {
+			contentType = "output_text"
+		}
+		input = append(input, codexInputItem{
+			Type:    "message",
+			Role:    message.Role,
+			Content: []codexInputContent{{Type: contentType, Text: message.Content}},
+		})
+	}
+	return input
 }
 
 func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential, model string, input []codexInputItem) (codexParsedResponse, int, error) {

@@ -304,6 +304,55 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 	}
 }
 
+func TestCodexProviderSendsConversationHistory(t *testing.T) {
+	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(Credential{
+		AccessToken: "access-token",
+		AccountID:   "account-123",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request codexRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Codex request: %v", err)
+		}
+		if len(request.Input) != 3 {
+			t.Errorf("history input length = %d, want 3: %+v", len(request.Input), request.Input)
+		} else {
+			if request.Input[0].Role != "user" || request.Input[0].Content[0].Type != "input_text" || request.Input[0].Content[0].Text != "first" {
+				t.Errorf("first history item = %+v", request.Input[0])
+			}
+			if request.Input[1].Role != "assistant" || request.Input[1].Content[0].Type != "output_text" || request.Input[1].Content[0].Text != "answer" {
+				t.Errorf("assistant history item = %+v", request.Input[1])
+			}
+			if request.Input[2].Role != "user" || request.Input[2].Content[0].Text != "second" {
+				t.Errorf("last history item = %+v", request.Input[2])
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
+		fmt.Fprint(w, "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider(store)
+	provider.backendURL = server.URL + "/responses"
+	provider.httpClient = server.Client()
+	reply, err := provider.ReplyWithHistory(context.Background(), "gpt-test", []ChatMessage{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "answer"},
+		{Role: "user", Content: "second"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply != "ok" {
+		t.Fatalf("reply = %q, want ok", reply)
+	}
+}
+
 func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testing.T) {
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "missing-auth.json")}
 	var requests atomic.Int32

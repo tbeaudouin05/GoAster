@@ -52,6 +52,9 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 	fmt.Fprintf(w, "GoAster — %s\n", session.description())
 	fmt.Fprintln(w, "Type a message, then press Enter.")
 	status()
+	if notice := session.consumeStartupNotice(); notice != "" {
+		fmt.Fprintf(w, "Notice: %s\n", notice)
+	}
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	for {
@@ -87,6 +90,9 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		}
 		previousModel := session.active
 		reply, err := session.Reply(ctx, message)
+		if notice := session.consumeContextNotice(); notice != "" {
+			fmt.Fprintf(w, "Context notice: %s\n", notice)
+		}
 		if session.active != previousModel {
 			status()
 		}
@@ -98,6 +104,18 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		}
 		fmt.Fprintf(w, "assistant [%s]> %s\n", session.active, reply)
 	}
+}
+
+func (s *Session) consumeStartupNotice() string {
+	notice := s.startupNotice
+	s.startupNotice = ""
+	return notice
+}
+
+func (s *Session) consumeContextNotice() string {
+	notice := s.contextNotice
+	s.contextNotice = ""
+	return notice
 }
 
 func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, next string) error {

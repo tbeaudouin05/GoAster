@@ -36,6 +36,14 @@ tokens and ChatGPT account ID are saved locally in `~/.goaster/auth.json` with
 GoAster continues directly into chat. Existing credentials are refreshed when
 needed and then chat starts directly.
 
+The terminal conversation is saved automatically in `~/.goaster/session.json`
+with `0600` permissions. It contains only bounded user/assistant conversation
+text; OAuth credentials and tool-call internals are not copied into it. Older
+messages or oversized message text are trimmed automatically when the fixed
+context budget is reached, and GoAster reports that trimming in the terminal
+and to the model. If the saved conversation is malformed, GoAster moves it
+aside safely and starts a new conversation.
+
 Enter one message per line. Blank lines are ignored. End the input stream with
 EOF (Ctrl-D on Unix) to exit. Ctrl-C or closing the terminal also stops the
 process where supported. A different credential file can be selected with the
