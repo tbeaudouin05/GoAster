@@ -17,6 +17,8 @@ Check the relevant service docs or dashboard for each variable's purpose and whe
 Enter secret values only through this local environment-file flow; never paste them into chat.
 GoAster masks values and saves confirmed settings locally.`
 
+const environmentFileCommand = "/env-file"
+
 // Run accepts one message per line and ends the session at EOF.
 func Run(ctx context.Context, input io.Reader, output io.Writer, session *Session) error {
 	store, err := localenv.NewStore()
@@ -79,7 +81,23 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			continue
 		}
 		if message == "/env" {
-			if err := runEnvironmentFileSetup(scanner, w, store, picker, ""); err != nil {
+			if err := runEnvironmentFileSetup(scanner, w, store, picker, "", ""); err != nil {
+				if flushErr := w.Flush(); flushErr != nil {
+					return flushErr
+				}
+				return err
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			continue
+		}
+		if isEnvironmentFileCommand(message) {
+			path, ok := environmentFileCommandPath(message)
+			if !ok {
+				return fmt.Errorf("expected exactly one non-empty file path")
+			}
+			if err := runEnvironmentFileSetup(scanner, w, store, picker, path, ""); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -131,27 +149,64 @@ func (s *Session) consumeContextNotice() string {
 	return notice
 }
 
-func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, next string) error {
-	fmt.Fprintln(output, environmentFileGuidance)
-	if err := output.Flush(); err != nil {
-		return err
+func isEnvironmentFileCommand(message string) bool {
+	if message == environmentFileCommand {
+		return true
 	}
-	path, err := picker.Pick()
-	if err != nil {
-		if errors.Is(err, ErrEnvironmentFilePickerCanceled) {
+	if !strings.HasPrefix(message, environmentFileCommand) {
+		return false
+	}
+	rest := message[len(environmentFileCommand):]
+	return len(strings.TrimSpace(rest)) < len(rest)
+}
+
+func environmentFileCommandPath(message string) (string, bool) {
+	arguments := strings.TrimSpace(strings.TrimPrefix(message, environmentFileCommand))
+	if arguments == "" {
+		return "", false
+	}
+	if arguments[0] == '\'' || arguments[0] == '"' {
+		quote := arguments[0]
+		if len(arguments) < 2 || arguments[len(arguments)-1] != quote {
+			return "", false
+		}
+		path := arguments[1 : len(arguments)-1]
+		if strings.TrimSpace(path) == "" || strings.ContainsRune(path, rune(quote)) {
+			return "", false
+		}
+		return path, true
+	}
+	fields := strings.Fields(arguments)
+	if len(fields) != 1 || fields[0] == "" {
+		return "", false
+	}
+	return fields[0], true
+}
+
+func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, path string, next string) error {
+	if path == "" {
+		fmt.Fprintln(output, environmentFileGuidance)
+		if err := output.Flush(); err != nil {
+			return err
+		}
+		var err error
+		path, err = picker.Pick()
+		if err != nil {
+			if errors.Is(err, ErrEnvironmentFilePickerCanceled) {
+				fmt.Fprintln(output, "Environment setup canceled.")
+				return nil
+			}
+			if errors.Is(err, errEnvironmentFilePickerUnavailable) {
+				fmt.Fprintln(output, "File picker unavailable. Install zenity (or a compatible package such as qarma or matedialog); for example: sudo apt install zenity")
+				return nil
+			}
+			fmt.Fprintf(output, "Environment file selection failed: %v\n", err)
+			return nil
+		}
+		if strings.TrimSpace(path) == "" {
 			fmt.Fprintln(output, "Environment setup canceled.")
 			return nil
 		}
-		if errors.Is(err, errEnvironmentFilePickerUnavailable) {
-			fmt.Fprintln(output, "File picker unavailable. Install zenity (or a compatible package such as qarma or matedialog); for example: sudo apt install zenity")
-			return nil
-		}
-		fmt.Fprintf(output, "Environment file selection failed: %v\n", err)
-		return nil
-	}
-	if strings.TrimSpace(path) == "" {
-		fmt.Fprintln(output, "Environment setup canceled.")
-		return nil
 	}
 
 	values, err := localenv.LoadFile(path)

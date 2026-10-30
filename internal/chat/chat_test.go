@@ -155,7 +155,7 @@ func TestLoopShowsFallback(t *testing.T) {
 	}
 }
 
-func TestEnvPickerCancellationPreservesSavedValues(t *testing.T) {
+func TestEnvUsesPickerAndCancellationPreservesSavedValues(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "env")
 	store := localenv.NewStoreAt(storePath)
 	if err := store.Save(map[string]string{"EXISTING": "before"}); err != nil {
@@ -276,6 +276,94 @@ func TestEnvPathSyntaxIsNotACommand(t *testing.T) {
 		if strings.Contains(output.String(), unwanted) {
 			t.Errorf("path syntax entered environment setup: %s", &output)
 		}
+	}
+}
+
+func TestEnvFileCommandLoadsReviewsAndSavesWithoutPicker(t *testing.T) {
+	directory := t.TempDir()
+	filePath := filepath.Join(directory, "settings to import.txt")
+	secret := "test-api-token"
+	if err := os.WriteFile(filePath, []byte("API_TOKEN="+secret+"\nREMOTE_HOST=example.invalid\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(directory, "saved", "env")
+	store := localenv.NewStoreAt(storePath)
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	pickerCalls := 0
+	picker := EnvironmentFilePickerFunc(func() (string, error) {
+		pickerCalls++
+		return "", errors.New("the picker must not be called for an explicit path")
+	})
+	input := strings.NewReader("/env-file '" + filePath + "'\ny\nhello\n")
+	if err := RunWithEnvStoreAndPicker(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
+		t.Fatal(err)
+	}
+	if pickerCalls != 0 {
+		t.Fatalf("picker calls = %d, want 0", pickerCalls)
+	}
+	wantValues := map[string]string{"API_TOKEN": secret, "REMOTE_HOST": "example.invalid"}
+	if !reflect.DeepEqual(store.Values(), wantValues) {
+		t.Fatalf("saved variable names = %v, want %v", localenvNames(store.Values()), localenvNames(wantValues))
+	}
+	loaded := localenv.NewStoreAt(storePath)
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Values(), wantValues) {
+		t.Fatalf("persisted variable names = %v, want %v", localenvNames(loaded.Values()), localenvNames(wantValues))
+	}
+	if !reflect.DeepEqual(messages, []string{"hello"}) {
+		t.Fatalf("provider messages = %q, want only the ordinary chat message", messages)
+	}
+	for _, want := range []string{"API_TOKEN=********", "REMOTE_HOST=********", "Save these values? [y/N]", "Environment values saved locally."} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q: %s", want, &output)
+		}
+	}
+	for _, value := range []string{secret, "example.invalid"} {
+		if strings.Contains(output.String(), value) {
+			t.Errorf("output exposed a file value %q", value)
+		}
+	}
+}
+
+func TestEnvFileCommandMalformedUsageReturnsErrorWithoutPicker(t *testing.T) {
+	for _, command := range []string{"/env-file", `/env-file ""`, "/env-file one two", "/env-file 'two words' extra"} {
+		t.Run(command, func(t *testing.T) {
+			store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+			var output bytes.Buffer
+			providerCalls := 0
+			provider := providerFunc(func(context.Context, string, string) (string, error) {
+				providerCalls++
+				return "received", nil
+			})
+			pickerCalls := 0
+			picker := EnvironmentFilePickerFunc(func() (string, error) {
+				pickerCalls++
+				return "", errors.New("the picker must not be called for malformed usage")
+			})
+			err := RunWithEnvStoreAndPicker(context.Background(), strings.NewReader(command+"\n"), &output, NewSession(defaultConfig(t), provider), store, picker)
+			if err == nil || err.Error() != "expected exactly one non-empty file path" {
+				t.Fatalf("error = %v, want concise path-usage error", err)
+			}
+			if strings.Contains(err.Error(), "/env-file") {
+				t.Errorf("error advertises the command: %v", err)
+			}
+			if pickerCalls != 0 {
+				t.Errorf("picker calls = %d, want 0", pickerCalls)
+			}
+			if providerCalls != 0 {
+				t.Errorf("provider calls = %d, want 0", providerCalls)
+			}
+		})
 	}
 }
 
