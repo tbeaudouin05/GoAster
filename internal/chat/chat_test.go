@@ -19,6 +19,7 @@ import (
 
 	"goaster/internal/attachment"
 	"goaster/internal/localenv"
+	"goaster/skills"
 )
 
 func TestConfig(t *testing.T) {
@@ -184,8 +185,12 @@ func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
 		"https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project",
 		"Return to GoAster only after the project is active and the Discovery mode label is gone.",
 		"verify the user-created project with the read-only GET /cloud/project.",
+		"A project may have any name; do not require it to be named GoAster.",
+		"Present the discovered project name, ID, and status, then ask whether the user wants to use it.",
+		"Continue with quota, region, image, flavor, network, SSH-key, and instance read-only checks only after the user confirms.",
+		"This confirmation permits only read-only inspection, not resource changes.",
 		"GoAster does not create projects.",
-		"Ask for a preferred Public Cloud deployment region only if it is genuinely unknown.",
+		"Ask for a preferred Public Cloud deployment region only after project confirmation and only if it is genuinely unknown.",
 		"GoAster remote-agent workload, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, minimal inbound exposure, and a hard US$8/month recurring-cost ceiling.",
 		"report the assumptions and current expected cost and wait for explicit approval before billable creation or other mutations.",
 		"Use the local /env flow for secrets; never paste credentials into chat.",
@@ -198,6 +203,50 @@ func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "POST /cloud/project") || strings.Contains(output.String(), "automatically create") {
 		t.Errorf("onboarding output contains account-level project creation guidance: %s", output.String())
+	}
+}
+
+func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testing.T) {
+	policy := strings.Join(strings.Fields(skills.OVHProvisioning), " ")
+	if !strings.Contains(policy, "an active project named `Production` remains usable even though its name differs from `GoAster`") {
+		t.Fatal("OVH project discovery policy does not cover a non-GoAster project name")
+	}
+
+	workflowStart := strings.Index(policy, "2. Use `GET /cloud/project` to list Public Cloud projects.")
+	if workflowStart < 0 {
+		t.Fatal("OVH provisioning workflow is missing its project-discovery step")
+	}
+	workflow := policy[workflowStart:]
+	steps := []string{
+		"Do not check the project name against `GoAster` or any other expected name.",
+		"Present each discovered project's name, ID, and status.",
+		"ask whether the user wants to use it",
+		"Wait for confirmation or selection before continuing.",
+		"That answer permits only read-only inspection.",
+		"Use the preferred deployment region if known; otherwise ask for it.",
+		"Continue with read-only checks for its regional quota, available regions, images,",
+		"flavors, public network, stored SSH keys, and existing instances.",
+		"Present the exact proposed resource, applied assumptions, and current price estimate after these",
+		"read-only checks and before changing OVH state.",
+		"Before creating or changing any billable resource, deleting or replacing",
+		"For resource creation, the confirmation must",
+		"follow the read-only assumptions and cost report and cover that exact",
+		"configuration.",
+	}
+	previous := -1
+	for _, step := range steps {
+		position := strings.Index(workflow, step)
+		if position < 0 {
+			t.Errorf("OVH project workflow is missing %q", step)
+			continue
+		}
+		if position <= previous {
+			t.Errorf("OVH project workflow step %q is out of order", step)
+		}
+		previous = position
+	}
+	if !strings.Contains(policy, "Confirmation for one action does not authorize a different action.") {
+		t.Fatal("OVH project selection confirmation must remain distinct from resource-creation approval")
 	}
 }
 

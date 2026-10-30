@@ -51,8 +51,9 @@ endpoint are separate from the Public Cloud deployment region. Reuse the
 account endpoint already configured or identified from the Create API Keys
 page; do not ask for it again. Ask for the user's preferred deployment region
 only when it is genuinely unknown from the conversation, configuration, and
-project context. If it is known, continue without asking. Do not confuse a
-known account/API region with a deployment-region preference.
+project context, and only after they confirm which project to inspect. If it is
+known, continue without asking. Do not confuse a known account/API region with
+a deployment-region preference.
 
 After the read-only checks, report the selected project and deployment region,
 all defaults or explicit preferences being applied, the proposed machine and
@@ -83,12 +84,21 @@ Discovery mode label is gone. After the credentials are configured through
 the local `/env` flow, verify the user-created project with read-only
 `GET /cloud/project` and, as needed, `GET /cloud/project/*`. Treat a project as
 usable only when the agent can verify its active status, non-empty project ID,
-and name. If there is no usable active project, stop and direct the user back
-to OVHcloud Manager to finish creating the project or completing
-payment-method activation; do not attempt project creation through the API.
-If exactly one usable project is available, report its ID and name before
-continuing. If multiple projects are equally plausible, stop and ask which one
-to use.
+and name. Never require, infer, or filter on a particular project name,
+including `GoAster`; a different name is not a mismatch or a reason to reject
+an otherwise usable project. For example, an active project named `Production`
+remains usable even though its name differs from `GoAster`. The project name
+is not related to the API application name. After the read-only
+`GET /cloud/project` discovery, present each discovered project's name, ID,
+and status to the user. If there is no usable active project, stop and direct
+the user back to OVHcloud Manager to
+finish creating the project or completing payment-method activation; do not
+attempt project creation through the API. If exactly one usable project is
+available, ask whether the user wants to use that named project. If multiple
+usable projects are available, ask which named project they want to use. Wait
+for the user's answer before making any project-specific inspection calls. A
+yes or selection authorizes only the next read-only inspection flow; it is not
+approval to change or create any resource.
 
 When environment variables are needed, name each one, briefly explain its
 purpose and where to find its value (the selected OVH client's docs or
@@ -161,22 +171,25 @@ secret values belong only in the local `/env` flow.
 1. Use the known OVH account endpoint and credentials from a user-approved
    local credential source already available to the host. If none is available,
    stop and direct the user to configure one through the local `/env`
-   environment-file flow. Do not ask again for known account/API details. Ask
-   for the preferred Public Cloud deployment region only when it is genuinely
-   unknown. Apply the normal resource defaults above for any choice the user
+   environment-file flow. Do not ask again for known account/API details. Do
+   not ask for a preferred deployment region before project selection is
+   confirmed. Apply the normal resource defaults above for any choice the user
    has not explicitly overridden.
-2. Use `GET /cloud/project` to list Public Cloud projects. If there is no
-   usable active project, stop and direct the user to create one or complete
+2. Use `GET /cloud/project` to list Public Cloud projects. Do not check the
+   project name against `GoAster` or any other expected name. Present each
+   discovered project's name, ID, and status. If there is no usable active
+   project, stop and direct the user to create one or complete
    payment-method activation in OVHcloud Manager; do not attempt to create it
-   through the API. If exactly one usable project is available, use it and
-   include its ID and name in the pre-approval report; if multiple projects
-   are equally plausible, stop and ask which one to use. Then use read-only
-   checks for its regional quota, available regions, images, flavors, public
-   network, stored SSH keys, and existing instances. Use the preferred
-   deployment region if known; otherwise ask for it. Resolve only blocking
-   ambiguities, such as no usable SSH key. Present the exact proposed
-   resource, applied assumptions, and current price estimate after these
-   read-only checks and before changing OVH state.
+   through the API. If exactly one usable project is available, ask whether
+   the user wants to use it; if multiple usable projects are available, ask
+   which one they want to use. Wait for confirmation or selection before
+   continuing. That answer permits only read-only inspection. Use the
+   preferred deployment region if known; otherwise ask for it. Continue with
+   read-only checks for its regional quota, available regions, images,
+   flavors, public network, stored SSH keys, and existing instances. Resolve
+   only blocking ambiguities, such as no usable SSH key. Present the exact
+   proposed resource, applied assumptions, and current price estimate after
+   these read-only checks and before changing OVH state.
 3. Before creating or changing any billable resource, deleting or replacing
    data or resources, or changing access or network exposure, explain the exact
    action, affected resources, costs or consequences, and obtain explicit user
