@@ -386,16 +386,30 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 			t.Errorf("Codex instructions do not include the packaged OVH skill: %q", request.Instructions)
 		}
 		for _, want := range []string{
-			"POST /cloud/project",
+			"GET /cloud/project",
+			"GET /cloud/project/*",
 			"POST /cloud/project/*",
-			"account-level",
-			"billing-relevant account",
-			"confirmation immediately before calling",
-			"returned project ID and name",
+			"No account-level project-creation",
+			"Discovery mode** is the restricted starting state.",
+			"button only to start the",
+			"payment-method activation flow.",
+			"provide or add a payment method",
+			"deactivate and exit Discovery mode.",
+			"active project with no **Discovery mode** label.",
+			"GoAster cannot\nprovision a server while the project remains in Discovery mode.",
+			"Tell the user to return to GoAster only after the project is active and the",
+			"Discovery mode label is gone.",
+			"user-created project with read-only",
+			"verify its active status",
+			"exactly these three method/path rows.",
+			"Do not treat silence or approval of a different action as consent.",
 		} {
 			if !strings.Contains(request.Instructions, want) {
 				t.Errorf("Codex instructions missing OVH project guardrail %q", want)
 			}
+		}
+		if strings.Contains(request.Instructions, "| POST | `/cloud/project` |") || strings.Contains(request.Instructions, "can automatically create") {
+			t.Errorf("Codex instructions include account-level project creation guidance: %q", request.Instructions)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\n")

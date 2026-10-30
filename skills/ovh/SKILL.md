@@ -62,35 +62,33 @@ what could not be estimated. Then stop for the user's explicit approval of
 that exact configuration and cost before any billable creation or other
 mutation. Do not treat silence or approval of a different action as consent.
 
-### Public Cloud project discovery and creation
+### Public Cloud project readiness
 
-After the credentials are configured, start with the read-only `GET
-/cloud/project`. Treat a project as usable only when it has a non-empty
-project ID and name that the agent can verify. The agent can automatically
-create a missing project through the confirmed workflow below.
+The user must create the Public Cloud project in OVHcloud Manager and complete
+payment-method activation before starting provisioning. GoAster does not
+create projects. Direct the user to open [Public Cloud in OVHcloud
+Manager](https://www.ovh.com/manager/#/hub/public-cloud), sign in, accept the
+terms, choose **Discover the Public Cloud universe**, and create and name the
+project. After creation, **Discovery mode** is the restricted starting state.
+If the project still shows the **Discovery mode** label, have the user click
+OVHcloud Manager's **Enable** or **Activate** button only to start the
+payment-method activation flow. Then have them provide or add a payment method
+in that flow to deactivate and exit Discovery mode. The required final state
+is an active project with no **Discovery mode** label. GoAster cannot
+provision a server while the project remains in Discovery mode. See OVHcloud's
+[official project creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
 
-If `GET /cloud/project` returns no usable project, ask the user for the desired
-project name and explain that `POST /cloud/project` creates a Public Cloud
-project at the account level. This is a separate, billing-relevant account
-action, not a billable resource creation step. Present the exact project name
-and relevant account or billing consequence, then obtain explicit user
-confirmation immediately before calling `POST /cloud/project`. A general
-approval to provision resources does not authorize this call.
-
-After that confirmation, call `POST /cloud/project` with the confirmed name.
-Verify the returned project ID and name from the response and a follow-up
-read-only project lookup such as `GET /cloud/project/*` with that project ID.
-Stop if either value is missing or does not match the confirmed project; do
-not continue to quota or resource checks until the ID and name are verified.
-Report the verified project ID and name. If a usable project already exists,
-confirm the selected project's ID and name before continuing.
-
-The user may create the project manually instead: open [Public Cloud in
-OVHcloud Manager](https://www.ovh.com/manager/#/hub/public-cloud), sign in,
-accept the terms, and choose **Discover the Public Cloud universe**; name the
-project and select a payment method when prompted. Activate a project in
-discovery mode before provisioning resources. See OVHcloud's [official project
-creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
+Tell the user to return to GoAster only after the project is active and the
+Discovery mode label is gone. After the credentials are configured through
+the local `/env` flow, verify the user-created project with read-only
+`GET /cloud/project` and, as needed, `GET /cloud/project/*`. Treat a project as
+usable only when the agent can verify its active status, non-empty project ID,
+and name. If there is no usable active project, stop and direct the user back
+to OVHcloud Manager to finish creating the project or completing
+payment-method activation; do not attempt project creation through the API.
+If exactly one usable project is available, report its ID and name before
+continuing. If multiple projects are equally plausible, stop and ask which one
+to use.
 
 When environment variables are needed, name each one, briefly explain its
 purpose and where to find its value (the selected OVH client's docs or
@@ -130,25 +128,24 @@ Tell the user to enter these values:
 | Validity | `Unlimited` |
 | Restricted IPs | Leave empty |
 
-In **Rights**, add exactly these four method/path rows. The `+` button adds a
+In **Rights**, add exactly these three method/path rows. The `+` button adds a
 row; use it to add the remaining rows:
 
 | Method | Path |
 | --- | --- |
 | GET | `/cloud/project` |
 | GET | `/cloud/project/*` |
-| POST | `/cloud/project` |
 | POST | `/cloud/project/*` |
 
 Do not add other method/path rows or replace `*` with a project ID. After the
 user creates the keys, have them enter the values only through GoAster's local
 `/env` flow. Keep the Application Key, Application Secret, and Consumer Key
-out of chat, screenshots, and reports. Once the configured OVH client
-authenticates, use the read-only project discovery and creation workflow above.
-The collection-level `POST /cloud/project` is only for the separately
-confirmed account-level project creation; `POST /cloud/project/*` is for later
-project-scoped operations. The user does not enter a project ID on the Create
-API Keys screen.
+out of chat, screenshots, and reports. No account-level project-creation
+permission is needed because the user creates the project in OVHcloud Manager.
+Once the configured OVH client authenticates, use the read-only project
+verification workflow above; `POST /cloud/project/*` is for later
+project-scoped provisioning operations. The user does not enter a project ID
+on the Create API Keys screen.
 
 Price estimates come from OVHcloud's [current Public Cloud price
 list](https://www.ovhcloud.com/en/public-cloud/prices/); these API key rights
@@ -169,22 +166,21 @@ secret values belong only in the local `/env` flow.
    unknown. Apply the normal resource defaults above for any choice the user
    has not explicitly overridden.
 2. Use `GET /cloud/project` to list Public Cloud projects. If there is no
-   usable project, follow the project discovery and creation workflow above:
-   obtain the separate explicit confirmation before `POST /cloud/project` and
-   verify the returned project ID and name. If exactly one usable project is
-   available, use it and include its ID and name in the pre-approval report; if
-   multiple projects are equally plausible, stop and ask which one to use. Then
-   use read-only checks for its regional quota, available regions, images,
-   flavors, public network, stored SSH keys, and existing instances. Use the
-   preferred deployment region if known; otherwise ask for it. Resolve only
-   blocking ambiguities, such as no usable SSH key. Present the exact proposed
+   usable active project, stop and direct the user to create one or complete
+   payment-method activation in OVHcloud Manager; do not attempt to create it
+   through the API. If exactly one usable project is available, use it and
+   include its ID and name in the pre-approval report; if multiple projects
+   are equally plausible, stop and ask which one to use. Then use read-only
+   checks for its regional quota, available regions, images, flavors, public
+   network, stored SSH keys, and existing instances. Use the preferred
+   deployment region if known; otherwise ask for it. Resolve only blocking
+   ambiguities, such as no usable SSH key. Present the exact proposed
    resource, applied assumptions, and current price estimate after these
    read-only checks and before changing OVH state.
 3. Before creating or changing any billable resource, deleting or replacing
    data or resources, or changing access or network exposure, explain the exact
    action, affected resources, costs or consequences, and obtain explicit user
-   confirmation. Project-creation confirmation is separate and does not
-   authorize a billable resource. For resource creation, the confirmation must
+   confirmation. For resource creation, the confirmation must
    follow the read-only assumptions and cost report and cover that exact
    configuration. Do not exceed the US$8/month default ceiling without an
    explicit budget override. Confirmation for one action does not authorize a

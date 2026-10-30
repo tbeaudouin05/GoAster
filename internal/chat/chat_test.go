@@ -174,20 +174,20 @@ func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
 	}
 	for _, want := range []string{
 		"OVH onboarding started.",
-		"A Public Cloud project is needed before resource provisioning.",
-		"GET /cloud/project returns no usable project",
-		"POST /cloud/project",
-		"account-level, billing-relevant action",
-		"explicit user confirmation immediately before that call",
-		"verify the returned project ID and name before continuing",
+		"create your Public Cloud project yourself in OVHcloud Manager",
 		"https://www.ovh.com/manager/#/hub/public-cloud",
-		"For manual creation, sign in, accept the terms, and choose “Discover the Public Cloud universe”",
-		"Activate a discovery-mode project before provisioning resources.",
+		"After creation, Discovery mode is the restricted starting state.",
+		"click OVHcloud Manager's Enable or Activate button only to start the payment-method activation flow.",
+		"provide or add a payment method in that flow to deactivate and exit Discovery mode.",
+		"The required final state is an active project with no Discovery mode label.",
+		"GoAster cannot provision a server while the project remains in Discovery mode.",
 		"https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project",
+		"Return to GoAster only after the project is active and the Discovery mode label is gone.",
+		"verify the user-created project with the read-only GET /cloud/project.",
+		"GoAster does not create projects.",
 		"Ask for a preferred Public Cloud deployment region only if it is genuinely unknown.",
 		"GoAster remote-agent workload, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, minimal inbound exposure, and a hard US$8/month recurring-cost ceiling.",
 		"report the assumptions and current expected cost and wait for explicit approval before billable creation or other mutations.",
-		"Project creation still requires separate explicit confirmation.",
 		"Use the local /env flow for secrets; never paste credentials into chat.",
 		"does not provision or change any OVH resource.",
 		"assistant [gpt-6.1-sol]> OVH skill response",
@@ -195,6 +195,9 @@ func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
+	}
+	if strings.Contains(output.String(), "POST /cloud/project") || strings.Contains(output.String(), "automatically create") {
+		t.Errorf("onboarding output contains account-level project creation guidance: %s", output.String())
 	}
 }
 
