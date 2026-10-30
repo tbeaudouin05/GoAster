@@ -141,20 +141,36 @@ Enter one message per line. Blank lines are ignored. End the input stream with
 EOF (Ctrl-D on Unix) to exit. Ctrl-C or closing the terminal also stops the
 process where supported.
 
-## OVH remote access
+## OVH provisioning and remote access
 
-The chat application does not provision OVHcloud resources. To connect to an
-existing OVH remote, use the [OVH remote SSH skill](skills/ovh-remote/SKILL.md).
-It runs approved SSH checks and changes through GoAster's `shell_execute` using
-temporary host scripts, keeps credentials on the host, and requires explicit
-approval immediately before remote mutations. The local package does not need
-Go to bootstrap the remote agent: the skill verifies or installs pinned Go
-1.27.3 on the existing Linux host, clones the latest `main` branch from this
-repository at bootstrap time, records the resolved commit, builds
-`goaster-agent` and `goaster-telegram` from that checkout on the host, then
-installs the resulting binaries. The Go archive checksums and remote build
-steps are documented in the skill. This is a manual SSH workflow, not an OVH
-API provisioner or an agent self-update feature.
+GoAster includes two packaged OVH skills for separate stages. Use the
+[OVH provisioning skill](skills/ovh/SKILL.md) to provision new OVHcloud
+resources. It starts with read-only checks of the project, quota, region,
+options, and current price estimate, requires explicit confirmation before
+billable mutations, and verifies the resulting resource. Use the
+[OVH remote SSH skill](skills/ovh-remote/SKILL.md) to connect to and bootstrap
+an already-existing OVH host, including a host just provisioned with the first
+skill. It starts with read-only SSH preflight, requires fresh explicit approval
+before each remote mutation, and verifies the result; it does not provision
+resources through the OVH API.
+
+**End-to-end:** Start in local GoAster chat and enter OVH credentials and the
+Telegram bot token only through GoAster's local `/env` environment-file flow.
+For a new host, provision the OVH resource with explicit approval, then use
+the SSH skill to bootstrap it; for an existing host, start with SSH bootstrap.
+Next, complete a separate remote OpenAI device login from an SSH terminal and
+verify `/healthz`; then complete the separately approved Telegram token and
+pairing setup below. Keep the local terminal's OpenAI credentials on the local
+machine.
+
+The local package does not need Go to bootstrap the remote agent: the SSH skill
+verifies or installs pinned Go 1.27.3 on the existing Linux host, clones the
+latest `main` branch from this repository at bootstrap time, records the
+resolved commit, builds `goaster-agent` and `goaster-telegram` from that
+checkout on the host, then installs the resulting binaries. The Go archive
+checksums and remote build steps are documented in the skill. This manual SSH
+bootstrap does not manage the OVH resource lifecycle or add an agent
+self-update feature.
 
 The terminal and remote agent require **two independent OpenAI device logins**.
 The local terminal login described above stays local. Never copy or send its
@@ -193,8 +209,8 @@ readiness reporting, configure its service as `Type=notify`: the adapter sends
 the ready notification only after the agent is ready and the first Telegram
 poll succeeds. It also checks agent readiness before telling a paired user
 that chat is ready. If the adapter was started too early, restart it after
-login. Continue to use the existing private Telegram token and pairing setup;
-neither the OpenAI device code nor the subscription tokens belong in Telegram.
+login. Telegram token and pairing setup are separate steps below; neither the
+OpenAI device code nor the subscription tokens belong in Telegram.
 
 ### Telegram user pairing
 
