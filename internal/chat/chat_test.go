@@ -211,7 +211,7 @@ func TestEnvUsesPickerAndCancellationPreservesSavedValues(t *testing.T) {
 
 func TestEnvPickerUnavailableShowsInstallInstructionsAndContinues(t *testing.T) {
 	missingPicker := &exec.Error{Name: "zenity", Err: exec.ErrNotFound}
-	err := wrapNativeEnvironmentFilePickerError(missingPicker)
+	err := wrapNativeFilePickerError(missingPicker)
 	if runtime.GOOS != "linux" {
 		if errors.Is(err, errEnvironmentFilePickerUnavailable) {
 			t.Fatalf("non-Linux picker error was classified as unavailable: %v", err)
@@ -246,12 +246,12 @@ func TestEnvPickerUnavailableShowsInstallInstructionsAndContinues(t *testing.T) 
 	}
 }
 
-func TestOVHHelpForwardsSelectedImageAndCleansTemporaryCopy(t *testing.T) {
+func TestFileCommandForwardsSelectedImageAndCleansTemporaryCopy(t *testing.T) {
 	imageData := bytes.NewBuffer(nil)
 	if err := png.Encode(imageData, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
 		t.Fatal(err)
 	}
-	screenPath := filepath.Join(t.TempDir(), "ovh-screen.png")
+	screenPath := filepath.Join(t.TempDir(), "dashboard.png")
 	if err := os.WriteFile(screenPath, imageData.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -259,10 +259,10 @@ func TestOVHHelpForwardsSelectedImageAndCleansTemporaryCopy(t *testing.T) {
 	pickerCalls := 0
 	var temporaryPath string
 	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
-		if !strings.Contains(message, ovhHelpMessage) {
-			t.Errorf("OVH prompt missing from model request: %q", message)
+		if !strings.Contains(message, fileInspectionMessage) {
+			t.Errorf("generic file inspection prompt missing from model request: %q", message)
 		}
-		for _, want := range []string{"type: image; filename: ovh-screen.png; mime_type: image/png", "local_path:"} {
+		for _, want := range []string{"type: image; filename: dashboard.png; mime_type: image/png", "local_path:"} {
 			if !strings.Contains(message, want) {
 				t.Errorf("attachment reference missing %q: %q", want, message)
 			}
@@ -271,7 +271,7 @@ func TestOVHHelpForwardsSelectedImageAndCleansTemporaryCopy(t *testing.T) {
 		temporaryPath = strings.TrimSpace(temporaryPath)
 		metadata := attachment.Metadata{
 			Type:     "image",
-			Filename: "ovh-screen.png",
+			Filename: "dashboard.png",
 			Path:     temporaryPath,
 			MIMEType: "image/png",
 			Size:     int64(imageData.Len()),
@@ -280,14 +280,14 @@ func TestOVHHelpForwardsSelectedImageAndCleansTemporaryCopy(t *testing.T) {
 		if err != nil || !strings.HasPrefix(dataURL, "data:image/png;base64,") {
 			t.Errorf("selected image was not available to the attachment flow: %v", err)
 		}
-		return "Review the displayed rights before creating the key.", nil
+		return "File inspected.", nil
 	})
 	picker := EnvironmentFilePickerFunc(func() (string, error) {
 		pickerCalls++
 		return screenPath, nil
 	})
 	output := bytes.NewBuffer(nil)
-	if err := runWithTestEnvStoreAndPicker(t, context.Background(), strings.NewReader("/ovh-help\n"), output, NewSession(defaultConfig(t), provider), picker); err != nil {
+	if err := runWithTestEnvStoreAndPicker(t, context.Background(), strings.NewReader("/file\n"), output, NewSession(defaultConfig(t), provider), picker); err != nil {
 		t.Fatal(err)
 	}
 	if pickerCalls != 1 {
@@ -297,23 +297,23 @@ func TestOVHHelpForwardsSelectedImageAndCleansTemporaryCopy(t *testing.T) {
 		t.Fatal("provider did not receive an attachment path")
 	}
 	if _, err := os.Stat(temporaryPath); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("temporary screenshot still exists after the turn: %v", err)
+		t.Errorf("temporary attachment still exists after the turn: %v", err)
 	}
-	for _, want := range []string{"Do not include secret values.", "assistant [gpt-6.1-sol]> Review the displayed rights"} {
+	for _, want := range []string{"Choose a local file to inspect.", "assistant [gpt-6.1-sol]> File inspected."} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, output)
 		}
 	}
 }
 
-func TestOVHHelpCancellationAndPickerUnavailableContinue(t *testing.T) {
+func TestFileCommandCancellationAndPickerUnavailableContinue(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		pickerErr  error
 		wantOutput string
 	}{
-		{name: "canceled", pickerErr: ErrEnvironmentFilePickerCanceled, wantOutput: "OVH screenshot help canceled."},
-		{name: "unavailable", pickerErr: errEnvironmentFilePickerUnavailable, wantOutput: "Screenshot picker unavailable."},
+		{name: "canceled", pickerErr: ErrEnvironmentFilePickerCanceled, wantOutput: "File inspection canceled."},
+		{name: "unavailable", pickerErr: errEnvironmentFilePickerUnavailable, wantOutput: "File picker unavailable."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var messages []string
@@ -323,7 +323,7 @@ func TestOVHHelpCancellationAndPickerUnavailableContinue(t *testing.T) {
 			})
 			picker := EnvironmentFilePickerFunc(func() (string, error) { return "", tc.pickerErr })
 			output := bytes.NewBuffer(nil)
-			input := strings.NewReader("/ovh-help\ncontinue chatting\n")
+			input := strings.NewReader("/file\ncontinue chatting\n")
 			if err := runWithTestEnvStoreAndPicker(t, context.Background(), input, output, NewSession(defaultConfig(t), provider), picker); err != nil {
 				t.Fatal(err)
 			}
@@ -337,27 +337,77 @@ func TestOVHHelpCancellationAndPickerUnavailableContinue(t *testing.T) {
 	}
 }
 
-func TestOVHHelpRejectsInvalidImageAndContinues(t *testing.T) {
-	screenPath := filepath.Join(t.TempDir(), "ovh-screen.png")
-	if err := os.WriteFile(screenPath, []byte("not an image"), 0600); err != nil {
+func TestFileCommandForwardsDocumentAndContinues(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "notes.txt")
+	documentData := []byte("plain text to inspect")
+	if err := os.WriteFile(filePath, documentData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	malformedImagePath := filepath.Join(t.TempDir(), "broken.png")
+	if err := os.WriteFile(malformedImagePath, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, 0600); err != nil {
 		t.Fatal(err)
 	}
 	var messages []string
 	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
 		messages = append(messages, message)
+		if strings.Contains(message, "type: document; filename: notes.txt") {
+			_, pathName, ok := strings.Cut(message, "local_path: ")
+			if !ok {
+				t.Errorf("document attachment path is missing: %q", message)
+			} else {
+				pathName = strings.TrimSpace(pathName)
+				data, err := os.ReadFile(pathName)
+				if err != nil || !bytes.Equal(data, documentData) {
+					t.Errorf("document was unavailable for local inspection: %v", err)
+				}
+			}
+		}
 		return "received", nil
 	})
-	picker := EnvironmentFilePickerFunc(func() (string, error) { return screenPath, nil })
+	pickerCalls := 0
+	picker := EnvironmentFilePickerFunc(func() (string, error) {
+		selectedPaths := []string{filePath, malformedImagePath}
+		selectedPath := selectedPaths[pickerCalls]
+		pickerCalls++
+		return selectedPath, nil
+	})
 	output := bytes.NewBuffer(nil)
-	input := strings.NewReader("/ovh-help\nordinary message\n")
+	input := strings.NewReader("/upload\n/file\nordinary message\n")
 	if err := runWithTestEnvStoreAndPicker(t, context.Background(), input, output, NewSession(defaultConfig(t), provider), picker); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(messages, []string{"ordinary message"}) {
-		t.Fatalf("provider messages = %q, want invalid screenshot excluded", messages)
+	if len(messages) != 2 || !strings.Contains(messages[0], fileInspectionMessage) || !strings.Contains(messages[0], "type: document; filename: notes.txt") || messages[1] != "ordinary message" {
+		t.Fatalf("provider messages = %q, want document inspection and ordinary message", messages)
 	}
-	if !strings.Contains(output.String(), "Screenshot rejected: choose a supported image") {
-		t.Errorf("invalid image was not rejected: %s", output)
+	if !strings.Contains(output.String(), "File rejected: choose a regular file") {
+		t.Errorf("malformed image was not rejected: %s", output)
+	}
+	_, temporaryPath, ok := strings.Cut(messages[0], "local_path: ")
+	if !ok {
+		t.Fatal("provider did not receive a document attachment path")
+	}
+	temporaryPath = strings.TrimSpace(temporaryPath)
+	if _, err := os.Stat(temporaryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temporary document still exists after the turn: %v", err)
+	}
+
+	directoryPath := filepath.Join(t.TempDir(), "directory")
+	if err := os.Mkdir(directoryPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := prepareSelectedFile(directoryPath); err == nil {
+		t.Fatal("accepted a directory as an attachment")
+	}
+
+	oversizedPath := filepath.Join(t.TempDir(), "large.bin")
+	if err := os.WriteFile(oversizedPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(oversizedPath, attachment.MaxBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := prepareSelectedFile(oversizedPath); err == nil {
+		t.Fatal("accepted an attachment above the size limit")
 	}
 }
 

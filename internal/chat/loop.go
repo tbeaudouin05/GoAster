@@ -21,8 +21,9 @@ Enter secret values only through this local environment-file flow; never paste t
 GoAster masks values and saves confirmed settings locally.`
 
 const environmentFileCommand = "/env-file"
-const ovhHelpCommand = "/ovh-help"
-const ovhHelpMessage = "Explain this OVHcloud screen and recommend the next action. Describe relevant visible choices and risks. Do not ask for, transcribe, or reveal API keys or other secret values."
+const fileCommand = "/file"
+const uploadCommand = "/upload"
+const fileInspectionMessage = "Please inspect the attached file and explain what it shows, what I should do next, and any risks. Do not ask for, transcribe, or reveal secrets found in the file."
 
 // Run accepts one message per line and ends the session at EOF.
 func Run(ctx context.Context, input io.Reader, output io.Writer, session *Session) error {
@@ -116,22 +117,22 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		userMessage := message
 		var attachments []attachment.Metadata
 		var attachmentDirectory string
-		if message == ovhHelpCommand {
-			fmt.Fprintln(w, "Choose an OVH screenshot. Do not include secret values.")
+		if message == fileCommand || message == uploadCommand {
+			fmt.Fprintln(w, "Choose a local file to inspect.")
 			if err := w.Flush(); err != nil {
 				return err
 			}
-			imagePicker, ok := picker.(ImageFilePicker)
+			filePicker, ok := picker.(LocalFilePicker)
 			if !ok {
-				fmt.Fprintln(w, "Screenshot picker unavailable.")
+				fmt.Fprintln(w, "File picker unavailable.")
 				if err := w.Flush(); err != nil {
 					return err
 				}
 				continue
 			}
-			selectedPath, err := imagePicker.PickImage()
+			selectedPath, err := filePicker.PickFile()
 			if errors.Is(err, ErrEnvironmentFilePickerCanceled) || err == nil && strings.TrimSpace(selectedPath) == "" {
-				fmt.Fprintln(w, "OVH screenshot help canceled.")
+				fmt.Fprintln(w, "File inspection canceled.")
 				if err := w.Flush(); err != nil {
 					return err
 				}
@@ -139,24 +140,24 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			}
 			if err != nil {
 				if errors.Is(err, errEnvironmentFilePickerUnavailable) {
-					fmt.Fprintln(w, "Screenshot picker unavailable.")
+					fmt.Fprintln(w, "File picker unavailable.")
 				} else {
-					fmt.Fprintln(w, "Screenshot selection failed.")
+					fmt.Fprintln(w, "File selection failed.")
 				}
 				if err := w.Flush(); err != nil {
 					return err
 				}
 				continue
 			}
-			metadata, directory, err := prepareSelectedImage(selectedPath)
+			metadata, directory, err := prepareSelectedFile(selectedPath)
 			if err != nil {
-				fmt.Fprintln(w, "Screenshot rejected: choose a supported image (PNG, JPEG, GIF, or WebP) up to 20 MiB.")
+				fmt.Fprintln(w, "File rejected: choose a regular file up to 20 MiB. Supported images include PNG, JPEG, GIF, and WebP.")
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
 				continue
 			}
-			userMessage = ovhHelpMessage
+			userMessage = fileInspectionMessage
 			attachments = []attachment.Metadata{metadata}
 			attachmentDirectory = directory
 		}
@@ -168,7 +169,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		} else {
 			reply, err = session.ReplyWithAttachments(ctx, userMessage, attachments)
 			if cleanupErr := attachment.CleanupTemporaryDir(attachmentDirectory); cleanupErr != nil {
-				fmt.Fprintln(w, "Temporary screenshot cleanup failed.")
+				fmt.Fprintln(w, "Temporary attachment cleanup failed.")
 			}
 		}
 		if notice := session.consumeContextNotice(); notice != "" {
@@ -188,7 +189,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 	}
 }
 
-func prepareSelectedImage(pathName string) (attachment.Metadata, string, error) {
+func prepareSelectedFile(pathName string) (attachment.Metadata, string, error) {
 	file, err := os.Open(pathName)
 	if err != nil {
 		return attachment.Metadata{}, "", err
@@ -197,36 +198,37 @@ func prepareSelectedImage(pathName string) (attachment.Metadata, string, error) 
 
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > attachment.MaxBytes {
-		return attachment.Metadata{}, "", fmt.Errorf("selected image is not a readable regular file within the size limit")
+		return attachment.Metadata{}, "", fmt.Errorf("selected file is not a readable regular file within the size limit")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, attachment.MaxBytes+1))
 	if err != nil || int64(len(data)) != info.Size() || int64(len(data)) > attachment.MaxBytes {
-		return attachment.Metadata{}, "", fmt.Errorf("selected image changed or exceeds the size limit")
+		return attachment.Metadata{}, "", fmt.Errorf("selected file changed or exceeds the size limit")
 	}
 	inspection, err := attachment.InspectBytes(data)
 	if err != nil {
 		return attachment.Metadata{}, "", err
 	}
-	if inspection.MIMEType == "" {
-		return attachment.Metadata{}, "", fmt.Errorf("selected file is not a supported image")
-	}
 
 	filename := attachment.SanitizeFilename(filepath.Base(pathName))
 	temporaryRoot, err := filepath.Abs(os.TempDir())
 	if err != nil {
-		return attachment.Metadata{}, "", fmt.Errorf("locate temporary screenshot directory")
+		return attachment.Metadata{}, "", fmt.Errorf("locate temporary attachment directory")
 	}
 	directory, err := os.MkdirTemp(temporaryRoot, attachment.AgentTemporaryDirectoryPrefix)
 	if err != nil {
-		return attachment.Metadata{}, "", fmt.Errorf("create temporary screenshot directory")
+		return attachment.Metadata{}, "", fmt.Errorf("create temporary attachment directory")
 	}
 	pathName = filepath.Join(directory, filename)
 	if err := os.WriteFile(pathName, data, 0600); err != nil {
 		attachment.CleanupTemporaryDir(directory)
-		return attachment.Metadata{}, "", fmt.Errorf("store temporary screenshot")
+		return attachment.Metadata{}, "", fmt.Errorf("store temporary attachment")
+	}
+	kind := "document"
+	if inspection.MIMEType != "" {
+		kind = "image"
 	}
 	metadata := attachment.Metadata{
-		Type:     "image",
+		Type:     kind,
 		Filename: filename,
 		Path:     pathName,
 		MIMEType: inspection.MIMEType,
@@ -234,7 +236,7 @@ func prepareSelectedImage(pathName string) (attachment.Metadata, string, error) 
 	}
 	if err := metadata.Validate(); err != nil {
 		attachment.CleanupTemporaryDir(directory)
-		return attachment.Metadata{}, "", fmt.Errorf("validate temporary screenshot")
+		return attachment.Metadata{}, "", fmt.Errorf("validate temporary attachment")
 	}
 	return metadata, directory, nil
 }

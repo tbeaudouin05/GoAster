@@ -41,10 +41,12 @@ When explaining the OVHcloud **Create API Keys** screen, recommend:
   it.
 - Restricted source IPs when feasible.
 
-Use `/ovh-help` in the local terminal to ask about a screenshot. Screenshots
-must not contain API keys, application secrets, or other secret values. Do not
-transcribe, request, or use any secret that appears in an image; secret values
-belong only in the local `/env` flow.
+Use the generic `/file` command in the local terminal to inspect a file,
+including a dashboard screenshot. It accepts supported images and documents
+and asks for an explanation of what the file shows, next steps, and risks. Do
+not select files containing API keys, application secrets, or other secret
+values. Do not transcribe, request, or use any secret that appears in a file;
+secret values belong only in the local `/env` flow.
 
 1. Clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. Use credentials only from a user-approved local credential source already available to the host. If none is available, stop and direct the user to configure one through the local `/env` environment-file flow.
 2. Use read-only checks to confirm the project, quota, available regions, images, sizes, and required network and SSH options. Resolve ambiguous choices with the user. Present the exact proposed resources and current price estimate before changing OVH state.

@@ -20,9 +20,9 @@ type EnvironmentFilePicker interface {
 	Pick() (string, error)
 }
 
-// ImageFilePicker selects an image for a local terminal chat command.
-type ImageFilePicker interface {
-	PickImage() (string, error)
+// LocalFilePicker selects any local file for a terminal chat command.
+type LocalFilePicker interface {
+	PickFile() (string, error)
 }
 
 // EnvironmentFilePickerFunc adapts a function to the local picker operations.
@@ -33,8 +33,8 @@ func (f EnvironmentFilePickerFunc) Pick() (string, error) {
 	return f()
 }
 
-// PickImage selects a local image file.
-func (f EnvironmentFilePickerFunc) PickImage() (string, error) {
+// PickFile selects any local file.
+func (f EnvironmentFilePickerFunc) PickFile() (string, error) {
 	return f()
 }
 
@@ -52,16 +52,15 @@ func (nativeLocalFilePicker) Pick() (string, error) {
 		return "", ErrEnvironmentFilePickerCanceled
 	}
 	if err != nil {
-		return "", wrapNativeEnvironmentFilePickerError(err)
+		return "", wrapNativeFilePickerError(err)
 	}
 	return path, nil
 }
 
-func (nativeLocalFilePicker) PickImage() (string, error) {
+func (nativeLocalFilePicker) PickFile() (string, error) {
 	path, err := zenity.SelectFile(
-		zenity.Title("Choose an OVH screenshot"),
+		zenity.Title("Choose a local file"),
 		zenity.FileFilters{
-			{Name: "Image files", Patterns: []string{"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp"}},
 			{Name: "All files", Patterns: []string{"*"}},
 		},
 	)
@@ -69,14 +68,14 @@ func (nativeLocalFilePicker) PickImage() (string, error) {
 		return "", ErrEnvironmentFilePickerCanceled
 	}
 	if err != nil {
-		return "", wrapNativeEnvironmentFilePickerError(err)
+		return "", wrapNativeFilePickerError(err)
 	}
 	return path, nil
 }
 
-func wrapNativeEnvironmentFilePickerError(err error) error {
+func wrapNativeFilePickerError(err error) error {
 	if runtime.GOOS == "linux" && errors.Is(err, exec.ErrNotFound) {
 		return errEnvironmentFilePickerUnavailable
 	}
-	return fmt.Errorf("open environment file picker: %w", err)
+	return fmt.Errorf("open local file picker: %w", err)
 }
