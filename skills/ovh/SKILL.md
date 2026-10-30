@@ -30,13 +30,26 @@ environment-file flow; never ask for or accept them in chat.
 
 ### Create API Keys screen
 
-Before collecting credentials, open the Create API Keys page for the user's
-OVHcloud account endpoint: [Europe](https://eu.api.ovh.com/createToken/),
-[Canada](https://ca.api.ovh.com/createToken/), or
-[United States](https://api.us.ovhcloud.com/createToken/). This endpoint is
-based on the OVHcloud account, not the Public Cloud deployment region. The
-page may label the application-name field **Script name**. Sign in directly on
-the OVHcloud page; do not send OVH login details through GoAster chat.
+Before giving key-creation instructions, ask the user to paste the OVHcloud
+Create API Keys page URL they are currently viewing. The page URL is not a
+secret; do not ask the user to paste API keys, passwords, or other secrets in
+chat. Use the URL's hostname to detect the OVHcloud account region and choose
+the canonical API endpoint below. The endpoint is based on the OVHcloud
+account, not the Public Cloud deployment region.
+
+| Account region | Create API Keys URL examples | Canonical OVH API endpoint |
+| --- | --- | --- |
+| Europe | `https://auth.eu.ovhcloud.com/api/createToken` or `https://eu.api.ovh.com/createToken/` | `https://eu.api.ovh.com` |
+| Canada | `https://auth.ca.ovhcloud.com/api/createToken` or `https://ca.api.ovh.com/createToken/` | `https://ca.api.ovh.com` |
+| United States | `https://auth.us.ovhcloud.com/api/createToken` or `https://api.us.ovhcloud.com/createToken/` | `https://api.us.ovhcloud.com` |
+
+For example, `https://auth.ca.ovhcloud.com/api/createToken` identifies the
+Canada account region and maps to `https://ca.api.ovh.com`. Ignore the URL path
+and query when matching a recognized hostname. If the hostname does not match
+one of the supported regions, ask the user to confirm their account region
+before proceeding; do not guess. The page may label the application-name field
+**Script name**. The user signs in directly on the OVHcloud page; do not send
+OVH login details through GoAster chat.
 
 Tell the user to enter these values:
 

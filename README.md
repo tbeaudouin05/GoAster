@@ -163,6 +163,12 @@ skill. It starts with read-only SSH preflight, requires fresh explicit approval
 before each remote mutation, and verifies the result; it does not provision
 resources through the OVH API.
 
+While viewing OVHcloud's Create API Keys screen, paste its URL in GoAster chat
+so onboarding can identify the account region and choose the matching API
+endpoint. The page URL is not a secret; never paste API keys or other secrets
+in chat. The [OVH provisioning skill](skills/ovh/SKILL.md#create-api-keys-screen)
+documents the Europe, Canada, and United States URL mappings.
+
 On the Create API Keys screen, use Application name/Script name `GoAster`,
 Description `GoAster server provisioning`, Validity `Unlimited`, and leave
 Restricted IPs empty. Add exactly `GET /cloud/project`,

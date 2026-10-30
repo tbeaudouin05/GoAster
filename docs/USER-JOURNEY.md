@@ -80,9 +80,24 @@ remote SSH skill and skip provisioning.
 
 ### Create API keys for a new resource
 
-Create the OVH API keys in OVH's browser page for the account's API endpoint,
-not the instance's deployment region. Use these exact fields on the Create
-API Keys screen:
+While viewing OVHcloud's Create API Keys page, paste its URL into GoAster chat
+so onboarding can identify the account region and select the matching API
+endpoint. The page URL is not a secret. Never paste API keys, passwords, or
+other secrets into chat; enter credentials only through GoAster's local `/env`
+flow. Determine the region from the URL hostname, using these mappings:
+
+| Account region | Create API Keys URL examples | Canonical OVH API endpoint |
+| --- | --- | --- |
+| Europe | `https://auth.eu.ovhcloud.com/api/createToken` or `https://eu.api.ovh.com/createToken/` | `https://eu.api.ovh.com` |
+| Canada | `https://auth.ca.ovhcloud.com/api/createToken` or `https://ca.api.ovh.com/createToken/` | `https://ca.api.ovh.com` |
+| United States | `https://auth.us.ovhcloud.com/api/createToken` or `https://api.us.ovhcloud.com/createToken/` | `https://api.us.ovhcloud.com` |
+
+For example, `https://auth.ca.ovhcloud.com/api/createToken` maps to
+`https://ca.api.ovh.com`. The endpoint is based on the OVHcloud account, not
+the instance's deployment region. If the URL hostname is not listed, confirm
+the account region before proceeding.
+
+Use these exact fields on the Create API Keys screen:
 
 | Screen field | Enter |
 | --- | --- |
