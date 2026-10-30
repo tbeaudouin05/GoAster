@@ -228,6 +228,20 @@ custom `-auth-file`, OAuth tokens, or the terminal's saved session to the
 remote. A freshly installed agent starts without subscription credentials;
 do not reuse a terminal credential that happens to be present on the host.
 
+When relaying a local GoAster device-login prompt to the user, use this exact
+copy-friendly format: put the verification URL as unformatted text on its own
+line, then put only the one-time code in a fenced code block. For example:
+
+https://auth.openai.com/codex/device
+
+```text
+ABCD-1234
+```
+
+Do not add Markdown link formatting around the URL. Never relay passwords,
+OAuth tokens, or saved credential files. The URL and one-time code are safe to
+relay only for the active login prompt.
+
 After installation, direct the user to open a separate SSH terminal and run
 `goaster-agent login` on the remote as the agent service user with the same
 `HOME` as the service. The user opens the displayed verification URL and enters

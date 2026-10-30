@@ -20,9 +20,21 @@ installation is needed.
 
 On first launch, or when no valid subscription credential is available,
 GoAster displays an OpenAI device-login URL and one-time code in that terminal.
-Open the URL in a browser, sign in with the ChatGPT account that has the
-subscription, and enter the code. GoAster saves and refreshes this local login
-at `~/.goaster/auth.json`. It does not require an OpenAI API key.
+When relaying those two values to the user, put the URL as unformatted text on
+its own line, followed by only the code in a fenced code block, so both values
+are easy to copy:
+
+https://auth.openai.com/codex/device
+
+```text
+ABCD-1234
+```
+
+Do not wrap the URL in Markdown link formatting. Never relay passwords, OAuth
+tokens, or saved credential files. Open the URL in a browser, sign in with the
+ChatGPT account that has the subscription, and enter the code. GoAster saves
+and refreshes this local login at `~/.goaster/auth.json`. It does not require
+an OpenAI API key.
 
 ## 2. Chat in the local terminal
 
