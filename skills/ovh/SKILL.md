@@ -15,6 +15,13 @@ Read the complete result: `stdout`, `stderr`, and `exit_code`; an `execution_err
 
 ## Provisioning workflow
 
+OVH (OVHcloud) is a company that provides cloud servers and other online
+services. GoAster needs your OVHcloud account to check what your account can
+use and, only after you approve, create the cloud resources you request.
+
+Sign in or create an account on the [official OVHcloud account
+page](https://www.ovh.com/auth/).
+
 When environment variables are needed, name each one, briefly explain its
 purpose and where to find its value (the selected OVH client's docs or
 OVHcloud credential settings), and invite the user to ask for more explanation.
