@@ -20,6 +20,7 @@ import (
 
 	"goaster/internal/attachment"
 	"goaster/internal/command"
+	"goaster/skills"
 )
 
 const (
@@ -1128,6 +1129,9 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 		tools = p.tools.definitions()
 	}
 	instructions := openAIInstructions
+	if allowTools {
+		instructions += "\n\nThe following packaged GoAster skill is available for the user-facing onboarding workflow:\n\n" + skills.OVHProvisioning
+	}
 	// Memory is injected into normal model instructions, but intentionally not
 	// into the no-tools summarization request. This keeps conversation-summary
 	// semantics independent from protected Markdown memory.

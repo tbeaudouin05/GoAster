@@ -158,6 +158,33 @@ func TestLoopShowsFallback(t *testing.T) {
 	}
 }
 
+func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "OVH skill response", nil
+	})
+
+	if err := runWithTestEnvStore(t, context.Background(), strings.NewReader("/ovh\n"), &output, NewSession(defaultConfig(t), provider)); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(messages, []string{"/ovh"}) {
+		t.Fatalf("provider messages = %q, want /ovh", messages)
+	}
+	for _, want := range []string{
+		"OVH onboarding started.",
+		"Read-only next step:",
+		"GET /cloud/project",
+		"does not provision or change any OVH resource.",
+		"assistant [gpt-6.1-sol]> OVH skill response",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q: %s", want, &output)
+		}
+	}
+}
+
 func TestEnvUsesPickerAndCancellationPreservesSavedValues(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "env")
 	store := localenv.NewStoreAt(storePath)

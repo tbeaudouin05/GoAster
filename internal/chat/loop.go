@@ -20,6 +20,10 @@ Check the relevant service docs or dashboard for each variable's purpose and whe
 Enter secret values only through this local environment-file flow; never paste them into chat.
 GoAster masks values and saves confirmed settings locally.`
 
+const ovhOnboardingStart = `OVH onboarding started.
+Read-only next step: clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. After approved credentials are available through the local /env flow, the first OVH operation is GET /cloud/project to list Public Cloud project IDs.
+Starting onboarding does not provision or change any OVH resource.`
+
 const environmentFileCommand = "/env-file"
 const fileCommand = "/file"
 const uploadCommand = "/upload"
@@ -113,6 +117,12 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 				return err
 			}
 			continue
+		}
+		if message == "/ovh" {
+			fmt.Fprintln(w, ovhOnboardingStart)
+			if err := w.Flush(); err != nil {
+				return err
+			}
 		}
 		userMessage := message
 		var attachments []attachment.Metadata
