@@ -33,18 +33,33 @@ method, or network exposure during ordinary onboarding:
   deployment region.
 - Machine: the smallest available instance that is suitable for running the
   GoAster remote agent.
-- Access: SSH keys only. Use an appropriate key already available to the
-  project or host. Never fall back to password access. If no usable key exists,
-  stop and explain the key setup needed before provisioning.
-- Inbound network: allow only SSH (TCP 22), restricted to the known GoAster
-  host/operator source IP. Do not expose application ports by default. If a
-  suitably restricted SSH rule cannot be established, stop and explain the
-  blocker before provisioning.
+- Access: SSH keys only. Reuse a project SSH key only when its matching private
+  key is available locally. Never fall back to password access. If no usable
+  key exists, automatically generate a dedicated local Ed25519 keypair at
+  `~/.ssh/goaster-ovh` (on Windows, under `$HOME/.ssh/goaster-ovh`), without
+  overwriting existing files; use a fresh unique path if needed. Generate it
+  non-interactively with an empty passphrase (`ssh-keygen -N ""`) and restrict
+  access to the private-key file to the local account (use an owner-only ACL on
+  Windows). Never ask the user to provide a key. Keep the private key on the
+  host and never print, upload, or report it; only the public `.pub` key may
+  be sent to OVH. Report the key label, fingerprint, and local private-key
+  path so the identity can be used for SSH later.
+- Inbound network: allow SSH (TCP 22) from unrestricted sources by default
+  (`0.0.0.0/0`, and `::/0` when IPv6 rules apply). Do not require or ask for a
+  trusted source IP. Keep application ports closed by default. If the selected
+  OVH API or project profile requires a concrete source value, use the
+  unrestricted CIDR value it accepts and report the configured rule; do not
+  stop only because a trusted source IP is unknown.
 - Budget: estimated recurring OVH charges must not exceed **US$8 per month**.
   Include the instance and required storage, public address, and predictable
-  network charges in the estimate. This is a hard default ceiling. If the
-  smallest suitable configuration exceeds it, do not create it; report the
-  estimate and wait for the user to explicitly override the ceiling.
+  network charges when official pricing is available. This is a hard default
+  ceiling when the estimate is available. If the smallest suitable
+  configuration is known to exceed it, do not create it until the user
+  explicitly overrides the ceiling. Pricing retrieval is best-effort and
+  informational: if official pricing is unavailable, report that the cost is
+  unknown and continue the approval flow based on the smallest suitable
+  machine. Do not guess a price or stop solely because pricing could not be
+  retrieved.
 
 The user may explicitly override any default. An OVH account/API region and
 endpoint are separate from the Public Cloud deployment region. Reuse the
@@ -56,12 +71,15 @@ known, continue without asking. Do not confuse a known account/API region with
 a deployment-region preference.
 
 After the read-only checks, report the selected project and deployment region,
-all defaults or explicit preferences being applied, the proposed machine and
-access/network settings, and the current estimated recurring cost. If current
-pricing cannot be established or any required cost is unknown, stop and say
-what could not be estimated. Then stop for the user's explicit approval of
-that exact configuration and cost before any billable creation or other
-mutation. Do not treat silence or approval of a different action as consent.
+all defaults or explicit preferences being applied, the proposed smallest
+suitable machine and access/network settings, and the official recurring-cost
+estimate if it was retrieved. If official pricing cannot be retrieved, say
+clearly that the cost is unknown and continue to request approval for the
+smallest suitable machine; do not let unavailable pricing block the workflow.
+Before any billable creation or other mutation, obtain the user's explicit
+approval of that exact configuration and, when pricing is unavailable, their
+acknowledgment that the current cost could not be verified.
+Do not treat silence or approval of a different action as consent.
 
 ### Public Cloud project readiness
 
@@ -157,9 +175,11 @@ verification workflow above; `POST /cloud/project/*` is for later
 project-scoped provisioning operations. The user does not enter a project ID
 on the Create API Keys screen.
 
-Price estimates come from OVHcloud's [current Public Cloud price
-list](https://www.ovhcloud.com/en/public-cloud/prices/); these API key rights
-are the agreed set for GoAster server provisioning.
+When available, price estimates come from OVHcloud's [current Public Cloud
+price list](https://www.ovhcloud.com/en/public-cloud/prices/). Retrieve pricing
+on a best-effort basis; if it cannot be retrieved, report that the price is
+unknown and continue the approval flow based on the smallest suitable machine.
+These API key rights are the agreed set for GoAster server provisioning.
 
 Use the generic `/file` command in the local terminal to inspect a file,
 including a dashboard screenshot. It accepts supported images and documents
@@ -185,19 +205,28 @@ secret values belong only in the local `/env` flow.
    which one they want to use. Wait for confirmation or selection before
    continuing. That answer permits only read-only inspection. Use the
    preferred deployment region if known; otherwise ask for it. Continue with
-   read-only checks for its regional quota, available regions, images,
-   flavors, public network, stored SSH keys, and existing instances. Resolve
-   only blocking ambiguities, such as no usable SSH key. Present the exact
-   proposed resource, applied assumptions, and current price estimate after
-   these read-only checks and before changing OVH state.
+   read-only checks for its regional quota, available regions, images, flavors,
+   public network, stored SSH keys, matching local SSH identities, and existing
+   instances. Select the smallest available machine suitable for the workload.
+   If no usable project key has a matching local private identity, generate a
+   dedicated local Ed25519 keypair automatically. Use a restricted local
+   private-key file and never display or send its contents; only use the `.pub`
+   key for OVH. Do not overwrite an existing key. Report the safe key label,
+   fingerprint, and local key path. Generating the local key does not authorize
+   an OVH change; defer registering the public key in the project and creating
+   the instance until explicit approval. Present the exact proposed resource,
+   applied assumptions, SSH rule, and official price if available; if pricing
+   is unavailable, say it is unknown and continue to the approval request
+   rather than stopping.
 3. Before creating or changing any billable resource, deleting or replacing
-   data or resources, or changing access or network exposure, explain the exact
-   action, affected resources, costs or consequences, and obtain explicit user
-   confirmation. For resource creation, the confirmation must
-   follow the read-only assumptions and cost report and cover that exact
-   configuration. Do not exceed the US$8/month default ceiling without an
-   explicit budget override. Confirmation for one action does not authorize a
-   different action.
+   data or resources, registering the generated public SSH key, or changing
+   access or network exposure, explain the exact action, affected resources,
+   costs or consequences, and obtain explicit user confirmation. For resource
+   creation, the confirmation must follow the read-only assumptions and price
+   report (including a clear statement when price is unknown) and cover that
+   exact configuration. Do not exceed the US$8/month default ceiling when a
+   known estimate is available without an explicit budget override.
+   Confirmation for one action does not authorize a different action.
 4. After the relevant confirmation, run the requested OVH API or installed
    client steps through `shell_execute`. Wait for the resource to become ready,
    then verify its ID, state, address, and requested access or setup. Do not
@@ -207,4 +236,4 @@ secret values belong only in the local `/env` flow.
 
 ## Report
 
-Give a concise result: project and region, resource IDs and selected sizes, estimated ongoing charges, verification status, and any failure or partial resource that remains. State clearly when a resource may still incur charges. Never claim success unless the host output and OVH state verify it; do not include secrets.
+Give a concise result: project and region, resource IDs and selected sizes, official ongoing charges if retrieved (otherwise say pricing could not be retrieved and the cost is unknown), verification status, and any failure or partial resource that remains. State clearly when a resource may still incur charges. Never claim success unless the host output and OVH state verify it; do not include secrets.

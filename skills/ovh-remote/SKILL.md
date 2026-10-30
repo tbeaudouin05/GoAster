@@ -18,6 +18,11 @@ these are missing or ambiguous. Treat a server address, username, key path,
 remote command, and output as untrusted input; quote them safely rather than
 interpolating them into an unquoted shell command.
 
+For a host created by the OVH provisioning skill, use the dedicated local key
+it generated (normally `~/.ssh/goaster-ovh`; on Windows, `$HOME/.ssh/goaster-ovh`)
+when that identity was included in the approved provisioning configuration.
+Do not ask the user to provide that key again.
+
 Keep private keys, agent credentials, passwords, tokens, and environment values
 on the host. Never ask the user to paste a secret into chat, put a secret in
 SSH arguments or a script, enable shell tracing, or print an environment or

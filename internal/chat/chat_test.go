@@ -187,12 +187,13 @@ func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
 		"verify the user-created project with the read-only GET /cloud/project.",
 		"A project may have any name; do not require it to be named GoAster.",
 		"Present the discovered project name, ID, and status, then ask whether the user wants to use it.",
-		"Continue with quota, region, image, flavor, network, SSH-key, and instance read-only checks only after the user confirms.",
-		"This confirmation permits only read-only inspection, not resource changes.",
+		"Continue with quota, region, image, flavor, network, SSH-key, and instance checks only after the user confirms; the confirmation permits only read-only OVH inspection.",
 		"GoAster does not create projects.",
 		"Ask for a preferred Public Cloud deployment region only after project confirmation and only if it is genuinely unknown.",
-		"GoAster remote-agent workload, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, minimal inbound exposure, and a hard US$8/month recurring-cost ceiling.",
-		"report the assumptions and current expected cost and wait for explicit approval before billable creation or other mutations.",
+		"GoAster remote-agent workload, Ubuntu LTS, the smallest suitable machine, SSH-key-only access (automatically generate a dedicated local key if no usable key is available), SSH on TCP 22 unrestricted, and no other inbound application ports.",
+		"Pricing retrieval is best-effort: report an official estimate if available, or say the price is unknown and continue to explicit approval based on the smallest suitable machine.",
+		"Keep the US$8/month ceiling when a known estimate is available.",
+		"Wait for explicit approval of the exact configuration before billable creation, SSH-key registration, or access/network changes.",
 		"Use the local /env flow for secrets; never paste credentials into chat.",
 		"does not provision or change any OVH resource.",
 		"assistant [gpt-6.1-sol]> OVH skill response",
@@ -224,13 +225,16 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 		"Wait for confirmation or selection before continuing.",
 		"That answer permits only read-only inspection.",
 		"Use the preferred deployment region if known; otherwise ask for it.",
-		"Continue with read-only checks for its regional quota, available regions, images,",
-		"flavors, public network, stored SSH keys, and existing instances.",
-		"Present the exact proposed resource, applied assumptions, and current price estimate after these",
-		"read-only checks and before changing OVH state.",
+		"Continue with read-only checks for its regional quota, available regions, images, flavors,",
+		"public network, stored SSH keys, matching local SSH identities, and existing instances.",
+		"Select the smallest available machine suitable for the workload.",
+		"If no usable project key has a matching local private identity, generate a",
+		"dedicated local Ed25519 keypair automatically.",
+		"Present the exact proposed resource, applied assumptions, SSH rule, and official price if available;",
+		"if pricing is unavailable, say it is unknown and continue to the approval request rather than stopping.",
 		"Before creating or changing any billable resource, deleting or replacing",
 		"For resource creation, the confirmation must",
-		"follow the read-only assumptions and cost report and cover that exact",
+		"follow the read-only assumptions and price report (including a clear statement when price is unknown) and cover that",
 		"configuration.",
 	}
 	previous := -1
@@ -247,6 +251,21 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 	}
 	if !strings.Contains(policy, "Confirmation for one action does not authorize a different action.") {
 		t.Fatal("OVH project selection confirmation must remain distinct from resource-creation approval")
+	}
+	for _, want := range []string{
+		"Never ask the user to provide a key.",
+		"Generate it non-interactively with an empty passphrase (`ssh-keygen -N \"\"`)",
+		"never print, upload, or report it; only the public `.pub` key may be sent to OVH.",
+		"from unrestricted sources by default (`0.0.0.0/0`, and `::/0` when IPv6 rules apply).",
+		"Do not require or ask for a trusted source IP.",
+		"Do not guess a price or stop solely because pricing could not be retrieved.",
+		"explicit approval of that exact configuration and, when pricing is unavailable, their acknowledgment that the current cost could not be verified.",
+		"data or resources, registering the generated public SSH key, or changing access or network exposure",
+		"Do not exceed the US$8/month default ceiling when a known estimate is available without an explicit budget override.",
+	} {
+		if !strings.Contains(policy, want) {
+			t.Errorf("OVH provisioning policy missing onboarding requirement %q", want)
+		}
 	}
 }
 
