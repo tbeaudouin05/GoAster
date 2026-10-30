@@ -143,6 +143,9 @@ process where supported.
 
 ## OVH provisioning and remote access
 
+For the end-to-end path from packaged launch to remote Telegram operation, see
+the [GoAster user journey](docs/USER-JOURNEY.md).
+
 GoAster includes two packaged OVH skills for separate stages. Use the
 [OVH provisioning skill](skills/ovh/SKILL.md) to provision new OVHcloud
 resources. It starts with read-only checks of the project, quota, region,
