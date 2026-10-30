@@ -28,6 +28,24 @@ OVHcloud credential settings), and invite the user to ask for more explanation.
 Secret values must be entered only through GoAster's local `/env`
 environment-file flow; never ask for or accept them in chat.
 
+### Create API Keys screen
+
+When explaining the OVHcloud **Create API Keys** screen, recommend:
+
+- Application name: `GoAster`.
+- A short description that identifies the intended GoAster task.
+- A limited validity period when practical; avoid `Unlimited` when a suitable
+  expiry can be used.
+- Only the rights required for the requested task. Do not enable unrestricted
+  write access unless the user has specifically required it and the task needs
+  it.
+- Restricted source IPs when feasible.
+
+Use `/ovh-help` in the local terminal to ask about a screenshot. Screenshots
+must not contain API keys, application secrets, or other secret values. Do not
+transcribe, request, or use any secret that appears in an image; secret values
+belong only in the local `/env` flow.
+
 1. Clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. Use credentials only from a user-approved local credential source already available to the host. If none is available, stop and direct the user to configure one through the local `/env` environment-file flow.
 2. Use read-only checks to confirm the project, quota, available regions, images, sizes, and required network and SSH options. Resolve ambiguous choices with the user. Present the exact proposed resources and current price estimate before changing OVH state.
 3. Before creating or changing any billable resource, deleting or replacing data or resources, or changing access or network exposure, explain the exact action, affected resources, costs or consequences, and obtain explicit user confirmation. Confirmation for one action does not authorize a different action.

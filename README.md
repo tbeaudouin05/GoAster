@@ -68,6 +68,11 @@ variable. Enter secret values only through GoAster's local `/env`
 environment-file flow; never paste them into chat. GoAster masks imported
 values before saving them locally.
 
+For help with an OVHcloud dashboard screen, type `/ovh-help` in the local
+terminal and choose a screenshot. Supported screenshots are PNG, JPEG, GIF,
+and WebP, up to 20 MiB. Never select an image that contains API keys or other
+secret values; enter secrets only through `/env`.
+
 The terminal conversation is saved automatically in `~/.goaster/session.json`
 with `0600` permissions. It contains bounded user/assistant conversation text
 and any generated summary; OAuth credentials and tool-call internals are not

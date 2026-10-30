@@ -43,6 +43,11 @@ terminal. The local chat includes its built-in web search, web fetch, and
 `shell_execute` tools. Enter one message per line; blank lines are ignored.
 Use EOF (Ctrl-D on Unix) or close the terminal to exit.
 
+For help with an OVHcloud dashboard screen, type `/ovh-help` and choose an
+image in the native file picker. Do not choose screenshots containing API
+keys or other secret values. The OVH skill gives guidance for the Create API
+Keys screen.
+
 The conversation is saved in `~/.goaster/session.json`; durable Markdown
 memory is kept under `~/.goaster/memory/`. Scheduled chat turns are saved
 locally and run only while the packaged terminal process is active.

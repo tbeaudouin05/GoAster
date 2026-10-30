@@ -15,12 +15,17 @@ var ErrEnvironmentFilePickerCanceled = errors.New("environment file selection ca
 
 var errEnvironmentFilePickerUnavailable = errors.New("environment file picker unavailable")
 
-// EnvironmentFilePicker selects a local environment file.
+// EnvironmentFilePicker selects the local environment file used by /env.
 type EnvironmentFilePicker interface {
 	Pick() (string, error)
 }
 
-// EnvironmentFilePickerFunc adapts a function to EnvironmentFilePicker.
+// ImageFilePicker selects an image for a local terminal chat command.
+type ImageFilePicker interface {
+	PickImage() (string, error)
+}
+
+// EnvironmentFilePickerFunc adapts a function to the local picker operations.
 type EnvironmentFilePickerFunc func() (string, error)
 
 // Pick selects a local environment file.
@@ -28,13 +33,35 @@ func (f EnvironmentFilePickerFunc) Pick() (string, error) {
 	return f()
 }
 
-type nativeEnvironmentFilePicker struct{}
+// PickImage selects a local image file.
+func (f EnvironmentFilePickerFunc) PickImage() (string, error) {
+	return f()
+}
 
-func (nativeEnvironmentFilePicker) Pick() (string, error) {
+type nativeLocalFilePicker struct{}
+
+func (nativeLocalFilePicker) Pick() (string, error) {
 	path, err := zenity.SelectFile(
 		zenity.Title("Choose an environment text file"),
 		zenity.FileFilters{
 			{Name: "Environment text files", Patterns: []string{"*.env", "*.txt"}},
+			{Name: "All files", Patterns: []string{"*"}},
+		},
+	)
+	if errors.Is(err, zenity.ErrCanceled) {
+		return "", ErrEnvironmentFilePickerCanceled
+	}
+	if err != nil {
+		return "", wrapNativeEnvironmentFilePickerError(err)
+	}
+	return path, nil
+}
+
+func (nativeLocalFilePicker) PickImage() (string, error) {
+	path, err := zenity.SelectFile(
+		zenity.Title("Choose an OVH screenshot"),
+		zenity.FileFilters{
+			{Name: "Image files", Patterns: []string{"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp"}},
 			{Name: "All files", Patterns: []string{"*"}},
 		},
 	)

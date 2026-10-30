@@ -6,6 +6,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"os"
 	"os/exec"
@@ -15,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"goaster/internal/attachment"
 	"goaster/internal/localenv"
 )
 
@@ -240,6 +243,121 @@ func TestEnvPickerUnavailableShowsInstallInstructionsAndContinues(t *testing.T) 
 	}
 	if !reflect.DeepEqual(messages, []string{"hello"}) {
 		t.Fatalf("provider messages = %q, want chat to continue after /env", messages)
+	}
+}
+
+func TestOVHHelpForwardsSelectedImageAndCleansTemporaryCopy(t *testing.T) {
+	imageData := bytes.NewBuffer(nil)
+	if err := png.Encode(imageData, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	screenPath := filepath.Join(t.TempDir(), "ovh-screen.png")
+	if err := os.WriteFile(screenPath, imageData.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	pickerCalls := 0
+	var temporaryPath string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		if !strings.Contains(message, ovhHelpMessage) {
+			t.Errorf("OVH prompt missing from model request: %q", message)
+		}
+		for _, want := range []string{"type: image; filename: ovh-screen.png; mime_type: image/png", "local_path:"} {
+			if !strings.Contains(message, want) {
+				t.Errorf("attachment reference missing %q: %q", want, message)
+			}
+		}
+		_, temporaryPath, _ = strings.Cut(message, "local_path: ")
+		temporaryPath = strings.TrimSpace(temporaryPath)
+		metadata := attachment.Metadata{
+			Type:     "image",
+			Filename: "ovh-screen.png",
+			Path:     temporaryPath,
+			MIMEType: "image/png",
+			Size:     int64(imageData.Len()),
+		}
+		dataURL, err := attachment.ReadImageDataURL(metadata)
+		if err != nil || !strings.HasPrefix(dataURL, "data:image/png;base64,") {
+			t.Errorf("selected image was not available to the attachment flow: %v", err)
+		}
+		return "Review the displayed rights before creating the key.", nil
+	})
+	picker := EnvironmentFilePickerFunc(func() (string, error) {
+		pickerCalls++
+		return screenPath, nil
+	})
+	output := bytes.NewBuffer(nil)
+	if err := runWithTestEnvStoreAndPicker(t, context.Background(), strings.NewReader("/ovh-help\n"), output, NewSession(defaultConfig(t), provider), picker); err != nil {
+		t.Fatal(err)
+	}
+	if pickerCalls != 1 {
+		t.Fatalf("image picker calls = %d, want 1", pickerCalls)
+	}
+	if temporaryPath == "" {
+		t.Fatal("provider did not receive an attachment path")
+	}
+	if _, err := os.Stat(temporaryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temporary screenshot still exists after the turn: %v", err)
+	}
+	for _, want := range []string{"Do not include secret values.", "assistant [gpt-6.1-sol]> Review the displayed rights"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q: %s", want, output)
+		}
+	}
+}
+
+func TestOVHHelpCancellationAndPickerUnavailableContinue(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		pickerErr  error
+		wantOutput string
+	}{
+		{name: "canceled", pickerErr: ErrEnvironmentFilePickerCanceled, wantOutput: "OVH screenshot help canceled."},
+		{name: "unavailable", pickerErr: errEnvironmentFilePickerUnavailable, wantOutput: "Screenshot picker unavailable."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var messages []string
+			provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+				messages = append(messages, message)
+				return "received", nil
+			})
+			picker := EnvironmentFilePickerFunc(func() (string, error) { return "", tc.pickerErr })
+			output := bytes.NewBuffer(nil)
+			input := strings.NewReader("/ovh-help\ncontinue chatting\n")
+			if err := runWithTestEnvStoreAndPicker(t, context.Background(), input, output, NewSession(defaultConfig(t), provider), picker); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(messages, []string{"continue chatting"}) {
+				t.Fatalf("provider messages = %q, want ordinary chat to continue", messages)
+			}
+			if !strings.Contains(output.String(), tc.wantOutput) {
+				t.Errorf("output missing %q: %s", tc.wantOutput, output)
+			}
+		})
+	}
+}
+
+func TestOVHHelpRejectsInvalidImageAndContinues(t *testing.T) {
+	screenPath := filepath.Join(t.TempDir(), "ovh-screen.png")
+	if err := os.WriteFile(screenPath, []byte("not an image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	picker := EnvironmentFilePickerFunc(func() (string, error) { return screenPath, nil })
+	output := bytes.NewBuffer(nil)
+	input := strings.NewReader("/ovh-help\nordinary message\n")
+	if err := runWithTestEnvStoreAndPicker(t, context.Background(), input, output, NewSession(defaultConfig(t), provider), picker); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(messages, []string{"ordinary message"}) {
+		t.Fatalf("provider messages = %q, want invalid screenshot excluded", messages)
+	}
+	if !strings.Contains(output.String(), "Screenshot rejected: choose a supported image") {
+		t.Errorf("invalid image was not rejected: %s", output)
 	}
 }
 

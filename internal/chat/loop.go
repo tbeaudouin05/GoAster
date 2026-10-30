@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"goaster/internal/attachment"
 	"goaster/internal/localenv"
 )
 
@@ -18,6 +21,8 @@ Enter secret values only through this local environment-file flow; never paste t
 GoAster masks values and saves confirmed settings locally.`
 
 const environmentFileCommand = "/env-file"
+const ovhHelpCommand = "/ovh-help"
+const ovhHelpMessage = "Explain this OVHcloud screen and recommend the next action. Describe relevant visible choices and risks. Do not ask for, transcribe, or reveal API keys or other secret values."
 
 // Run accepts one message per line and ends the session at EOF.
 func Run(ctx context.Context, input io.Reader, output io.Writer, session *Session) error {
@@ -33,7 +38,7 @@ func Run(ctx context.Context, input io.Reader, output io.Writer, session *Sessio
 
 // RunWithEnvStore runs chat with a separately loaded local environment store.
 func RunWithEnvStore(ctx context.Context, input io.Reader, output io.Writer, session *Session, store *localenv.Store) error {
-	return RunWithEnvStoreAndPicker(ctx, input, output, session, store, nativeEnvironmentFilePicker{})
+	return RunWithEnvStoreAndPicker(ctx, input, output, session, store, nativeLocalFilePicker{})
 }
 
 // RunWithEnvStoreAndPicker runs chat with a separately loaded local
@@ -108,8 +113,64 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			}
 			continue
 		}
+		userMessage := message
+		var attachments []attachment.Metadata
+		var attachmentDirectory string
+		if message == ovhHelpCommand {
+			fmt.Fprintln(w, "Choose an OVH screenshot. Do not include secret values.")
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			imagePicker, ok := picker.(ImageFilePicker)
+			if !ok {
+				fmt.Fprintln(w, "Screenshot picker unavailable.")
+				if err := w.Flush(); err != nil {
+					return err
+				}
+				continue
+			}
+			selectedPath, err := imagePicker.PickImage()
+			if errors.Is(err, ErrEnvironmentFilePickerCanceled) || err == nil && strings.TrimSpace(selectedPath) == "" {
+				fmt.Fprintln(w, "OVH screenshot help canceled.")
+				if err := w.Flush(); err != nil {
+					return err
+				}
+				continue
+			}
+			if err != nil {
+				if errors.Is(err, errEnvironmentFilePickerUnavailable) {
+					fmt.Fprintln(w, "Screenshot picker unavailable.")
+				} else {
+					fmt.Fprintln(w, "Screenshot selection failed.")
+				}
+				if err := w.Flush(); err != nil {
+					return err
+				}
+				continue
+			}
+			metadata, directory, err := prepareSelectedImage(selectedPath)
+			if err != nil {
+				fmt.Fprintln(w, "Screenshot rejected: choose a supported image (PNG, JPEG, GIF, or WebP) up to 20 MiB.")
+				if flushErr := w.Flush(); flushErr != nil {
+					return flushErr
+				}
+				continue
+			}
+			userMessage = ovhHelpMessage
+			attachments = []attachment.Metadata{metadata}
+			attachmentDirectory = directory
+		}
 		previousModel, _ := session.modelStatus()
-		reply, err := session.Reply(ctx, message)
+		var reply string
+		var err error
+		if len(attachments) == 0 {
+			reply, err = session.Reply(ctx, userMessage)
+		} else {
+			reply, err = session.ReplyWithAttachments(ctx, userMessage, attachments)
+			if cleanupErr := attachment.CleanupTemporaryDir(attachmentDirectory); cleanupErr != nil {
+				fmt.Fprintln(w, "Temporary screenshot cleanup failed.")
+			}
+		}
 		if notice := session.consumeContextNotice(); notice != "" {
 			fmt.Fprintf(w, "Context notice: %s\n", notice)
 		}
@@ -125,6 +186,57 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		}
 		fmt.Fprintf(w, "assistant [%s]> %s\n", model, reply)
 	}
+}
+
+func prepareSelectedImage(pathName string) (attachment.Metadata, string, error) {
+	file, err := os.Open(pathName)
+	if err != nil {
+		return attachment.Metadata{}, "", err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > attachment.MaxBytes {
+		return attachment.Metadata{}, "", fmt.Errorf("selected image is not a readable regular file within the size limit")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, attachment.MaxBytes+1))
+	if err != nil || int64(len(data)) != info.Size() || int64(len(data)) > attachment.MaxBytes {
+		return attachment.Metadata{}, "", fmt.Errorf("selected image changed or exceeds the size limit")
+	}
+	inspection, err := attachment.InspectBytes(data)
+	if err != nil {
+		return attachment.Metadata{}, "", err
+	}
+	if inspection.MIMEType == "" {
+		return attachment.Metadata{}, "", fmt.Errorf("selected file is not a supported image")
+	}
+
+	filename := attachment.SanitizeFilename(filepath.Base(pathName))
+	temporaryRoot, err := filepath.Abs(os.TempDir())
+	if err != nil {
+		return attachment.Metadata{}, "", fmt.Errorf("locate temporary screenshot directory")
+	}
+	directory, err := os.MkdirTemp(temporaryRoot, attachment.AgentTemporaryDirectoryPrefix)
+	if err != nil {
+		return attachment.Metadata{}, "", fmt.Errorf("create temporary screenshot directory")
+	}
+	pathName = filepath.Join(directory, filename)
+	if err := os.WriteFile(pathName, data, 0600); err != nil {
+		attachment.CleanupTemporaryDir(directory)
+		return attachment.Metadata{}, "", fmt.Errorf("store temporary screenshot")
+	}
+	metadata := attachment.Metadata{
+		Type:     "image",
+		Filename: filename,
+		Path:     pathName,
+		MIMEType: inspection.MIMEType,
+		Size:     inspection.Size,
+	}
+	if err := metadata.Validate(); err != nil {
+		attachment.CleanupTemporaryDir(directory)
+		return attachment.Metadata{}, "", fmt.Errorf("validate temporary screenshot")
+	}
+	return metadata, directory, nil
 }
 
 func (s *Session) modelStatus() (string, string) {
