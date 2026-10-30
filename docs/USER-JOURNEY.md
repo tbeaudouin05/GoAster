@@ -87,12 +87,18 @@ The two packaged OVH skills cover different starting points:
 
 | Starting point | Skill sequence | What it does |
 | --- | --- | --- |
-| There is no OVH host yet | [OVH provisioning](../skills/ovh/SKILL.md), then [OVH remote SSH](../skills/ovh-remote/SKILL.md) | The first skill discovers the OVH project, creates a missing project only after separate explicit confirmation, checks quota and options, then provisions and verifies a new resource after explicit approval. The second connects to that already-created host and bootstraps GoAster on it. |
+| There is no OVH host yet | [OVH provisioning](../skills/ovh/SKILL.md), then [OVH remote SSH](../skills/ovh-remote/SKILL.md) | The first skill uses defaults for a GoAster remote agent, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, minimal inbound exposure, and a hard US$8/month recurring-cost ceiling. It asks for the preferred deployment region only when genuinely unknown, reports assumptions and current expected cost after read-only checks, creates a missing project only after separate explicit confirmation, and provisions only after explicit approval. The second connects to that host and bootstraps GoAster on it. |
 | An OVH host already exists | [OVH remote SSH](../skills/ovh-remote/SKILL.md) only | The SSH skill checks and bootstraps that host. It does not create or manage OVH resources through the OVH API. |
 
-**New resource path:** provision and verify the resource first, then use the
-remote SSH skill to bootstrap it. **Existing host path:** start with the
-remote SSH skill and skip provisioning.
+**New resource path:** use the account/API endpoint already known from
+credentials or the Create API Keys URL; that is separate from the preferred
+Public Cloud deployment region. Ask for the deployment region only when it is
+genuinely unknown. After read-only project, quota, image, flavor, network, SSH
+key, and existing-instance checks, report the assumptions and current expected
+monthly cost. Keep the default at or below US$8/month and stop for explicit
+approval before billable creation or other mutations. Then use the remote SSH
+skill to bootstrap the provisioned and verified resource. **Existing host
+path:** start with the remote SSH skill and skip provisioning.
 
 ### Create API keys for a new resource
 

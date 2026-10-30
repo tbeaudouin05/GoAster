@@ -26,7 +26,7 @@ If GET /cloud/project returns no usable project, GoAster can automatically creat
 Open OVHcloud Manager: https://www.ovh.com/manager/#/hub/public-cloud
 For manual creation, sign in, accept the terms, and choose “Discover the Public Cloud universe”; name the project and select a payment method when prompted. Activate a discovery-mode project before provisioning resources.
 Official steps: https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project
-Read-only next step: clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. Use the local /env flow for secrets; never paste credentials into chat.
+Read-only next step: use the known OVH account/API endpoint and check GET /cloud/project. Ask for a preferred Public Cloud deployment region only if it is genuinely unknown. Otherwise use the defaults: GoAster remote-agent workload, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, minimal inbound exposure, and a hard US$8/month recurring-cost ceiling. After read-only checks, report the assumptions and current expected cost and wait for explicit approval before billable creation or other mutations. Project creation still requires separate explicit confirmation. Use the local /env flow for secrets; never paste credentials into chat.
 Starting onboarding does not provision or change any OVH resource.`
 
 const environmentFileCommand = "/env-file"

@@ -156,8 +156,13 @@ GoAster includes two packaged OVH skills for separate stages. Use the
 [OVH provisioning skill](skills/ovh/SKILL.md) to provision new OVHcloud
 resources. It starts with read-only project discovery, can create a missing
 project only after separate explicit confirmation, then checks quota, region,
-options, and current price estimate. It requires explicit confirmation before
-billable mutations and verifies the resulting resource. Use the
+options, and current price estimate. For an ordinary new-host setup, its
+defaults are a GoAster remote agent on Ubuntu LTS, the smallest suitable
+machine, SSH-key-only access, minimal inbound exposure, and a hard US$8/month
+recurring-cost ceiling. It asks for a preferred deployment region only when
+that preference is genuinely unknown, reports its assumptions and current
+expected cost after read-only checks, and waits for explicit approval before
+billable creation or other mutations. Use the
 [OVH remote SSH skill](skills/ovh-remote/SKILL.md) to connect to and bootstrap
 an already-existing OVH host, including a host just provisioned with the first
 skill. It starts with read-only SSH preflight, requires fresh explicit approval
@@ -179,7 +184,9 @@ project creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-f
 While viewing OVHcloud's Create API Keys screen, paste its URL in GoAster chat
 so onboarding can identify the account region and choose the matching API
 endpoint. The page URL is not a secret; never paste API keys or other secrets
-in chat. The [OVH provisioning skill](skills/ovh/SKILL.md#create-api-keys-screen)
+in chat. This account/API region is separate from the Public Cloud deployment
+region. Ask for the preferred deployment region only when it is genuinely
+unknown. The [OVH provisioning skill](skills/ovh/SKILL.md#create-api-keys-screen)
 documents the Europe, Canada, and United States URL mappings.
 
 On the Create API Keys screen, use Application name/Script name `GoAster`,

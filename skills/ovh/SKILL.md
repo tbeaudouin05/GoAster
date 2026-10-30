@@ -22,6 +22,46 @@ use and, only after you approve, create the cloud resources you request.
 Sign in or create an account on the [official OVHcloud account
 page](https://www.ovh.com/auth/).
 
+### Normal resource defaults
+
+Use these defaults when the user has not already given a preference. Do not
+repeatedly ask the user to choose the workload, budget, operating system, SSH
+method, or network exposure during ordinary onboarding:
+
+- Workload: a GoAster remote agent.
+- Operating system: the latest Ubuntu LTS image available for the selected
+  deployment region.
+- Machine: the smallest available instance that is suitable for running the
+  GoAster remote agent.
+- Access: SSH keys only. Use an appropriate key already available to the
+  project or host. Never fall back to password access. If no usable key exists,
+  stop and explain the key setup needed before provisioning.
+- Inbound network: allow only SSH (TCP 22), restricted to the known GoAster
+  host/operator source IP. Do not expose application ports by default. If a
+  suitably restricted SSH rule cannot be established, stop and explain the
+  blocker before provisioning.
+- Budget: estimated recurring OVH charges must not exceed **US$8 per month**.
+  Include the instance and required storage, public address, and predictable
+  network charges in the estimate. This is a hard default ceiling. If the
+  smallest suitable configuration exceeds it, do not create it; report the
+  estimate and wait for the user to explicitly override the ceiling.
+
+The user may explicitly override any default. An OVH account/API region and
+endpoint are separate from the Public Cloud deployment region. Reuse the
+account endpoint already configured or identified from the Create API Keys
+page; do not ask for it again. Ask for the user's preferred deployment region
+only when it is genuinely unknown from the conversation, configuration, and
+project context. If it is known, continue without asking. Do not confuse a
+known account/API region with a deployment-region preference.
+
+After the read-only checks, report the selected project and deployment region,
+all defaults or explicit preferences being applied, the proposed machine and
+access/network settings, and the current estimated recurring cost. If current
+pricing cannot be established or any required cost is unknown, stop and say
+what could not be estimated. Then stop for the user's explicit approval of
+that exact configuration and cost before any billable creation or other
+mutation. Do not treat silence or approval of a different action as consent.
+
 ### Public Cloud project discovery and creation
 
 After the credentials are configured, start with the read-only `GET
@@ -121,22 +161,34 @@ not select files containing API keys, application secrets, or other secret
 values. Do not transcribe, request, or use any secret that appears in a file;
 secret values belong only in the local `/env` flow.
 
-1. Clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. Use credentials only from a user-approved local credential source already available to the host. If none is available, stop and direct the user to configure one through the local `/env` environment-file flow.
+1. Use the known OVH account endpoint and credentials from a user-approved
+   local credential source already available to the host. If none is available,
+   stop and direct the user to configure one through the local `/env`
+   environment-file flow. Do not ask again for known account/API details. Ask
+   for the preferred Public Cloud deployment region only when it is genuinely
+   unknown. Apply the normal resource defaults above for any choice the user
+   has not explicitly overridden.
 2. Use `GET /cloud/project` to list Public Cloud projects. If there is no
    usable project, follow the project discovery and creation workflow above:
    obtain the separate explicit confirmation before `POST /cloud/project` and
-   verify the returned project ID and name. Confirm the selected project with
-   the user against the project name and ID shown in OVHcloud Manager. Then use
-   read-only checks for its regional quota, available regions, images, flavors,
-   public network, stored SSH keys, and existing instances. Resolve ambiguous
-   choices with the user. Present the exact proposed resource and current
-   price estimate before changing OVH state.
+   verify the returned project ID and name. If exactly one usable project is
+   available, use it and include its ID and name in the pre-approval report; if
+   multiple projects are equally plausible, stop and ask which one to use. Then
+   use read-only checks for its regional quota, available regions, images,
+   flavors, public network, stored SSH keys, and existing instances. Use the
+   preferred deployment region if known; otherwise ask for it. Resolve only
+   blocking ambiguities, such as no usable SSH key. Present the exact proposed
+   resource, applied assumptions, and current price estimate after these
+   read-only checks and before changing OVH state.
 3. Before creating or changing any billable resource, deleting or replacing
    data or resources, or changing access or network exposure, explain the exact
    action, affected resources, costs or consequences, and obtain explicit user
    confirmation. Project-creation confirmation is separate and does not
-   authorize a billable resource. Confirmation for one action does not
-   authorize a different action.
+   authorize a billable resource. For resource creation, the confirmation must
+   follow the read-only assumptions and cost report and cover that exact
+   configuration. Do not exceed the US$8/month default ceiling without an
+   explicit budget override. Confirmation for one action does not authorize a
+   different action.
 4. After the relevant confirmation, run the requested OVH API or installed
    client steps through `shell_execute`. Wait for the resource to become ready,
    then verify its ID, state, address, and requested access or setup. Do not
