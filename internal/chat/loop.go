@@ -21,7 +21,11 @@ Enter secret values only through this local environment-file flow; never paste t
 GoAster masks values and saves confirmed settings locally.`
 
 const ovhOnboardingStart = `OVH onboarding started.
-Read-only next step: clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. After approved credentials are available through the local /env flow, the first OVH operation is GET /cloud/project to list Public Cloud project IDs.
+Before provisioning, you need an accessible OVHcloud Public Cloud project. GoAster does not currently create projects automatically.
+Open OVHcloud Manager: https://www.ovh.com/manager/#/hub/public-cloud
+To create a project, sign in, accept the terms, and choose “Discover the Public Cloud universe”; name the project and select a payment method when prompted. Activate a discovery-mode project before provisioning resources.
+Official steps: https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project
+Read-only next step: clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. After the project is accessible and approved credentials are available through the local /env flow, the first OVH operation is GET /cloud/project to list Public Cloud project IDs.
 Starting onboarding does not provision or change any OVH resource.`
 
 const environmentFileCommand = "/env-file"

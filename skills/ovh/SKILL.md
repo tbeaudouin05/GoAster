@@ -22,6 +22,16 @@ use and, only after you approve, create the cloud resources you request.
 Sign in or create an account on the [official OVHcloud account
 page](https://www.ovh.com/auth/).
 
+### Required Public Cloud project
+
+Before provisioning, the user needs an accessible OVHcloud Public Cloud
+project. GoAster does not currently create projects automatically. Open
+[Public Cloud in OVHcloud Manager](https://www.ovh.com/manager/#/hub/public-cloud).
+To create a project, sign in, accept the terms, and choose **Discover the
+Public Cloud universe**; name the project and select a payment method when
+prompted. Activate a project in discovery mode before provisioning resources.
+See OVHcloud's [official project creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
+
 When environment variables are needed, name each one, briefly explain its
 purpose and where to find its value (the selected OVH client's docs or
 OVHcloud credential settings), and invite the user to ask for more explanation.

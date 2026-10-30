@@ -174,6 +174,12 @@ func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
 	}
 	for _, want := range []string{
 		"OVH onboarding started.",
+		"Before provisioning, you need an accessible OVHcloud Public Cloud project.",
+		"GoAster does not currently create projects automatically.",
+		"https://www.ovh.com/manager/#/hub/public-cloud",
+		"accept the terms, and choose “Discover the Public Cloud universe”",
+		"Activate a discovery-mode project before provisioning resources.",
+		"https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project",
 		"Read-only next step:",
 		"GET /cloud/project",
 		"does not provision or change any OVH resource.",

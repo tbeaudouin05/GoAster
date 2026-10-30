@@ -67,6 +67,14 @@ needed and where to find them.
 
 ## 4. Choose the correct OVH path
 
+An accessible OVHcloud Public Cloud project is required before provisioning.
+GoAster does not currently create projects automatically. Open [Public Cloud
+in OVHcloud Manager](https://www.ovh.com/manager/#/hub/public-cloud), sign in,
+accept the terms, and choose **Discover the Public Cloud universe**. Name the
+project and select a payment method when prompted. Activate a discovery-mode
+project before provisioning resources; see OVHcloud's [official project
+creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
+
 The two packaged OVH skills cover different starting points:
 
 | Starting point | Skill sequence | What it does |

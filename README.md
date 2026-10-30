@@ -163,6 +163,11 @@ skill. It starts with read-only SSH preflight, requires fresh explicit approval
 before each remote mutation, and verifies the result; it does not provision
 resources through the OVH API.
 
+An accessible OVHcloud Public Cloud project is required before provisioning;
+GoAster does not currently create projects automatically. Create one in
+[OVHcloud Manager](https://www.ovh.com/manager/#/hub/public-cloud) using the
+[official project creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
+
 While viewing OVHcloud's Create API Keys screen, paste its URL in GoAster chat
 so onboarding can identify the account region and choose the matching API
 endpoint. The page URL is not a secret; never paste API keys or other secrets
