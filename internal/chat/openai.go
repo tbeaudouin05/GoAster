@@ -1447,7 +1447,13 @@ func parseCodexStreamResponse(body []byte) (codexParsedResponse, error) {
 			}
 		case "response.output_item.added":
 			if event.Item == nil {
-				return fmt.Errorf("Codex function call event is missing its item")
+				return fmt.Errorf("Codex output item event is missing its item")
+			}
+			if event.Item.Type != "function_call" {
+				if isUnsupportedCodexCallType(event.Item.Type) {
+					return fmt.Errorf("Codex response contained unsupported tool call type %q", event.Item.Type)
+				}
+				break
 			}
 			pending, err := mergeItem(*event.Item)
 			if err != nil {

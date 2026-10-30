@@ -306,6 +306,56 @@ func TestConcurrentAuthChecksShareOneRefresh(t *testing.T) {
 }
 
 func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		event   string
+		wantErr string
+	}{
+		{
+			name:  "assistant message item",
+			event: `{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","status":"in_progress","content":[]}}`,
+		},
+		{
+			name:  "reasoning item",
+			event: `{"type":"response.output_item.added","item":{"id":"reasoning-1","type":"reasoning","summary":[]}}`,
+		},
+		{
+			name:  "item without a type",
+			event: `{"type":"response.output_item.added","item":{}}`,
+		},
+		{
+			name:    "missing item",
+			event:   `{"type":"response.output_item.added"}`,
+			wantErr: "missing its item",
+		},
+		{
+			name:    "null item",
+			event:   `{"type":"response.output_item.added","item":null}`,
+			wantErr: "missing its item",
+		},
+		{
+			name:    "unsupported tool call",
+			event:   `{"type":"response.output_item.added","item":{"type":"web_search_call"}}`,
+			wantErr: `unsupported tool call type "web_search_call"`,
+		},
+	} {
+		stream := "data: " + test.event + "\n\ndata: " + `{"type":"response.output_text.delta","delta":"Hello"}` + "\n\n"
+		parsed, err := parseCodexStreamResponse([]byte(stream))
+		if test.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Errorf("%s: error = %v, want %q", test.name, err, test.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", test.name, err)
+			continue
+		}
+		if parsed.Text != "Hello" || len(parsed.ToolCalls) != 0 {
+			t.Errorf("%s: response = %+v, want only text Hello", test.name, parsed)
+		}
+	}
+
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
 	if err := store.Save(Credential{
 		AccessToken: "access-token",
@@ -336,6 +386,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 			t.Errorf("Codex instructions = %q", request.Instructions)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\n")
 		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}\n\n")
 		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\" from Codex\"}\n\n")
 		fmt.Fprint(w, "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")
