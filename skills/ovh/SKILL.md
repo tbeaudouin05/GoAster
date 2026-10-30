@@ -22,15 +22,35 @@ use and, only after you approve, create the cloud resources you request.
 Sign in or create an account on the [official OVHcloud account
 page](https://www.ovh.com/auth/).
 
-### Required Public Cloud project
+### Public Cloud project discovery and creation
 
-Before provisioning, the user needs an accessible OVHcloud Public Cloud
-project. GoAster does not currently create projects automatically. Open
-[Public Cloud in OVHcloud Manager](https://www.ovh.com/manager/#/hub/public-cloud).
-To create a project, sign in, accept the terms, and choose **Discover the
-Public Cloud universe**; name the project and select a payment method when
-prompted. Activate a project in discovery mode before provisioning resources.
-See OVHcloud's [official project creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
+After the credentials are configured, start with the read-only `GET
+/cloud/project`. Treat a project as usable only when it has a non-empty
+project ID and name that the agent can verify. The agent can automatically
+create a missing project through the confirmed workflow below.
+
+If `GET /cloud/project` returns no usable project, ask the user for the desired
+project name and explain that `POST /cloud/project` creates a Public Cloud
+project at the account level. This is a separate, billing-relevant account
+action, not a billable resource creation step. Present the exact project name
+and relevant account or billing consequence, then obtain explicit user
+confirmation immediately before calling `POST /cloud/project`. A general
+approval to provision resources does not authorize this call.
+
+After that confirmation, call `POST /cloud/project` with the confirmed name.
+Verify the returned project ID and name from the response and a follow-up
+read-only project lookup such as `GET /cloud/project/*` with that project ID.
+Stop if either value is missing or does not match the confirmed project; do
+not continue to quota or resource checks until the ID and name are verified.
+Report the verified project ID and name. If a usable project already exists,
+confirm the selected project's ID and name before continuing.
+
+The user may create the project manually instead: open [Public Cloud in
+OVHcloud Manager](https://www.ovh.com/manager/#/hub/public-cloud), sign in,
+accept the terms, and choose **Discover the Public Cloud universe**; name the
+project and select a payment method when prompted. Activate a project in
+discovery mode before provisioning resources. See OVHcloud's [official project
+creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
 
 When environment variables are needed, name each one, briefly explain its
 purpose and where to find its value (the selected OVH client's docs or
@@ -70,23 +90,25 @@ Tell the user to enter these values:
 | Validity | `Unlimited` |
 | Restricted IPs | Leave empty |
 
-In **Rights**, add exactly these three method/path rows. The `+` button adds a
+In **Rights**, add exactly these four method/path rows. The `+` button adds a
 row; use it to add the remaining rows:
 
 | Method | Path |
 | --- | --- |
 | GET | `/cloud/project` |
 | GET | `/cloud/project/*` |
+| POST | `/cloud/project` |
 | POST | `/cloud/project/*` |
 
 Do not add other method/path rows or replace `*` with a project ID. After the
 user creates the keys, have them enter the values only through GoAster's local
 `/env` flow. Keep the Application Key, Application Secret, and Consumer Key
 out of chat, screenshots, and reports. Once the configured OVH client
-authenticates, discover the project ID from **Public Cloud** in OVHcloud
-Manager or from the read-only `GET /cloud/project` response. Use the discovered
-ID in later requests. The user does not enter a project ID on the Create API
-Keys screen.
+authenticates, use the read-only project discovery and creation workflow above.
+The collection-level `POST /cloud/project` is only for the separately
+confirmed account-level project creation; `POST /cloud/project/*` is for later
+project-scoped operations. The user does not enter a project ID on the Create
+API Keys screen.
 
 Price estimates come from OVHcloud's [current Public Cloud price
 list](https://www.ovhcloud.com/en/public-cloud/prices/); these API key rights
@@ -100,14 +122,26 @@ values. Do not transcribe, request, or use any secret that appears in a file;
 secret values belong only in the local `/env` flow.
 
 1. Clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. Use credentials only from a user-approved local credential source already available to the host. If none is available, stop and direct the user to configure one through the local `/env` environment-file flow.
-2. Use `GET /cloud/project` to list Public Cloud project IDs. Confirm the
-   selected project with the user against the project name and ID shown in
-   OVHcloud Manager. Then use read-only checks for its regional quota, available
-   regions, images, flavors, public network, stored SSH keys, and existing
-   instances. Resolve ambiguous choices with the user. Present the exact
-   proposed resource and current price estimate before changing OVH state.
-3. Before creating or changing any billable resource, deleting or replacing data or resources, or changing access or network exposure, explain the exact action, affected resources, costs or consequences, and obtain explicit user confirmation. Confirmation for one action does not authorize a different action.
-4. After confirmation, run the requested OVH API or installed client steps through `shell_execute`. Wait for the resource to become ready, then verify its ID, state, address, and requested access or setup. Do not retry an uncertain mutation blindly or delete a partially provisioned resource without confirmation.
+2. Use `GET /cloud/project` to list Public Cloud projects. If there is no
+   usable project, follow the project discovery and creation workflow above:
+   obtain the separate explicit confirmation before `POST /cloud/project` and
+   verify the returned project ID and name. Confirm the selected project with
+   the user against the project name and ID shown in OVHcloud Manager. Then use
+   read-only checks for its regional quota, available regions, images, flavors,
+   public network, stored SSH keys, and existing instances. Resolve ambiguous
+   choices with the user. Present the exact proposed resource and current
+   price estimate before changing OVH state.
+3. Before creating or changing any billable resource, deleting or replacing
+   data or resources, or changing access or network exposure, explain the exact
+   action, affected resources, costs or consequences, and obtain explicit user
+   confirmation. Project-creation confirmation is separate and does not
+   authorize a billable resource. Confirmation for one action does not
+   authorize a different action.
+4. After the relevant confirmation, run the requested OVH API or installed
+   client steps through `shell_execute`. Wait for the resource to become ready,
+   then verify its ID, state, address, and requested access or setup. Do not
+   retry an uncertain mutation blindly or delete a partially provisioned
+   resource without confirmation.
 5. Remove temporary scripts when finished. Do not install tools or add repository dependencies as part of provisioning without the user's approval.
 
 ## Report

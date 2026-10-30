@@ -154,19 +154,27 @@ the [GoAster user journey](docs/USER-JOURNEY.md).
 
 GoAster includes two packaged OVH skills for separate stages. Use the
 [OVH provisioning skill](skills/ovh/SKILL.md) to provision new OVHcloud
-resources. It starts with read-only checks of the project, quota, region,
-options, and current price estimate, requires explicit confirmation before
-billable mutations, and verifies the resulting resource. Use the
+resources. It starts with read-only project discovery, can create a missing
+project only after separate explicit confirmation, then checks quota, region,
+options, and current price estimate. It requires explicit confirmation before
+billable mutations and verifies the resulting resource. Use the
 [OVH remote SSH skill](skills/ovh-remote/SKILL.md) to connect to and bootstrap
 an already-existing OVH host, including a host just provisioned with the first
 skill. It starts with read-only SSH preflight, requires fresh explicit approval
 before each remote mutation, and verifies the result; it does not provision
 resources through the OVH API.
 
-An accessible OVHcloud Public Cloud project is required before provisioning;
-GoAster does not currently create projects automatically. Create one in
-[OVHcloud Manager](https://www.ovh.com/manager/#/hub/public-cloud) using the
-[official project creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
+An OVHcloud Public Cloud project is needed before resource provisioning. After
+the credentials are configured through local `/env`, GoAster starts with the
+read-only `GET /cloud/project`. If it returns no usable project, GoAster asks
+for the intended project name and can automatically create it with `POST /cloud/project`
+after explicit confirmation immediately before the call. Project creation is a
+separate account-level, billing-relevant action; the agent must explain the
+exact name and relevant consequence, and must verify the returned project ID
+and name before continuing. That confirmation does not authorize a billable
+resource. A user who prefers the manual route can use [OVHcloud
+Manager](https://www.ovh.com/manager/#/hub/public-cloud) and the [official
+project creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
 
 While viewing OVHcloud's Create API Keys screen, paste its URL in GoAster chat
 so onboarding can identify the account region and choose the matching API
@@ -177,12 +185,15 @@ documents the Europe, Canada, and United States URL mappings.
 On the Create API Keys screen, use Application name/Script name `GoAster`,
 Description `GoAster server provisioning`, Validity `Unlimited`, and leave
 Restricted IPs empty. Add exactly `GET /cloud/project`,
-`GET /cloud/project/*`, and `POST /cloud/project/*` as rights rows; the `+`
-button adds a row. See the [OVH provisioning skill's Create API Keys
-instructions](skills/ovh/SKILL.md#create-api-keys-screen). After configuring
-the keys through local `/env` and authenticating, discover the project ID from
-Public Cloud or `GET /cloud/project`. Do not enter a project ID on the Create
-API Keys screen. Never paste keys into chat or include them in screenshots.
+`GET /cloud/project/*`, `POST /cloud/project`, and `POST /cloud/project/*` as
+rights rows; the `+` button adds a row. The collection-level POST is for the
+separately confirmed account-level project creation; the project-scoped POST
+is for later project-scoped operations. See the [OVH provisioning skill's
+Create API Keys instructions](skills/ovh/SKILL.md#create-api-keys-screen).
+After configuring the keys through local `/env` and authenticating, follow the
+read-only project check above. If a project is created, verify its returned ID
+and name before continuing. Do not enter a project ID on the Create API Keys
+screen. Never paste keys into chat or include them in screenshots.
 
 **End-to-end:** Start in local GoAster chat and sign in to OVHcloud directly on
 its website. Enter the generated OVH API key values and Telegram bot token only

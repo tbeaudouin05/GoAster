@@ -67,19 +67,27 @@ needed and where to find them.
 
 ## 4. Choose the correct OVH path
 
-An accessible OVHcloud Public Cloud project is required before provisioning.
-GoAster does not currently create projects automatically. Open [Public Cloud
-in OVHcloud Manager](https://www.ovh.com/manager/#/hub/public-cloud), sign in,
-accept the terms, and choose **Discover the Public Cloud universe**. Name the
-project and select a payment method when prompted. Activate a discovery-mode
-project before provisioning resources; see OVHcloud's [official project
-creation guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
+An OVHcloud Public Cloud project is needed before resource provisioning. After
+credentials are configured through local `/env`, GoAster starts with the
+read-only `GET /cloud/project`. If it returns no usable project, the agent asks
+for the intended project name and can automatically create it with `POST /cloud/project`
+after explicit confirmation immediately before that call. Project creation is a
+separate account-level, billing-relevant action, so the agent explains the exact name
+and relevant consequence and verifies the returned project ID and name before
+continuing. This confirmation does not authorize a billable resource.
+
+The user may also create a project manually in [Public Cloud in OVHcloud
+Manager](https://www.ovh.com/manager/#/hub/public-cloud): sign in, accept the
+terms, and choose **Discover the Public Cloud universe**. Name the project and
+select a payment method when prompted. Activate a discovery-mode project
+before provisioning resources; see OVHcloud's [official project creation
+guide](https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project).
 
 The two packaged OVH skills cover different starting points:
 
 | Starting point | Skill sequence | What it does |
 | --- | --- | --- |
-| There is no OVH host yet | [OVH provisioning](../skills/ovh/SKILL.md), then [OVH remote SSH](../skills/ovh-remote/SKILL.md) | The first skill checks the OVH project, quota, options, and current price, then provisions and verifies a new resource after explicit approval. The second connects to that already-created host and bootstraps GoAster on it. |
+| There is no OVH host yet | [OVH provisioning](../skills/ovh/SKILL.md), then [OVH remote SSH](../skills/ovh-remote/SKILL.md) | The first skill discovers the OVH project, creates a missing project only after separate explicit confirmation, checks quota and options, then provisions and verifies a new resource after explicit approval. The second connects to that already-created host and bootstraps GoAster on it. |
 | An OVH host already exists | [OVH remote SSH](../skills/ovh-remote/SKILL.md) only | The SSH skill checks and bootstraps that host. It does not create or manage OVH resources through the OVH API. |
 
 **New resource path:** provision and verify the resource first, then use the
@@ -114,20 +122,25 @@ Use these exact fields on the Create API Keys screen:
 | Validity | `Unlimited` |
 | Restricted IPs | Leave empty |
 
-In **Rights**, add exactly these rows. The `+` button adds another row:
+In **Rights**, add exactly these four rows. The `+` button adds another row:
 
 | Method | Path |
 | --- | --- |
 | GET | `/cloud/project` |
 | GET | `/cloud/project/*` |
+| POST | `/cloud/project` |
 | POST | `/cloud/project/*` |
 
 After creating the keys, configure them through GoAster's local `/env` flow
-and authenticate to OVH. Then discover the project ID in **Public Cloud** or
-from the read-only `GET /cloud/project` response, and use it in later
-provisioning requests. The user does not enter a project ID on the Create API
-Keys screen. Keep the Application Key, Application Secret, and Consumer Key
-out of chat and screenshots; enter credentials only through local `/env`.
+and authenticate to OVH. The collection-level `POST /cloud/project` is for the
+separately confirmed account-level project creation; `POST
+/cloud/project/*` is for later project-scoped operations. If the read-only
+`GET /cloud/project` finds no usable project, the agent must obtain explicit
+confirmation before the collection-level POST and verify the returned project
+ID and name before using it in later requests. The user does not enter a
+project ID on the Create API Keys screen. Keep the Application Key, Application
+Secret, and Consumer Key out of chat and screenshots; enter credentials only
+through local `/env`.
 
 For SSH bootstrap, the skill confirms the exact host and starts with read-only
 checks. It then builds `goaster-agent` and `goaster-telegram` on the existing

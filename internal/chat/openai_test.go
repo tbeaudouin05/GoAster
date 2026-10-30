@@ -385,6 +385,18 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		if !strings.HasPrefix(request.Instructions, openAIInstructions) || !strings.Contains(request.Instructions, "# OVH provisioning") || !strings.Contains(request.Instructions, "GET /cloud/project") {
 			t.Errorf("Codex instructions do not include the packaged OVH skill: %q", request.Instructions)
 		}
+		for _, want := range []string{
+			"POST /cloud/project",
+			"POST /cloud/project/*",
+			"account-level",
+			"billing-relevant account",
+			"confirmation immediately before calling",
+			"returned project ID and name",
+		} {
+			if !strings.Contains(request.Instructions, want) {
+				t.Errorf("Codex instructions missing OVH project guardrail %q", want)
+			}
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\n")
 		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}\n\n")

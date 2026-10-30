@@ -21,11 +21,12 @@ Enter secret values only through this local environment-file flow; never paste t
 GoAster masks values and saves confirmed settings locally.`
 
 const ovhOnboardingStart = `OVH onboarding started.
-Before provisioning, you need an accessible OVHcloud Public Cloud project. GoAster does not currently create projects automatically.
+A Public Cloud project is needed before resource provisioning. After approved credentials are available through the local /env flow, the first OVH operation is the read-only GET /cloud/project.
+If GET /cloud/project returns no usable project, GoAster can automatically create one with POST /cloud/project after the user approves the exact project name. Project creation is a separate account-level, billing-relevant action, so the agent must obtain explicit user confirmation immediately before that call and verify the returned project ID and name before continuing. This confirmation is separate from confirmation for billable resource creation.
 Open OVHcloud Manager: https://www.ovh.com/manager/#/hub/public-cloud
-To create a project, sign in, accept the terms, and choose “Discover the Public Cloud universe”; name the project and select a payment method when prompted. Activate a discovery-mode project before provisioning resources.
+For manual creation, sign in, accept the terms, and choose “Discover the Public Cloud universe”; name the project and select a payment method when prompted. Activate a discovery-mode project before provisioning resources.
 Official steps: https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project
-Read-only next step: clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. After the project is accessible and approved credentials are available through the local /env flow, the first OVH operation is GET /cloud/project to list Public Cloud project IDs.
+Read-only next step: clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. Use the local /env flow for secrets; never paste credentials into chat.
 Starting onboarding does not provision or change any OVH resource.`
 
 const environmentFileCommand = "/env-file"
