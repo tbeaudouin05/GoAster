@@ -78,6 +78,34 @@ The two packaged OVH skills cover different starting points:
 remote SSH skill to bootstrap it. **Existing host path:** start with the
 remote SSH skill and skip provisioning.
 
+### Create API keys for a new resource
+
+Create the OVH API keys in OVH's browser page for the account's API endpoint,
+not the instance's deployment region. Use these exact fields on the Create
+API Keys screen:
+
+| Screen field | Enter |
+| --- | --- |
+| Application name / Script name | `GoAster` |
+| Description | `GoAster server provisioning` |
+| Validity | `Unlimited` |
+| Restricted IPs | Leave empty |
+
+In **Rights**, add exactly these rows. The `+` button adds another row:
+
+| Method | Path |
+| --- | --- |
+| GET | `/cloud/project` |
+| GET | `/cloud/project/*` |
+| POST | `/cloud/project/*` |
+
+After creating the keys, configure them through GoAster's local `/env` flow
+and authenticate to OVH. Then discover the project ID in **Public Cloud** or
+from the read-only `GET /cloud/project` response, and use it in later
+provisioning requests. The user does not enter a project ID on the Create API
+Keys screen. Keep the Application Key, Application Secret, and Consumer Key
+out of chat and screenshots; enter credentials only through local `/env`.
+
 For SSH bootstrap, the skill confirms the exact host and starts with read-only
 checks. It then builds `goaster-agent` and `goaster-telegram` on the existing
 Linux host from the repository's `main` branch, using pinned Go 1.27.3, and

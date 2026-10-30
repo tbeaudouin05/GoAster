@@ -30,16 +30,44 @@ environment-file flow; never ask for or accept them in chat.
 
 ### Create API Keys screen
 
-When explaining the OVHcloud **Create API Keys** screen, recommend:
+Before collecting credentials, open the Create API Keys page for the user's
+OVHcloud account endpoint: [Europe](https://eu.api.ovh.com/createToken/),
+[Canada](https://ca.api.ovh.com/createToken/), or
+[United States](https://api.us.ovhcloud.com/createToken/). This endpoint is
+based on the OVHcloud account, not the Public Cloud deployment region. The
+page may label the application-name field **Script name**. Sign in directly on
+the OVHcloud page; do not send OVH login details through GoAster chat.
 
-- Application name: `GoAster`.
-- A short description that identifies the intended GoAster task.
-- A limited validity period when practical; avoid `Unlimited` when a suitable
-  expiry can be used.
-- Only the rights required for the requested task. Do not enable unrestricted
-  write access unless the user has specifically required it and the task needs
-  it.
-- Restricted source IPs when feasible.
+Tell the user to enter these values:
+
+| Screen field | Enter |
+| --- | --- |
+| Application name / Script name | `GoAster` |
+| Description | `GoAster server provisioning` |
+| Validity | `Unlimited` |
+| Restricted IPs | Leave empty |
+
+In **Rights**, add exactly these three method/path rows. The `+` button adds a
+row; use it to add the remaining rows:
+
+| Method | Path |
+| --- | --- |
+| GET | `/cloud/project` |
+| GET | `/cloud/project/*` |
+| POST | `/cloud/project/*` |
+
+Do not add other method/path rows or replace `*` with a project ID. After the
+user creates the keys, have them enter the values only through GoAster's local
+`/env` flow. Keep the Application Key, Application Secret, and Consumer Key
+out of chat, screenshots, and reports. Once the configured OVH client
+authenticates, discover the project ID from **Public Cloud** in OVHcloud
+Manager or from the read-only `GET /cloud/project` response. Use the discovered
+ID in later requests. The user does not enter a project ID on the Create API
+Keys screen.
+
+Price estimates come from OVHcloud's [current Public Cloud price
+list](https://www.ovhcloud.com/en/public-cloud/prices/); these API key rights
+are the agreed set for GoAster server provisioning.
 
 Use the generic `/file` command in the local terminal to inspect a file,
 including a dashboard screenshot. It accepts supported images and documents
@@ -49,7 +77,12 @@ values. Do not transcribe, request, or use any secret that appears in a file;
 secret values belong only in the local `/env` flow.
 
 1. Clarify the OVH project, endpoint and region, workload, budget, operating system, access method, and required network exposure. Use credentials only from a user-approved local credential source already available to the host. If none is available, stop and direct the user to configure one through the local `/env` environment-file flow.
-2. Use read-only checks to confirm the project, quota, available regions, images, sizes, and required network and SSH options. Resolve ambiguous choices with the user. Present the exact proposed resources and current price estimate before changing OVH state.
+2. Use `GET /cloud/project` to list Public Cloud project IDs. Confirm the
+   selected project with the user against the project name and ID shown in
+   OVHcloud Manager. Then use read-only checks for its regional quota, available
+   regions, images, flavors, public network, stored SSH keys, and existing
+   instances. Resolve ambiguous choices with the user. Present the exact
+   proposed resource and current price estimate before changing OVH state.
 3. Before creating or changing any billable resource, deleting or replacing data or resources, or changing access or network exposure, explain the exact action, affected resources, costs or consequences, and obtain explicit user confirmation. Confirmation for one action does not authorize a different action.
 4. After confirmation, run the requested OVH API or installed client steps through `shell_execute`. Wait for the resource to become ready, then verify its ID, state, address, and requested access or setup. Do not retry an uncertain mutation blindly or delete a partially provisioned resource without confirmation.
 5. Remove temporary scripts when finished. Do not install tools or add repository dependencies as part of provisioning without the user's approval.

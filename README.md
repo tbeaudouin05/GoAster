@@ -163,10 +163,22 @@ skill. It starts with read-only SSH preflight, requires fresh explicit approval
 before each remote mutation, and verifies the result; it does not provision
 resources through the OVH API.
 
-**End-to-end:** Start in local GoAster chat and enter OVH credentials and the
-Telegram bot token only through GoAster's local `/env` environment-file flow.
-For a new host, provision the OVH resource with explicit approval, then use
-the SSH skill to bootstrap it; for an existing host, start with SSH bootstrap.
+On the Create API Keys screen, use Application name/Script name `GoAster`,
+Description `GoAster server provisioning`, Validity `Unlimited`, and leave
+Restricted IPs empty. Add exactly `GET /cloud/project`,
+`GET /cloud/project/*`, and `POST /cloud/project/*` as rights rows; the `+`
+button adds a row. See the [OVH provisioning skill's Create API Keys
+instructions](skills/ovh/SKILL.md#create-api-keys-screen). After configuring
+the keys through local `/env` and authenticating, discover the project ID from
+Public Cloud or `GET /cloud/project`. Do not enter a project ID on the Create
+API Keys screen. Never paste keys into chat or include them in screenshots.
+
+**End-to-end:** Start in local GoAster chat and sign in to OVHcloud directly on
+its website. Enter the generated OVH API key values and Telegram bot token only
+through GoAster's local `/env` environment-file flow. Never paste keys into
+chat or include them in screenshots. For a new host, provision
+the OVH resource with explicit approval, then use the SSH skill to bootstrap
+it; for an existing host, start with SSH bootstrap.
 Next, complete a separate remote OpenAI device login from an SSH terminal and
 verify `/healthz`; then complete the separately approved Telegram token and
 pairing setup below. Keep the local terminal's OpenAI credentials on the local
