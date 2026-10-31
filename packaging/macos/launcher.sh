@@ -17,7 +17,7 @@ on run argv
     set payloadPath to item 1 of argv
     tell application "Terminal"
         activate
-        do script quoted form of payloadPath
+        do script ("clear; " & quoted form of payloadPath)
     end tell
 end run
 APPLESCRIPT
