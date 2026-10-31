@@ -320,6 +320,22 @@ again or create another server. If the saved server cannot be reached, it says
 so and asks for the next simple action. The record never contains the private
 key, OpenAI login, Telegram token, pairing code, or environment values.
 
+### If the administrator changes computers
+
+The server keeps the SSH public key in its authorized keys; the matching
+private key stays on the administrator's computer. Preferred: generate a new
+Ed25519 key on the new computer, add its public key while the old key still
+works, test SSH from the new computer with strict host-key checking, then
+remove the old public key. Alternatively, securely transfer the existing
+private key. Never send a private key in chat or store it in the repository.
+If the only private key is lost, recovery needs another working access path or
+the hosting provider's console/recovery access.
+
+For the host described in the user journey, Ubuntu 26.04 LTS was selected and
+reported active at creation. This is creation-time provisioning evidence, not a
+fresh live OS check. The observed root SSH forced-command redirect to `ubuntu`
+is an account policy; it does not identify or change the OS image.
+
 After the remote agent is installed and root SSH is ready, GoAster's internal
 `remote_login` handoff invokes the protected login flow using `root` as the
 SSH target. The normal onboarding path must not create or use a separate

@@ -218,6 +218,23 @@ Existing hosts still need a trusted `known_hosts` entry or fingerprint
 verification through a trusted channel before connection. Do not use
 `ssh-keyscan` as an independent trust source.
 
+For this host, Ubuntu 26.04 LTS was selected and reported active at creation.
+That is creation-time provisioning evidence, not a fresh live OS verification.
+The observed root SSH forced-command redirect to `ubuntu` is an SSH account
+policy, separate from the OS image.
+
+### If the administrator changes computers
+
+The server keeps the SSH public key in its authorized keys; its matching
+private key stays on the administrator's computer. Prefer generating a new
+Ed25519 key on the new computer, adding its public key through the old access,
+testing SSH from the new computer with strict host-key checking, and only then
+removing the old public key. Alternatively, securely transfer the existing
+private key. Never send it in chat or put it in the repository. Losing the only
+private key requires another existing access path or OVH console/recovery
+access. Keep host-key verification enabled on the new computer; use a trusted
+`known_hosts` entry or verify the fingerprint through a trusted channel.
+
 The terminal displays the URL and one-time code. The administrator opens the
 URL in a browser, signs in with the subscription account, and approves the
 remote device authorization; GoAster waits for that approval. Keep the URL,

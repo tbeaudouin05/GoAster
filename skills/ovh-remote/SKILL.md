@@ -81,6 +81,20 @@ save or refresh this record before continuing. On later starts, use the saved
 record automatically and tell the user in simple terms that GoAster found the
 server. Never print the private key or any secret-bearing remote output.
 
+## Move SSH access to another computer
+
+The server keeps the SSH public key in its authorized keys; the matching
+private key stays on the administrator's local computer. A saved connection
+record does not replace that private key. Prefer generating a new Ed25519 key
+on the new computer, adding its public key through the old working access,
+testing SSH from the new computer with strict host-key checking, then removing
+the old public key only after the test succeeds. Alternatively, securely
+transfer the existing private key. Never send a private key in chat or store it
+in the repository. If the only private key is lost, adding another key requires
+an existing access path or OVH's hosting console or recovery access. On the new
+computer, keep host-key verification enabled and use a trusted `known_hosts`
+entry or verify the fingerprint through a trusted channel.
+
 ## Confirm the target and access
 
 Before connecting, establish the exact hostname or IP address, SSH username,
@@ -94,15 +108,21 @@ it generated (normally `~/.ssh/goaster-ovh`; on Windows, `$HOME/.ssh/goaster-ovh
 when that identity was included in the approved provisioning configuration.
 Do not ask the user to provide that key again.
 
-Keep private keys, agent credentials, passwords, tokens, and environment values
-on the host. Never ask the user to paste a secret into chat, put a secret in
-SSH arguments or a script, enable shell tracing, or print an environment or
-private-key file. Do not weaken host verification with
+Keep SSH private keys on the administrator's local computer. Keep agent
+credentials, passwords, tokens, and environment values in their intended
+protected local or server files. Never ask the user to paste a secret into
+chat, put a secret in SSH arguments or a script, enable shell tracing, or print
+an environment or private-key file. Do not weaken host verification with
 `StrictHostKeyChecking=no`. Existing hosts and saved targets must have an
 already trusted `known_hosts` entry. If an existing host has no trusted entry,
 obtain and compare its host-key fingerprint through a trusted channel and get
 explicit approval before connecting. Never use trust-on-first-use for an
 existing target, an unrelated target, or a target whose provenance is unclear.
+
+For the host described in the user journey, Ubuntu 26.04 LTS was selected and
+reported active at creation. This is creation-time provisioning evidence, not a
+fresh live OS verification. The observed root SSH forced-command redirect to
+`ubuntu` is an account policy, separate from the operating system image.
 
 ### First SSH contact for a newly provisioned OVH instance
 
