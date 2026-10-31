@@ -154,7 +154,7 @@ func TestAgentLoopbackHandler(t *testing.T) {
 		want                                        string
 	}{
 		{name: "health", method: "GET", path: "/healthz", host: "127.0.0.1:8765", status: 200, want: "ok"},
-		{name: "chat", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","chat_id":42}`, status: 200, want: `"reply":"reply to hello"`},
+		{name: "chat", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","chat_id":42}`, status: 200, want: `"type":"final","reply":"reply to hello"`},
 		{name: "reject host", method: "GET", path: "/healthz", host: "attacker.invalid", status: 403},
 		{name: "reject content type", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "text/plain", body: `{"message":"hello"}`, status: 415},
 		{name: "reject missing chat ID", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello"}`, status: 400},

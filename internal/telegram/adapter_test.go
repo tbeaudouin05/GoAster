@@ -73,7 +73,7 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 			t.Fatal("unexpected agent request")
 		}
 		forwarded = append(forwarded, request)
-		return response(200, `{"reply":"hello back"}`), nil
+		return response(200, `{"type":"final","reply":"hello back"}`+"\n"), nil
 	})}
 
 	group := privateMessage(22, "/start "+testCode)
@@ -160,7 +160,7 @@ func TestPairedGroupMessagesForwardChatIDAndReplyToOriginatingChat(t *testing.T)
 				t.Fatal("invalid agent request")
 			}
 			forwarded = append(forwarded, request)
-			return response(200, `{"reply":"group reply"}`), nil
+			return response(200, `{"type":"final","reply":"group reply"}`+"\n"), nil
 		}),
 	}
 
@@ -329,6 +329,17 @@ func TestToolFeedbackTruncatesArgumentsByRune(t *testing.T) {
 	preview := strings.TrimPrefix(text, "🔧 `shell_execute`\n")
 	if len([]rune(preview)) != telegramToolFeedbackMaxChars+1 || !strings.HasSuffix(preview, "…") {
 		t.Fatalf("preview length/suffix = %d/%q", len([]rune(preview)), preview[len(preview)-3:])
+	}
+}
+
+func TestAgentRejectsUntypedLegacyResponse(t *testing.T) {
+	a := &adapter{agent: doerFunc(func(*http.Request) (*http.Response, error) {
+		return response(http.StatusOK, `{"reply":"legacy reply"}`), nil
+	})}
+
+	reply, err := a.askAgent(context.Background(), "hello", 42, nil, nil)
+	if err == nil || reply != "" {
+		t.Fatalf("untyped legacy response = %q, %v; want an error with no reply", reply, err)
 	}
 }
 

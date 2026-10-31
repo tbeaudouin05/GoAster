@@ -74,7 +74,7 @@ func TestAcceptedTurnSendsTypingImmediatelyBeforeAgentWork(t *testing.T) {
 		client:  server.Client(),
 		agent: doerFunc(func(*http.Request) (*http.Response, error) {
 			events <- "agent"
-			return response(http.StatusOK, `{"reply":"hello"}`), nil
+			return response(http.StatusOK, `{"type":"final","reply":"hello"}`+"\n"), nil
 		}),
 	}
 
@@ -98,7 +98,7 @@ func TestTypingFailureDoesNotFailAcceptedTurn(t *testing.T) {
 		client:  server.Client(),
 		agent: doerFunc(func(*http.Request) (*http.Response, error) {
 			events <- "agent"
-			return response(http.StatusOK, `{"reply":"hello"}`), nil
+			return response(http.StatusOK, `{"type":"final","reply":"hello"}`+"\n"), nil
 		}),
 	}
 
@@ -139,7 +139,7 @@ func TestTypingCancellationDuringInFlightRequestStopsHandlePromptly(t *testing.T
 			if err := r.Context().Err(); err != nil {
 				return nil, err
 			}
-			return response(http.StatusOK, `{"reply":"hello"}`), nil
+			return response(http.StatusOK, `{"type":"final","reply":"hello"}`+"\n"), nil
 		}),
 	}
 
@@ -198,7 +198,7 @@ func TestTypingRefreshesWhileAgentIsBlockedAndStopsAfterReturn(t *testing.T) {
 		agent: doerFunc(func(*http.Request) (*http.Response, error) {
 			close(agentStarted)
 			<-releaseAgent
-			return response(http.StatusOK, `{"reply":"hello"}`), nil
+			return response(http.StatusOK, `{"type":"final","reply":"hello"}`+"\n"), nil
 		}),
 	}
 

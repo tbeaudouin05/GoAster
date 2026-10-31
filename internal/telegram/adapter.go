@@ -445,11 +445,6 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 			}
 		case "final":
 			reply = event.Reply
-		case "":
-			// Accept the old one-object response while agents are upgraded.
-			if event.Reply != "" {
-				reply = event.Reply
-			}
 		}
 	}
 	if err := scanner.Err(); err != nil {

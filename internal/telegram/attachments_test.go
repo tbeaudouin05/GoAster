@@ -123,7 +123,7 @@ func TestPairedAttachmentDownloadsAndForwardsBytesAndCaption(t *testing.T) {
 			if !bytes.Equal(item.Data, payload) {
 				t.Fatalf("forwarded bytes = %q, want %q", item.Data, payload)
 			}
-			return response(http.StatusOK, `{"reply":"processed"}`), nil
+			return response(http.StatusOK, `{"type":"final","reply":"processed"}`+"\n"), nil
 		}),
 	}
 	m := textMessage(42, 42, "private", "")
@@ -164,7 +164,7 @@ func TestTelegramDocumentImageIsClassifiedFromBytes(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&forwarded); err != nil {
 				t.Fatal(err)
 			}
-			return response(http.StatusOK, `{"reply":"image received"}`), nil
+			return response(http.StatusOK, `{"type":"final","reply":"image received"}`+"\n"), nil
 		}),
 	}
 	m := textMessage(42, 42, "private", "inspect")
@@ -247,7 +247,7 @@ func TestPairedMediaOnlyMessageIsForwarded(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&forwarded); err != nil {
 				t.Fatal(err)
 			}
-			return response(http.StatusOK, `{"reply":"image received"}`), nil
+			return response(http.StatusOK, `{"type":"final","reply":"image received"}`+"\n"), nil
 		}),
 	}
 	m := textMessage(42, 42, "private", "")
