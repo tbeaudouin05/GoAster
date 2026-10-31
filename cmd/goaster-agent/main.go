@@ -192,8 +192,25 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 				}
 			}
 		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-cache")
+		encoder := json.NewEncoder(w)
+		flusher, canFlush := w.(http.Flusher)
+		emit := func(event any) {
+			_ = encoder.Encode(event)
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		observer := func(name, arguments string) {
+			emit(struct {
+				Type      string `json:"type"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{"tool_call", name, arguments})
+		}
 		session := sessionFor(request.ChatID)
-		reply, err := session.ReplyWithAttachments(r.Context(), request.Message, metadata)
+		reply, err := session.ReplyWithAttachments(chat.WithToolCallObserver(r.Context(), observer), request.Message, metadata)
 		if err != nil {
 			if errors.Is(err, attachment.ErrUnsupportedImage) {
 				http.Error(w, "unsupported image format", http.StatusUnsupportedMediaType)
@@ -202,10 +219,10 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(struct {
+		emit(struct {
+			Type  string `json:"type"`
 			Reply string `json:"reply"`
-		}{reply})
+		}{"final", reply})
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != "127.0.0.1:8765" && r.Host != "127.0.0.1" {

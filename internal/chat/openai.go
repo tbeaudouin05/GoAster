@@ -1055,6 +1055,9 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 			if !ok {
 				return "", status, fmt.Errorf("Codex requested unsupported tool %q", call.Name)
 			}
+			if observer := toolCallObserver(ctx); observer != nil {
+				observer(call.Name, call.Arguments)
+			}
 			result, err := handler(ctx, call.Arguments)
 			if err != nil {
 				return "", status, err

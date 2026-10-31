@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -78,6 +79,7 @@ type telegramFile struct {
 }
 
 const (
+	telegramToolFeedbackMaxChars  = 600
 	telegramTypingRefreshInterval = 4 * time.Second
 	telegramTypingActionTimeout   = 2 * time.Second
 )
@@ -271,9 +273,37 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	}
 	stopTyping := a.startTyping(ctx, m.Chat.ID)
 	defer stopTyping()
+	var progressMessageID int64
+	showToolCall := func(name, arguments string) {
+		text := toolFeedbackText(name, arguments)
+		if progressMessageID == 0 {
+			progressMessageID, _ = a.sendMessage(ctx, m.Chat.ID, text)
+			return
+		}
+		_ = a.editMessage(ctx, m.Chat.ID, progressMessageID, text)
+	}
 	sendFinal := func(text string) {
 		stopTyping()
-		a.send(ctx, m.Chat.ID, text)
+		runes := []rune(text)
+		if len(runes) == 0 {
+			return
+		}
+		if progressMessageID != 0 {
+			n := len(runes)
+			if n > 2000 {
+				n = 2000
+			}
+			_ = a.editMessage(ctx, m.Chat.ID, progressMessageID, string(runes[:n]))
+			runes = runes[n:]
+		}
+		for len(runes) > 0 {
+			n := len(runes)
+			if n > 2000 {
+				n = 2000
+			}
+			a.send(ctx, m.Chat.ID, string(runes[:n]))
+			runes = runes[n:]
+		}
 	}
 	attachments, err := a.downloadAttachments(ctx, m)
 	if err != nil {
@@ -284,7 +314,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		sendFinal("The Telegram attachment could not be downloaded safely.")
 		return
 	}
-	reply, err := a.askAgent(ctx, text, m.Chat.ID, attachments)
+	reply, err := a.askAgent(ctx, text, m.Chat.ID, attachments, showToolCall)
 	if err != nil {
 		if errors.Is(err, attachment.ErrUnsupportedImage) {
 			sendFinal("That image format is unsupported. Supported image formats are JPEG, PNG, GIF, and WebP.")
@@ -294,15 +324,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		return
 	}
 	// Telegram limits message size. Chunks also handle non-BMP characters.
-	runes := []rune(reply)
-	for len(runes) > 0 {
-		n := len(runes)
-		if n > 2000 {
-			n = 2000
-		}
-		sendFinal(string(runes[:n]))
-		runes = runes[n:]
-	}
+	sendFinal(reply)
 }
 
 func (a *adapter) startTyping(ctx context.Context, chatID int64) func() {
@@ -340,13 +362,45 @@ func (a *adapter) sendChatAction(ctx context.Context, chatID int64) {
 }
 
 func (a *adapter) send(ctx context.Context, userID int64, text string) {
-	_ = a.call(ctx, "sendMessage", struct {
-		ChatID int64  `json:"chat_id"`
-		Text   string `json:"text"`
-	}{userID, text}, nil)
+	_, _ = a.sendMessage(ctx, userID, text)
 }
 
-func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attachments []attachment.Incoming) (string, error) {
+func (a *adapter) sendMessage(ctx context.Context, chatID int64, text string) (int64, error) {
+	var result struct {
+		MessageID int64 `json:"message_id"`
+	}
+	err := a.call(ctx, "sendMessage", struct {
+		ChatID int64  `json:"chat_id"`
+		Text   string `json:"text"`
+	}{chatID, text}, &result)
+	return result.MessageID, err
+}
+
+func (a *adapter) editMessage(ctx context.Context, chatID, messageID int64, text string) error {
+	return a.call(ctx, "editMessageText", struct {
+		ChatID    int64  `json:"chat_id"`
+		MessageID int64  `json:"message_id"`
+		Text      string `json:"text"`
+	}{chatID, messageID, text}, nil)
+}
+
+func toolFeedbackText(name, arguments string) string {
+	preview := truncateRunes(strings.TrimSpace(arguments), telegramToolFeedbackMaxChars)
+	if preview == "" {
+		return fmt.Sprintf("🔧 `%s`", name)
+	}
+	return fmt.Sprintf("🔧 `%s`\n%s", name, preview)
+}
+
+func truncateRunes(text string, max int) string {
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	return string(runes[:max]) + "…"
+}
+
+func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attachments []attachment.Incoming, onToolCall func(string, string)) (string, error) {
 	body, err := json.Marshal(struct {
 		Message     string                `json:"message"`
 		ChatID      int64                 `json:"chat_id"`
@@ -368,19 +422,43 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 	if resp.StatusCode == http.StatusUnsupportedMediaType {
 		return "", attachment.ErrUnsupportedImage
 	}
-	var result struct {
-		Reply string `json:"reply"`
-	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("agent request failed")
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&result); err != nil {
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 4*1024*1024))
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
+	var reply string
+	for scanner.Scan() {
+		var event struct {
+			Type      string `json:"type"`
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+			Reply     string `json:"reply"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return "", fmt.Errorf("agent request failed: %w", err)
+		}
+		switch event.Type {
+		case "tool_call":
+			if onToolCall != nil {
+				onToolCall(event.Name, event.Arguments)
+			}
+		case "final":
+			reply = event.Reply
+		case "":
+			// Accept the old one-object response while agents are upgraded.
+			if event.Reply != "" {
+				reply = event.Reply
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
 		return "", fmt.Errorf("agent request failed: %w", err)
 	}
-	if strings.TrimSpace(result.Reply) == "" {
+	if strings.TrimSpace(reply) == "" {
 		return "", fmt.Errorf("agent request failed")
 	}
-	return result.Reply, nil
+	return reply, nil
 }
 func (m *message) hasAttachment() bool {
 	return m != nil && (len(m.Photo) > 0 || m.Document != nil)

@@ -319,3 +319,76 @@ func TestPairingDoesNotAnnounceChatWhenAgentIsUnavailable(t *testing.T) {
 		t.Fatalf("pairing readiness message = %q", message)
 	}
 }
+
+func TestToolFeedbackTruncatesArgumentsByRune(t *testing.T) {
+	arguments := strings.Repeat("界", telegramToolFeedbackMaxChars+5)
+	text := toolFeedbackText("shell_execute", arguments)
+	if !strings.HasPrefix(text, "🔧 `shell_execute`\n") {
+		t.Fatalf("tool feedback prefix = %q", text)
+	}
+	preview := strings.TrimPrefix(text, "🔧 `shell_execute`\n")
+	if len([]rune(preview)) != telegramToolFeedbackMaxChars+1 || !strings.HasSuffix(preview, "…") {
+		t.Fatalf("preview length/suffix = %d/%q", len([]rune(preview)), preview[len(preview)-3:])
+	}
+}
+
+func TestTelegramToolProgressUsesOneMessageAndEditsFinal(t *testing.T) {
+	var calls []string
+	a := &adapter{
+		token:   testToken,
+		pairing: &pairing{userID: 42},
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var payload struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				calls = append(calls, "send:"+payload.Text)
+				return response(http.StatusOK, `{"ok":true,"result":{"message_id":7}}`), nil
+			case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+				var payload struct {
+					MessageID int64  `json:"message_id"`
+					Text      string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				calls = append(calls, fmt.Sprintf("edit:%d:%s", payload.MessageID, payload.Text))
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request: %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+				return response(http.StatusOK, "ok\n"), nil
+			}
+			return response(http.StatusOK, "{"+
+				`"type":"tool_call","name":"shell_execute","arguments":"{\"command\":\"git status\"}"}`+"\n"+
+				`{"type":"tool_call","name":"web_search","arguments":"{\"query\":\"go\"}"}`+"\n"+
+				`{"type":"final","reply":"Done."}`+"\n"), nil
+		}),
+	}
+
+	a.handle(context.Background(), privateMessage(42, "inspect the repo"))
+	want := []string{
+		"send:🔧 `shell_execute`\n{\"command\":\"git status\"}",
+		"edit:7:🔧 `web_search`\n{\"query\":\"go\"}",
+		"edit:7:Done.",
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("Telegram calls = %#v, want %#v", calls, want)
+	}
+	for index := range want {
+		if calls[index] != want[index] {
+			t.Fatalf("Telegram call %d = %q, want %q", index, calls[index], want[index])
+		}
+	}
+}

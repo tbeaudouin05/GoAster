@@ -122,6 +122,19 @@ type Session struct {
 	contextNotice string
 }
 
+type ToolCallObserver func(name, arguments string)
+
+type toolCallObserverKey struct{}
+
+func WithToolCallObserver(ctx context.Context, observer ToolCallObserver) context.Context {
+	return context.WithValue(ctx, toolCallObserverKey{}, observer)
+}
+
+func toolCallObserver(ctx context.Context) ToolCallObserver {
+	observer, _ := ctx.Value(toolCallObserverKey{}).(ToolCallObserver)
+	return observer
+}
+
 type currentTurnAttachmentsKey struct{}
 
 func NewSession(config Config, provider Provider) *Session {
