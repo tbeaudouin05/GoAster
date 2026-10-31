@@ -34,7 +34,10 @@ func ParseRuntimeConfig(args []string, output io.Writer) (RuntimeConfig, error) 
 	flags.Usage = func() {
 		fmt.Fprintln(output, "Usage: goaster [options]")
 		fmt.Fprintln(output, "Describe what you want in chat, such as a new OVH server or GoAster installed on an existing one.")
-		fmt.Fprintln(output, "Use /env to import local secrets, /get-env to save your env file or a blank template, and /file to inspect non-secret files.")
+		fmt.Fprintln(output, "Chat commands:")
+		fmt.Fprintln(output, "  /env: securely import environment variables.")
+		fmt.Fprintln(output, "  /get-env: edit the current env file or get a blank template.")
+		fmt.Fprintln(output, "  /file: inspect non-secret files.")
 		flags.PrintDefaults()
 	}
 	flags.StringVar(&config.PrimaryModel, "primary-model", DefaultPrimaryModel, "primary model name")

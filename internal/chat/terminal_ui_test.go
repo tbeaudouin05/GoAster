@@ -31,7 +31,7 @@ func TestTerminalUIKeepsLineProtocolOutsideInteractiveTerminals(t *testing.T) {
 	}
 }
 
-func TestTerminalUIIntroExplainsSlashCommandsAndQuit(t *testing.T) {
+func TestTerminalUIIntroListsSlashCommandsWithoutQuitLine(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		ui   terminalUI
@@ -45,9 +45,17 @@ func TestTerminalUIIntroExplainsSlashCommandsAndQuit(t *testing.T) {
 			test.ui.renderIntro(&output, "chat provider")
 
 			result := strings.Join(strings.Fields(output.String()), " ")
-			want := "Use /env to securely import environment variables, /get-env to save your env file or a blank template, and /file to inspect non-secret files. Ctrl-D to quit."
-			if !strings.Contains(result, want) {
-				t.Errorf("intro missing %q: %s", want, output.String())
+			for _, want := range []string{
+				"- /env: securely import environment variables.",
+				"- /get-env: edit the current env file or get a blank template.",
+				"- /file: inspect non-secret files.",
+			} {
+				if !strings.Contains(result, want) {
+					t.Errorf("intro missing %q: %s", want, output.String())
+				}
+			}
+			if strings.Contains(result, "Ctrl-D") {
+				t.Errorf("intro still contains Ctrl-D quit help: %s", output.String())
 			}
 			for _, stale := range []string{
 				"Describe what you want in plain language.",

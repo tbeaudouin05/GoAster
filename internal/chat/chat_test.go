@@ -156,8 +156,9 @@ func TestLoop(t *testing.T) {
 	}
 	for _, want := range []string{
 		"chat provider", "Type a message, then press Enter.",
-		"Use /env to securely import environment variables, /get-env to save your env file or a blank template, and /file to inspect non-secret files.",
-		"Ctrl-D to quit.",
+		"- /env: securely import environment variables.",
+		"- /get-env: edit the current env file or get a blank template.",
+		"- /file: inspect non-secret files.",
 		"Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello",
 		"assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear",
 		"assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit",
@@ -166,6 +167,9 @@ func TestLoop(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
+	}
+	if strings.Contains(output.String(), "Ctrl-D") {
+		t.Errorf("startup help unexpectedly contains Ctrl-D: %s", &output)
 	}
 	if strings.Contains(output.String(), "OVH setup has started.") {
 		t.Errorf("ordinary-language requests unexpectedly entered the legacy /ovh display: %s", output.String())

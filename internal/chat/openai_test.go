@@ -395,6 +395,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 			"Markdown link syntax",
 			"Markdown in skills and documents is instruction context only and must not be copied as Markdown into user-facing replies.",
 			"Preserve readable plain-text line breaks and ordinary punctuation.",
+			"Keep user-facing replies very concise, especially during onboarding; give the next useful step and avoid repeating background unless it is relevant or requested.",
 		} {
 			if !strings.Contains(request.Instructions, want) {
 				t.Errorf("Codex instructions missing plain-text reply rule %q", want)
@@ -408,6 +409,12 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 			"Respect an explicitly requested new resource or host; do not silently substitute a saved connection.",
 			"Use both workflows in sequence when the user requests a new host and installation.",
 			"The local /env and /get-env commands remain available for secret setup; /file remains available for non-secret file inspection.",
+			"This is an onboarding utility, not the final GoAster agent.",
+			"It helps set up the real GoAster agent on a low-cost OVH Public Cloud server and connect it to Telegram.",
+			"You provide your OVH credentials and Telegram bot token through the local `/env` flow.",
+			"You can ask the bot where to find either credential or anything else.",
+			"Keep every reply very concise: give only the information needed now and one clear next step.",
+			"Do not repeat this purpose unless it is relevant or asked.",
 			"name: telegram-group-privacy",
 			"select this workflow; `/setprivacy` remains an operational BotFather command.",
 			"forwards text only from the Telegram account paired during setup; messages from other group members and non-text messages are not forwarded to the agent.",

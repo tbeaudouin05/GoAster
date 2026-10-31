@@ -56,18 +56,19 @@ locally and run only while the packaged terminal process is active.
 ## 3. Import setup values with `/env`
 
 When an OVH setup or Telegram configuration needs secret values, enter them
-through GoAster's local environment-file flow, never in a chat message. Make a
-Type `/get-env` to save the current environment file or, when none is saved, a
-blank template containing `OVH_APPLICATION_KEY=`, `OVH_APPLICATION_SECRET=`,
-`OVH_CONSUMER_KEY=`, and `TELEGRAM_BOT_TOKEN=`. For OVH setup, the onboarding
-agent derives the API endpoint from the Create API Keys page URL shared in the
-conversation; it is not an environment-file entry. Fill in a blank template,
-then re-upload the completed file with `/env`. GoAster shows the variable names
-with their values masked and asks whether to save them. Confirm with `y` to
-store them in `~/.goaster/env` with `0600` file and `0700` directory
-permissions. The imported file replaces the previously saved set; canceling
-leaves it unchanged. The relevant skill explains what each setting is for and
-where to find it. Secret values are never printed in the terminal.
+through GoAster's local environment-file flow, never in a chat message.
+Use `/get-env` to edit the current environment file or get a blank template
+containing `OVH_APPLICATION_KEY=`,
+`OVH_APPLICATION_SECRET=`, `OVH_CONSUMER_KEY=`, and `TELEGRAM_BOT_TOKEN=`. For
+OVH setup, the onboarding agent derives the API endpoint from the Create API
+Keys page URL shared in the conversation; it is not an environment-file entry.
+Fill in a blank template, then re-upload the completed file with `/env`. GoAster
+shows the variable names with their values masked and asks whether to save
+them. Confirm with `y` to store them in `~/.goaster/env` with `0600` file and
+`0700` directory permissions. The imported file replaces the previously saved
+set; canceling leaves it unchanged. The relevant skill explains what each
+setting is for and where to find it. Secret values are never printed in the
+terminal.
 
 ## 4. Ask for the OVH setup you need
 

@@ -96,8 +96,8 @@ variable. Enter secret values only through GoAster's local `/env`
 environment-file flow; never paste them into chat. GoAster masks imported
 values before saving them locally.
 
-Type `/get-env` to save a private copy of the current environment file. If no
-environment file has been saved, GoAster creates a blank template with
+Type `/get-env` to edit the current environment file or get a blank template.
+If no environment file has been saved, GoAster creates a blank template with
 `OVH_APPLICATION_KEY=`, `OVH_APPLICATION_SECRET=`, `OVH_CONSUMER_KEY=`, and
 `TELEGRAM_BOT_TOKEN=`. For OVH setup, the onboarding agent derives the API
 endpoint from the Create API Keys page URL you share; you do not enter it in

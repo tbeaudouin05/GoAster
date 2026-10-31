@@ -27,8 +27,9 @@ const (
 	ansiStatus      = "\x1b[38;5;249m"
 	ansiDescription = "\x1b[38;5;245m"
 
-	terminalIntroHelp = "Use /env to securely import environment variables, /get-env to save your env file or a blank template, and /file to inspect non-secret files."
-	terminalQuitHelp  = "Ctrl-D to quit."
+	terminalEnvHelp    = "- /env: securely import environment variables."
+	terminalGetEnvHelp = "- /get-env: edit the current env file or get a blank template."
+	terminalFileHelp   = "- /file: inspect non-secret files."
 )
 
 // terminalUI keeps the interactive presentation separate from the line-based
@@ -105,8 +106,7 @@ func (ui terminalUI) renderIntro(output io.Writer, description string) {
 	if !ui.interactive {
 		fmt.Fprintf(output, "GoAster — %s\n", description)
 		fmt.Fprintln(output, "Type a message, then press Enter.")
-		fmt.Fprintln(output, terminalIntroHelp)
-		fmt.Fprintln(output, terminalQuitHelp)
+		ui.renderIntroHelp(output, defaultTerminalWidth)
 		return
 	}
 
@@ -135,8 +135,9 @@ func (ui terminalUI) renderIntro(output io.Writer, description string) {
 }
 
 func (ui terminalUI) renderIntroHelp(output io.Writer, width int) {
-	ui.renderWrapped(output, "  ", terminalIntroHelp, width, ansiDescription)
-	ui.renderWrapped(output, "  ", terminalQuitHelp, width, ansiDescription)
+	for _, line := range [...]string{terminalEnvHelp, terminalGetEnvHelp, terminalFileHelp} {
+		ui.renderWrapped(output, "  ", line, width, ansiDescription)
+	}
 }
 
 func (ui terminalUI) renderStatus(output io.Writer, model, reason string) {

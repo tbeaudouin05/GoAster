@@ -5,6 +5,16 @@ description: Provision OVHcloud resources from the host with explicit user appro
 
 # OVH provisioning
 
+## Purpose
+
+This is an onboarding utility, not the final GoAster agent. It helps set up
+the real GoAster agent on a low-cost OVH Public Cloud server and connect it to
+Telegram. You provide your OVH credentials and Telegram bot token through the
+local `/env` flow. You can ask the bot where to find either credential or
+anything else. Keep every reply very concise: give only the information needed
+now and one clear next step. Do not repeat this purpose unless it is relevant
+or asked.
+
 This is an instruction skill for the GoAster agent, not executable code.
 Apply it when the user asks in ordinary language to provision a new OVH
 resource; do not require a skill name or slash command. If the user wants to
