@@ -52,6 +52,10 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 	if err := codexProvider.EnsureAuth(ctx, output); err != nil {
 		return err
 	}
+	terminalInput := chat.NewTerminalInput(input)
+	if err := registerRemoteLoginTool(codexProvider, terminalInput, input, output, errorOutput, sshRun); err != nil {
+		return fmt.Errorf("register remote login tool: %w", err)
+	}
 	session, err := chat.NewPersistentSession(runtimeConfig.Config, codexProvider)
 	if err != nil {
 		return fmt.Errorf("initialize conversation session: %w", err)
@@ -72,5 +76,5 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 		return fmt.Errorf("start cron scheduler: %w", err)
 	}
 	defer cronScheduler.Stop()
-	return chat.RunWithEnvStore(ctx, input, output, session, environmentStore)
+	return chat.RunWithEnvStore(ctx, terminalInput, output, session, environmentStore)
 }

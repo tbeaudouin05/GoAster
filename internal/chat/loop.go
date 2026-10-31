@@ -21,6 +21,7 @@ Enter secret values only through this local environment-file flow; never paste t
 GoAster masks values and saves confirmed settings locally.`
 
 const ovhOnboardingStart = `OVH onboarding started.
+If you already have a provisioned OVH host, say so and use the existing-host SSH workflow; do not provision another resource. After the remote service account is ready and you approve contacting that exact host, GoAster runs the local interactive remote-login flow itself.
 Before provisioning, create your Public Cloud project yourself in OVHcloud Manager: https://www.ovh.com/manager/#/hub/public-cloud
 Sign in, accept the terms, choose “Discover the Public Cloud universe,” then create and name the project. After creation, Discovery mode is the restricted starting state. If the project still shows the Discovery mode label, click OVHcloud Manager's Enable or Activate button only to start the payment-method activation flow. Then provide or add a payment method in that flow to deactivate and exit Discovery mode. The required final state is an active project with no Discovery mode label. GoAster cannot provision a server while the project remains in Discovery mode.
 Official steps: https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project
@@ -73,8 +74,10 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 	if notice := session.consumeStartupNotice(); notice != "" {
 		fmt.Fprintf(w, "Notice: %s\n", notice)
 	}
-	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 4096), 1024*1024)
+	terminalInput, ok := input.(TerminalInput)
+	if !ok {
+		terminalInput = NewTerminalInput(input)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -83,19 +86,20 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		if err := w.Flush(); err != nil {
 			return err
 		}
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return fmt.Errorf("read message: %w", err)
+		line, _, readErr := terminalInput.ReadLine(maxTerminalInputLineBytes)
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				return fmt.Errorf("read message: %w", readErr)
 			}
 			fmt.Fprintln(w)
 			return w.Flush()
 		}
-		message := strings.TrimSpace(scanner.Text())
+		message := strings.TrimSpace(line)
 		if message == "" {
 			continue
 		}
 		if message == "/env" {
-			if err := runEnvironmentFileSetup(scanner, w, store, picker, "", ""); err != nil {
+			if err := runEnvironmentFileSetup(terminalInput, w, store, picker, "", ""); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -111,7 +115,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			if !ok {
 				return fmt.Errorf("expected exactly one non-empty file path")
 			}
-			if err := runEnvironmentFileSetup(scanner, w, store, picker, path, ""); err != nil {
+			if err := runEnvironmentFileSetup(terminalInput, w, store, picker, path, ""); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -311,7 +315,7 @@ func environmentFileCommandPath(message string) (string, bool) {
 	return fields[0], true
 }
 
-func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, path string, next string) error {
+func runEnvironmentFileSetup(input TerminalInput, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, path string, next string) error {
 	if path == "" {
 		fmt.Fprintln(output, environmentFileGuidance)
 		if err := output.Flush(); err != nil {
@@ -342,10 +346,10 @@ func runEnvironmentFileSetup(scanner *bufio.Scanner, output *bufio.Writer, store
 		fmt.Fprintf(output, "Environment file rejected: %v\n", err)
 		return nil
 	}
-	return reviewEnvironmentValues(scanner, output, store, values, next)
+	return reviewEnvironmentValues(input, output, store, values, next)
 }
 
-func reviewEnvironmentValues(scanner *bufio.Scanner, output *bufio.Writer, store *localenv.Store, values map[string]string, next string) error {
+func reviewEnvironmentValues(input TerminalInput, output *bufio.Writer, store *localenv.Store, values map[string]string, next string) error {
 	fmt.Fprintln(output, "Review environment values (values are masked):")
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -359,14 +363,15 @@ func reviewEnvironmentValues(scanner *bufio.Scanner, output *bufio.Writer, store
 	if err := output.Flush(); err != nil {
 		return err
 	}
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
+	line, _, err := input.ReadLine(maxTerminalInputLineBytes)
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
 			return fmt.Errorf("read environment confirmation: %w", err)
 		}
 		fmt.Fprintln(output, "\nEnvironment setup canceled.")
 		return nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(scanner.Text()), "y") {
+	if !strings.EqualFold(strings.TrimSpace(line), "y") {
 		fmt.Fprintln(output, "Environment setup canceled.")
 		return nil
 	}

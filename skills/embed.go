@@ -8,6 +8,12 @@ import _ "embed"
 //go:embed ovh/SKILL.md
 var OVHProvisioning string
 
+// OVHRemote contains the existing-host SSH onboarding instructions that are
+// packaged into the GoAster executable.
+//
+//go:embed ovh-remote/SKILL.md
+var OVHRemote string
+
 // InternetFetch contains reusable guidance for reliable public internet
 // content retrieval that is packaged into the GoAster executable.
 //

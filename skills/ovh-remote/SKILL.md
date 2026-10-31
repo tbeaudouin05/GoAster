@@ -1,6 +1,6 @@
 ---
 name: ovh-remote
-description: Bootstrap and operate an existing OVHcloud host over SSH through GoAster's shell_execute, then automatically orchestrate the administrator-approved interactive OpenAI login for the remote agent.
+description: Bootstrap and operate an existing OVHcloud host over SSH through GoAster's shell_execute, then orchestrate the approved interactive OpenAI login through GoAster's local remote_login handoff.
 ---
 
 # Existing OVH remote SSH
@@ -9,11 +9,11 @@ This is an instruction-only skill for operating an already existing OVHcloud
 remote. It does not provision, resize, delete, or otherwise manage OVH
 resources through the OVH API. Use the host's OpenSSH client through GoAster's
 `shell_execute` tool for non-interactive bootstrap and verification. After
-bootstrap and agent service setup, the onboarder itself invokes the existing
-SSH-backed `goaster remote-login` flow with an interactive terminal attached
-for the administrator. Never run that login through `shell_execute` or another
-model tool, and do not ask the administrator to type the command during normal
-onboarding.
+bootstrap and agent service setup, the onboarder invokes GoAster's dedicated
+`remote_login` tool. It calls the existing SSH-backed `goaster remote-login`
+implementation with the administrator's terminal attached. Never run that
+login through `shell_execute`, capture its output for chat, or ask the
+administrator to type the command during normal onboarding.
 
 ## Confirm the target and access
 
@@ -94,15 +94,13 @@ specifically needs an interactive session.
 ## Orchestrate the interactive remote login
 
 After the agent is installed and its service account is ready for SSH, the
-onboarder must invoke the existing local `goaster remote-login` command itself,
-using the remote agent service account as the SSH target. Allocate an
-interactive terminal for the administrator and connect its input and output
-directly to this command. Keep the session open while the administrator
-completes OpenAI device authorization. The administrator must approve the
-authorization in the browser; the onboarder waits for the interactive login to
-finish before continuing. That approval is required before the separate remote
-service credential is saved. Do not relay the login URL, one-time code,
-terminal output, or credentials through chat.
+onboarder must use the dedicated `remote_login` tool with the remote agent
+service account as the SSH target. Keep the administrator's terminal attached
+while they complete OpenAI device authorization. The administrator must
+approve the authorization in the browser; the onboarder waits for the
+interactive login to finish before continuing. That approval is required
+before the separate remote service credential is saved. Do not relay the login
+URL, one-time code, terminal output, or credentials through chat.
 
 Before invoking `remote-login`, verify the remote service account has a usable
 login shell, such as `/bin/sh`, rather than `/usr/sbin/nologin`; SSH must be
@@ -111,18 +109,27 @@ able to execute `goaster-agent login`. If the provisioned account uses
 account mutation under the safe workflow below. Then verify SSH command
 execution as that account before invoking `remote-login`.
 
-The onboarder invokes the flow with this command shape, filling in the
+Before using the tool, show the exact target and local key to the user in chat
+and get explicit approval to contact that host. Then call `remote_login` with
+the confirmed target and approved local key. The tool prints the target, key
+path, port, and strict host-key policy in the local terminal and requires the
+administrator to type `YES` there before connecting. If local approval is
+declined or unavailable, stop without connecting.
+
+The tool invokes the existing flow with this command shape, filling in the
 confirmed target and approved local key:
 
 ```text
 goaster remote-login --target goaster@SERVER --key ~/.ssh/goaster-ovh
 ```
 
-The command launches OpenSSH directly with inherited terminal I/O and forces
-an interactive SSH terminal, so the remote device-login URL and one-time code
-are shown in the administrator's attached terminal. It is outside model
-`shell_execute` and does not accept local `auth.json`, OAuth tokens, or any
-other credential data. `--target` and `--key` are required;
+The flow launches OpenSSH directly with inherited terminal I/O and forces an
+interactive SSH terminal, so the remote device-login URL and one-time code are
+shown in the administrator's attached terminal. Its output is written only to
+that terminal; the tool returns only a generic success or failure status to
+the model. It is outside model `shell_execute` and does not accept local
+`auth.json`, OAuth tokens, or any other credential data. `--target` and
+`--key` are required;
 `--known-hosts PATH` is available for an approved non-default known-hosts file.
 The command always uses `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes`, the
 supplied key, key-only authentication, and bounded connection/session
@@ -305,7 +312,7 @@ device code, login output, OAuth token, or saved credential file through
 GoAster or Telegram chat.
 
 After installation and agent service setup, the onboarder invokes the local
-`goaster remote-login` flow described above; the administrator does not type
+OpenAI remote login flow with `remote_login`; the administrator does not type
 the command during normal onboarding. The onboarder waits for the
 administrator's approval and the command's read-only health check to return
 `ok` before continuing with Telegram setup. The login writes the remote service

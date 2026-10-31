@@ -382,8 +382,8 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		if request.Model != "gpt-test" || request.Instructions == "" || !request.Stream || request.Store || len(request.Input) != 1 || request.Input[0].Type != "message" || request.Input[0].Content[0].Text != "hello" {
 			t.Errorf("Codex request = %+v", request)
 		}
-		if !strings.HasPrefix(request.Instructions, openAIInstructions) || !strings.Contains(request.Instructions, "# OVH provisioning") || !strings.Contains(request.Instructions, "GET /cloud/project") {
-			t.Errorf("Codex instructions do not include the packaged OVH skill: %q", request.Instructions)
+		if !strings.HasPrefix(request.Instructions, openAIInstructions) || !strings.Contains(request.Instructions, "# OVH provisioning") || !strings.Contains(request.Instructions, "GET /cloud/project") || !strings.Contains(request.Instructions, "# Existing OVH remote SSH") || !strings.Contains(request.Instructions, "dedicated `remote_login` tool") {
+			t.Errorf("Codex instructions do not include the packaged OVH provisioning and remote skills: %q", request.Instructions)
 		}
 		internetInstructions := strings.Join(strings.Fields(request.Instructions), " ")
 		if !strings.Contains(internetInstructions, "name: internet-fetch") || !strings.Contains(internetInstructions, "# Internet fetch") {

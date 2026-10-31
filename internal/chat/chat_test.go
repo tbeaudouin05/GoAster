@@ -175,6 +175,8 @@ func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
 	}
 	for _, want := range []string{
 		"OVH onboarding started.",
+		"If you already have a provisioned OVH host, say so and use the existing-host SSH workflow",
+		"After the remote service account is ready and you approve contacting that exact host, GoAster runs the local interactive remote-login flow itself.",
 		"create your Public Cloud project yourself in OVHcloud Manager",
 		"https://www.ovh.com/manager/#/hub/public-cloud",
 		"After creation, Discovery mode is the restricted starting state.",

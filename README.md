@@ -229,14 +229,16 @@ the OVH resource with explicit approval, then use the SSH skill to bootstrap
 it; for an existing host, start with SSH bootstrap.
 After remote bootstrap and agent service setup, GoAster itself automatically
 starts the existing SSH-backed remote OpenAI login as the remote service
-account. It opens an interactive terminal for the administrator and connects
-the terminal directly to that login flow, waits while the administrator
-approves the OpenAI device authorization in a browser, then completes the
+account through its `remote_login` handoff. After the exact host and local key
+are approved in chat, the handoff displays them in the local terminal and
+requires the administrator to type `YES` before connecting. It then attaches
+the terminal directly to the login flow, waits while the administrator
+approves the OpenAI device authorization in a browser, and completes the
 existing read-only `/healthz` check before continuing onboarding. The
-administrator must approve the device authorization; GoAster cannot approve it
-on their behalf. The normal path does not ask the administrator to type
-`goaster remote-login`. Keep local OpenAI credentials on the local machine;
-remote credentials are stored separately on the host.
+administrator must approve both the host contact and device authorization;
+GoAster cannot approve them on their behalf. The normal path does not ask the
+administrator to type `goaster remote-login`. Keep local OpenAI credentials on
+the local machine; remote credentials are stored separately on the host.
 
 The local package does not need Go to bootstrap the remote agent: the SSH skill
 verifies or installs pinned Go 1.27.3 on the existing Linux host, clones the
@@ -255,9 +257,10 @@ does not use the terminal's credential file. The agent can run while waiting
 for login, but its loopback `/healthz` and `/chat` endpoints return unavailable.
 
 After the remote agent is installed and its service account is ready for SSH,
-GoAster invokes the existing local command below itself, using the remote agent
-service account as the SSH target. This is the onboarder's invocation, not a
-command the administrator needs to type during normal onboarding:
+GoAster's `remote_login` handoff invokes the existing local flow below, using
+the remote agent service account as the SSH target. This is the onboarder's
+invocation, not a command the administrator needs to type during normal
+onboarding:
 
 ```text
 goaster remote-login --target goaster@OVH_HOST --key ~/.ssh/goaster-ovh

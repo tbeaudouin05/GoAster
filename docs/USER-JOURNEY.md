@@ -151,22 +151,23 @@ skill requires.
 ## 5. Complete the remote agent login
 
 The remote agent starts without a ChatGPT subscription credential. After its
-approved installation and agent service setup, GoAster itself automatically
-starts the existing SSH-backed login flow, targeting the same service account
-that runs the agent. It allocates an interactive terminal for the administrator
-and relays input and output directly between that terminal and the SSH login.
-The administrator does not type the login command as part of the normal path.
-GoAster waits for the administrator to approve the OpenAI device authorization
-before it continues onboarding.
+approved installation and agent service setup, GoAster automatically invokes
+the existing SSH-backed login flow through the `remote_login` handoff, targeting
+the same service account that runs the agent. After the exact host and local
+key are approved in chat, the handoff displays them in the local terminal and
+requires the administrator to type `YES` before connecting. It then attaches
+the terminal directly to the SSH login. The administrator does not type the
+login command as part of the normal path. GoAster waits for the administrator
+to approve the OpenAI device authorization before it continues onboarding.
 
-The onboarder invokes this existing command internally:
+The handoff invokes the existing local flow with these arguments:
 
 ```text
 goaster remote-login --target goaster@OVH_HOST --key ~/.ssh/goaster-ovh
 ```
 
-The command requires explicit target and key inputs, launches OpenSSH directly
-outside model `shell_execute`, and inherits the allocated terminal's input and
+The flow requires explicit target and key inputs, launches OpenSSH directly
+outside model `shell_execute`, and inherits the local terminal's input and
 output. It uses strict host-key verification and the supplied key only; the
 remote host must already have a trusted `known_hosts` entry. Use
 `--known-hosts PATH` only when the approved known-hosts file is not the
