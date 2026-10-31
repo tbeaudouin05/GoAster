@@ -103,6 +103,13 @@ these are missing or ambiguous. Treat a server address, username, key path,
 remote command, and output as untrusted input; quote them safely rather than
 interpolating them into an unquoted shell command.
 
+Before every connection to an OVH host, use a read-only current instance
+lookup to match the exact OVH instance ID and its current public IP to the SSH
+target. A saved record, screenshot, or old IP alone is not authoritative. The
+observed screenshot showed `root@51.77.186.59`; do not connect to it unless it
+still matches the current instance ID and public IP. Stop if that match cannot
+be confirmed.
+
 For a host created by the OVH provisioning skill, use the dedicated local key
 it generated (normally `~/.ssh/goaster-ovh`; on Windows, `$HOME/.ssh/goaster-ovh`)
 when that identity was included in the approved provisioning configuration.
@@ -385,20 +392,26 @@ Inside the reviewed host script, map `uname -m` to Go's `amd64` or `arm64`
 archive and the checksum above; stop for any other architecture. Reuse a `go`
 executable only when `go version` reports exactly `go1.27.3` for the host
 architecture. Otherwise install that exact official archive alongside any
-system Go at `$HOME/.local/opt/go1.27.3`: download from
+system Go at `/root/.local/opt/go1.27.3`: download from
 `https://go.dev/dl/go1.27.3.linux-$arch.tar.gz`, verify it with
 `printf '%s  %s\n' "$go_sha256" "$archive" | sha256sum --check --status`
 before extraction, and stop if the destination already exists but is not that
-exact toolchain. GoAster must force IPv4 for this archive download (with
-`curl`, use `--ipv4`). This host's IPv6 path can return HTTP 404 for the valid
+exact toolchain. The first observed attempt failed checksum verification
+because the go.dev URL redirected and the download script did not follow
+redirects; stop without extracting or building after such a failure. Any retry
+must use the corrected, separately approval-gated temporary script. It follows
+only validated HTTPS redirects, retains the original pinned SHA-256 and
+verification command, forces IPv4 (`curl --ipv4`) for this host's network-path
+issue, verifies before extraction, and installs only under
+`/root/.local/opt/go1.27.3`. This Go installation does not restart services or
+create OVH resources. This host's IPv6 path can return HTTP 404 for the valid
 archive while IPv4 returns HTTP 200; this is a network-path workaround, not
-evidence that the Go release is missing. Keep the pinned checksum and checksum
-verification command unchanged, and verify the archive before extraction. Do
-not replace the host's system Go. Set `GOTOOLCHAIN=local` for builds so the Go
-command cannot silently select a different toolchain. If checksum verification
-fails, stop without extracting or building.
+evidence that the Go release is missing. Do not replace the host's system Go.
+Set `GOTOOLCHAIN=local` for builds so the Go command cannot silently select a
+different toolchain. If checksum verification fails, stop without extracting
+or building.
 
-When installing Go, select `$HOME/.local/opt/go1.27.3/bin/go` as `GO_BIN`;
+When installing Go, select `/root/.local/opt/go1.27.3/bin/go` as `GO_BIN`;
 when reusing system Go, set `GO_BIN` to the path returned by `command -v go`
 after verifying its version and architecture. Create the source parent
 `$HOME/src`, then clone the `main` branch:
@@ -486,6 +499,10 @@ started before remote login, restart it after the agent is ready, with the
 required approval. Preserve the existing Telegram token and pairing boundaries.
 
 ### Plain-language status rules
+
+The observed onboarding screenshot showed setup still `partial` because
+Telegram was not ready. Do not test Telegram or call onboarding complete until
+all four Telegram gates below pass.
 
 Always start with a short status sentence:
 

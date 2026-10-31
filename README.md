@@ -305,6 +305,18 @@ checksums and remote build steps are documented in the skill. This SSH bootstrap
 does not manage the OVH resource lifecycle or add an agent
 self-update feature.
 
+Observed onboarding remained **partial** because Telegram was not ready; do
+not test Telegram or call setup complete yet. The screenshot showed
+`root@51.77.186.59`, but before every SSH connection, match the target to the
+current OVH instance ID and public IP; an old screenshot IP is not authoritative.
+The first pinned Go 1.27.3 attempt failed checksum verification because the
+go.dev URL redirected and the script did not follow redirects. The corrected
+script is approval-gated, follows only validated HTTPS redirects, forces IPv4
+for this host's network-path issue, retains the original pinned SHA-256 and
+verifies it before extraction, and installs only under
+`/root/.local/opt/go1.27.3`. This toolchain install does not restart services
+or create OVH resources.
+
 The terminal and remote agent require **two independent OpenAI device logins**.
 The local terminal login described above stays local. Never copy or send its
 `auth.json`, a custom `-auth-file`, its OAuth tokens, or its saved session to the

@@ -175,6 +175,18 @@ installs the binaries. The local package does not need Go for this remote
 build. Review each proposed remote change and approve it separately as the
 skill requires.
 
+In the observed onboarding screenshot, setup remained **partial** because
+Telegram was not ready; do not test Telegram or call setup complete yet. The
+displayed target was `root@51.77.186.59`, but before every SSH connection,
+match it to the current OVH instance ID and public IP; an old IP is not
+authoritative. The first pinned Go 1.27.3 installation failed checksum
+verification because the go.dev download URL redirected and the script did not
+follow redirects. The corrected script is approval-gated, follows only
+validated HTTPS redirects, forces IPv4 for the known host network-path issue,
+checks the original pinned SHA-256 before extraction, and installs only under
+`/root/.local/opt/go1.27.3`; it does not restart services or create OVH
+resources.
+
 ## Remote privilege model
 
 The remote installation intentionally runs both `goaster-agent` and
