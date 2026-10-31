@@ -130,15 +130,21 @@ purpose and where to find its value (the selected OVH client's docs or
 OVHcloud credential settings), and invite the user to ask for more explanation.
 Secret values must be entered only through GoAster's local `/env`
 environment-file flow; never ask for or accept them in chat.
+For OVH and Telegram setup, the only environment values to ask the user to
+provide are `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`,
+`OVH_CONSUMER_KEY`, and `TELEGRAM_BOT_TOKEN`. The OVH API endpoint is derived
+agent-side from the Create API Keys page URL in the conversation.
 
 ### Create API Keys screen
 
 Before giving key-creation instructions, ask the user to paste the OVHcloud
 Create API Keys page URL they are currently viewing. The page URL is not a
 secret; do not ask the user to paste API keys, passwords, or other secrets in
-chat. Use the URL's hostname to detect the OVHcloud account region and choose
-the canonical API endpoint below. The endpoint is based on the OVHcloud
-account, not the Public Cloud deployment region.
+chat. Derive the OVH API endpoint from the URL's hostname and use it in OVH API
+requests. Never ask the user to supply the endpoint separately; if the URL is
+not in the conversation, ask for the Create API Keys page URL. The endpoint is
+based on the OVHcloud account, not the Public Cloud deployment region. Use the
+hostname to detect the account region and choose the canonical endpoint below.
 
 | Account region | Create API Keys URL examples | Canonical OVH API endpoint |
 | --- | --- | --- |
@@ -223,11 +229,13 @@ not select files containing API keys, application secrets, or other secret
 values. Do not transcribe, request, or use any secret that appears in a file;
 secret values belong only in the local `/env` flow.
 
-1. Use the known OVH account endpoint and credentials from a user-approved
-   local credential source already available to the host. If none is available,
-   stop and direct the user to configure one through the local `/env`
-   environment-file flow. Do not ask again for known account/API details. Do
-   not ask for a preferred deployment region before project selection is
+1. Derive the OVH account endpoint from the Create API Keys page URL in the
+   conversation using the hostname mapping above and use it for OVH API
+   requests. Retrieve the three OVH credentials from the local `/env`
+   environment file. If the URL is not in the conversation, ask for that page
+   URL; if any credential is unavailable locally, direct the user to configure
+   credentials through `/env`. Do not ask again for known account/API details.
+   Do not ask for a preferred deployment region before project selection is
    confirmed. Apply the normal resource defaults above for any choice the user
    has not explicitly overridden.
 2. Use `GET /cloud/project` to list Public Cloud projects. Do not check the

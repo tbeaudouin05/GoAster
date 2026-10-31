@@ -17,7 +17,6 @@ const (
 	fileName                 = "env"
 	maxLineSize              = 1024 * 1024
 	maxFileSize              = 1024 * 1024
-	ovhEndpointName          = "OVH_ENDPOINT"
 	ovhApplicationKeyName    = "OVH_APPLICATION_KEY"
 	ovhApplicationSecretName = "OVH_APPLICATION_SECRET"
 	ovhConsumerKeyName       = "OVH_CONSUMER_KEY"
@@ -65,9 +64,8 @@ func RequiredTemplateValues() map[string]string {
 	return values
 }
 
-func requiredTemplateNames() [5]string {
-	return [5]string{
-		ovhEndpointName,
+func requiredTemplateNames() [4]string {
+	return [4]string{
 		ovhApplicationKeyName,
 		ovhApplicationSecretName,
 		ovhConsumerKeyName,

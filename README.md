@@ -98,10 +98,11 @@ values before saving them locally.
 
 Type `/get-env` to save a private copy of the current environment file. If no
 environment file has been saved, GoAster creates a blank template with
-`OVH_ENDPOINT=`, `OVH_APPLICATION_KEY=`, `OVH_APPLICATION_SECRET=`,
-`OVH_CONSUMER_KEY=`, and `TELEGRAM_BOT_TOKEN=`. Fill in the values, then
-re-upload the completed file with `/env`. The saved file is written with `0600`
-permissions.
+`OVH_APPLICATION_KEY=`, `OVH_APPLICATION_SECRET=`, `OVH_CONSUMER_KEY=`, and
+`TELEGRAM_BOT_TOKEN=`. For OVH setup, the onboarding agent derives the API
+endpoint from the Create API Keys page URL you share; you do not enter it in
+the environment file. Fill in the values, then re-upload the completed file
+with `/env`. The saved file is written with `0600` permissions.
 
 To inspect a local file, type `/file` in the terminal and choose it in the
 native file picker. Files up to 20 MiB are supported. PNG, JPEG, GIF, and WebP

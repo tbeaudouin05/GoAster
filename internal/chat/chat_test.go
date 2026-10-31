@@ -435,6 +435,15 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 	if !strings.Contains(policy, "an active project named `Production` remains usable even though its name differs from `GoAster`") {
 		t.Fatal("OVH project discovery policy does not cover a non-GoAster project name")
 	}
+	for _, requirement := range []string{
+		"the only environment values to ask the user to provide are `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY`, and `TELEGRAM_BOT_TOKEN`",
+		"The OVH API endpoint is derived agent-side from the Create API Keys page URL in the conversation",
+		"Derive the OVH API endpoint from the URL's hostname and use it in OVH API requests.",
+	} {
+		if !strings.Contains(policy, requirement) {
+			t.Errorf("OVH onboarding policy is missing %q", requirement)
+		}
+	}
 
 	workflowStart := strings.Index(policy, "2. Use `GET /cloud/project` to list Public Cloud projects.")
 	if workflowStart < 0 {
@@ -567,7 +576,6 @@ func TestEnvUsesPickerAndCancellationPreservesSavedValues(t *testing.T) {
 
 func TestGetEnvSavesExistingEnvironmentWithoutPrintingValues(t *testing.T) {
 	secretValues := map[string]string{
-		"OVH_ENDPOINT":           "private-ovh-endpoint",
 		"OVH_APPLICATION_KEY":    "private-ovh-application-key",
 		"OVH_APPLICATION_SECRET": "private-ovh-application-secret",
 		"OVH_CONSUMER_KEY":       "private-ovh-consumer-key",
@@ -606,7 +614,6 @@ func TestGetEnvSavesExistingEnvironmentWithoutPrintingValues(t *testing.T) {
 	wantFile := `OVH_APPLICATION_KEY=private-ovh-application-key
 OVH_APPLICATION_SECRET=private-ovh-application-secret
 OVH_CONSUMER_KEY=private-ovh-consumer-key
-OVH_ENDPOINT=private-ovh-endpoint
 TELEGRAM_BOT_TOKEN=private-telegram-token
 `
 	if !bytes.Equal(data, []byte(wantFile)) {
@@ -620,7 +627,6 @@ TELEGRAM_BOT_TOKEN=private-telegram-token
 		t.Errorf("saved environment permissions = %04o, want 0600", info.Mode().Perm())
 	}
 	for _, secret := range []string{
-		"private-ovh-endpoint",
 		"private-ovh-application-key",
 		"private-ovh-application-secret",
 		"private-ovh-consumer-key",
@@ -666,8 +672,7 @@ func TestGetEnvCreatesExactBlankTemplateAndGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatal("blank environment template was not saved")
 	}
-	wantTemplate := `OVH_ENDPOINT=
-OVH_APPLICATION_KEY=
+	wantTemplate := `OVH_APPLICATION_KEY=
 OVH_APPLICATION_SECRET=
 OVH_CONSUMER_KEY=
 TELEGRAM_BOT_TOKEN=

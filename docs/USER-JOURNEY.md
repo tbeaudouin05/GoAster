@@ -58,14 +58,16 @@ locally and run only while the packaged terminal process is active.
 When an OVH setup or Telegram configuration needs secret values, enter them
 through GoAster's local environment-file flow, never in a chat message. Make a
 Type `/get-env` to save the current environment file or, when none is saved, a
-blank template containing `OVH_ENDPOINT=`, `OVH_APPLICATION_KEY=`,
-`OVH_APPLICATION_SECRET=`, `OVH_CONSUMER_KEY=`, and `TELEGRAM_BOT_TOKEN=`. Fill
-in a blank template, then re-upload the completed file with `/env`. GoAster
-shows the variable names with their values masked and asks whether to save them.
-Confirm with `y` to store them in `~/.goaster/env` with `0600` file and `0700`
-directory permissions. The imported file replaces the previously saved set;
-canceling leaves it unchanged. The relevant skill explains what each setting
-is for and where to find it. Secret values are never printed in the terminal.
+blank template containing `OVH_APPLICATION_KEY=`, `OVH_APPLICATION_SECRET=`,
+`OVH_CONSUMER_KEY=`, and `TELEGRAM_BOT_TOKEN=`. For OVH setup, the onboarding
+agent derives the API endpoint from the Create API Keys page URL shared in the
+conversation; it is not an environment-file entry. Fill in a blank template,
+then re-upload the completed file with `/env`. GoAster shows the variable names
+with their values masked and asks whether to save them. Confirm with `y` to
+store them in `~/.goaster/env` with `0600` file and `0700` directory
+permissions. The imported file replaces the previously saved set; canceling
+leaves it unchanged. The relevant skill explains what each setting is for and
+where to find it. Secret values are never printed in the terminal.
 
 ## 4. Ask for the OVH setup you need
 
@@ -118,10 +120,11 @@ the remote SSH workflow and skips provisioning.
 ### Create API keys for a new resource
 
 While viewing OVHcloud's Create API Keys page, paste its URL into GoAster chat
-so onboarding can identify the account region and select the matching API
-endpoint. The page URL is not a secret. Never paste API keys, passwords, or
-other secrets into chat; enter credentials only through GoAster's local `/env`
-flow. Determine the region from the URL hostname, using these mappings:
+so the onboarding agent can identify the account region and derive the matching
+API endpoint. The page URL is not a secret. You do not need to provide the
+endpoint in the environment file. Never paste API keys, passwords, or other
+secrets into chat; enter credentials only through GoAster's local `/env` flow.
+Determine the region from the URL hostname, using these mappings:
 
 | Account region | Create API Keys URL examples | Canonical OVH API endpoint |
 | --- | --- | --- |
