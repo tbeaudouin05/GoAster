@@ -92,6 +92,13 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 		return session
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		_, _ = w.Write([]byte("ok\n"))
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -155,7 +162,7 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 			}
 			metadata = append(metadata, validated)
 		}
-		if checkAuth == nil || checkAuth(r.Context()) != nil {
+		if !chat.IsClearCommand(request.Message) && (checkAuth == nil || checkAuth(r.Context()) != nil) {
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
 			return
 		}

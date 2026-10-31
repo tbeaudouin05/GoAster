@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -48,6 +49,16 @@ func (p fakeProvider) Reply(_ context.Context, _ string, message string) (string
 type historyProvider struct {
 	mu        sync.Mutex
 	histories [][]chat.ChatMessage
+}
+
+type recordingHistoryProvider func([]chat.ChatMessage) string
+
+func (p recordingHistoryProvider) Reply(_ context.Context, _, message string) (string, error) {
+	return p([]chat.ChatMessage{{Role: "user", Content: message}}), nil
+}
+
+func (p recordingHistoryProvider) ReplyWithHistory(_ context.Context, _ string, history []chat.ChatMessage) (string, error) {
+	return p(history), nil
 }
 
 func (p *historyProvider) Reply(_ context.Context, _, message string) (string, error) {
@@ -153,6 +164,7 @@ func TestAgentLoopbackHandler(t *testing.T) {
 		status                                      int
 		want                                        string
 	}{
+		{name: "live", method: "GET", path: "/livez", host: "127.0.0.1:8765", status: 200, want: "ok"},
 		{name: "health", method: "GET", path: "/healthz", host: "127.0.0.1:8765", status: 200, want: "ok"},
 		{name: "chat", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","chat_id":42}`, status: 200, want: `"type":"final","reply":"reply to hello"`},
 		{name: "reject host", method: "GET", path: "/healthz", host: "attacker.invalid", status: 403},
@@ -210,6 +222,95 @@ func TestAgentSessionsReuseHistoryAndIsolateChats(t *testing.T) {
 			if histories[i][j] != want[i][j] {
 				t.Fatalf("history %d message %d = %#v, want %#v", i, j, histories[i][j], want[i][j])
 			}
+		}
+	}
+}
+
+func TestAgentClearIsChatScopedAndWorksWithoutAuthentication(t *testing.T) {
+	var histories [][]chat.ChatMessage
+	provider := recordingHistoryProvider(func(history []chat.ChatMessage) string {
+		snapshot := append([]chat.ChatMessage(nil), history...)
+		histories = append(histories, snapshot)
+		return "reply to " + history[len(history)-1].Content
+	})
+	authAvailable := true
+	checkAuth := func(context.Context) error {
+		if !authAvailable {
+			return errors.New("private credential detail")
+		}
+		return nil
+	}
+	h := handler(provider, checkAuth)
+	for _, request := range []struct {
+		chatID  int64
+		message string
+	}{
+		{101, "first private message"},
+		{-100200, "first group message"},
+	} {
+		if response := postChat(t, h, request.chatID, request.message); response.Code != http.StatusOK {
+			t.Fatalf("initial chat %d status = %d, body = %q", request.chatID, response.Code, response.Body.String())
+		}
+	}
+
+	authAvailable = false
+	malformed := postChat(t, h, 101, "/clear extra")
+	if malformed.Code != http.StatusOK || !strings.Contains(malformed.Body.String(), `"reply":"Usage: /clear"`) {
+		t.Fatalf("malformed clear response = %d %q", malformed.Code, malformed.Body.String())
+	}
+	unavailable := postChat(t, h, 101, "provider request")
+	if unavailable.Code != http.StatusServiceUnavailable || strings.Contains(unavailable.Body.String(), "private credential detail") {
+		t.Fatalf("normal request while unauthenticated = %d %q", unavailable.Code, unavailable.Body.String())
+	}
+	authAvailable = true
+	if response := postChat(t, h, 101, "before clear followup"); response.Code != http.StatusOK {
+		t.Fatalf("followup after malformed clear status = %d", response.Code)
+	}
+	if response := postChat(t, h, -100200, "group followup"); response.Code != http.StatusOK {
+		t.Fatalf("group followup status = %d", response.Code)
+	}
+
+	authAvailable = false
+	cleared := postChat(t, h, 101, "/clear")
+	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"reply":"Conversation history cleared."`) {
+		t.Fatalf("clear response = %d %q", cleared.Code, cleared.Body.String())
+	}
+	authAvailable = true
+	if response := postChat(t, h, 101, "after clear"); response.Code != http.StatusOK {
+		t.Fatalf("post-clear chat status = %d", response.Code)
+	}
+	if response := postChat(t, h, -100200, "group after clear"); response.Code != http.StatusOK {
+		t.Fatalf("other chat status = %d", response.Code)
+	}
+
+	want := [][]chat.ChatMessage{
+		{{Role: "user", Content: "first private message"}},
+		{{Role: "user", Content: "first group message"}},
+		{
+			{Role: "user", Content: "first private message"},
+			{Role: "assistant", Content: "reply to first private message"},
+			{Role: "user", Content: "before clear followup"},
+		},
+		{
+			{Role: "user", Content: "first group message"},
+			{Role: "assistant", Content: "reply to first group message"},
+			{Role: "user", Content: "group followup"},
+		},
+		{{Role: "user", Content: "after clear"}},
+		{
+			{Role: "user", Content: "first group message"},
+			{Role: "assistant", Content: "reply to first group message"},
+			{Role: "user", Content: "group followup"},
+			{Role: "assistant", Content: "reply to group followup"},
+			{Role: "user", Content: "group after clear"},
+		},
+	}
+	if len(histories) != len(want) {
+		t.Fatalf("provider histories = %#v, want %#v", histories, want)
+	}
+	for index := range want {
+		if !reflect.DeepEqual(histories[index], want[index]) {
+			t.Fatalf("history %d = %#v, want %#v", index, histories[index], want[index])
 		}
 	}
 }

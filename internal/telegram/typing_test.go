@@ -294,7 +294,6 @@ func TestRejectedAndInvalidMessagesDoNotStartTyping(t *testing.T) {
 		mismatchedPrivateChat,
 		invalidChat,
 		album,
-		privateMessage(42, "/clear"),
 		privateMessage(42, ""),
 		privateMessage(42, "contains "+testToken),
 	} {

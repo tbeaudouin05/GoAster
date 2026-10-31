@@ -97,6 +97,14 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+// IsClearCommand reports whether a message is a /clear command or an attempted
+// /clear command with extra arguments. The latter still needs command routing
+// so it can be rejected without reaching the provider.
+func IsClearCommand(message string) bool {
+	fields := strings.Fields(message)
+	return len(fields) > 0 && fields[0] == "/clear"
+}
+
 // HistoryProvider is optional so existing providers remain compatible with
 // the one-message Provider interface.
 type HistoryProvider interface {
@@ -188,6 +196,22 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 	if err := ctx.Err(); err != nil {
 		return "", fatalRequestError(err)
 	}
+	if IsClearCommand(message) {
+		if strings.TrimSpace(message) != "/clear" || len(attachments) != 0 {
+			return "Usage: /clear", nil
+		}
+		if s.store != nil {
+			version, err := s.store.saveStateWithVersion("", nil, s.storeVersion, true)
+			if err != nil {
+				return "", fatalRequestError(fmt.Errorf("save cleared conversation state: %w", err))
+			}
+			s.storeVersion = version
+		}
+		s.history = nil
+		s.summary = ""
+		s.contextNotice = ""
+		return "Conversation history cleared.", nil
+	}
 
 	historyMessage := attachment.HistoryPlaceholder(message, attachments)
 	candidate := append(cloneChatMessages(s.history), ChatMessage{Role: "user", Content: historyMessage})
@@ -218,9 +242,11 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 			// request, without recording a user turn that might fail.
 			previousTurns := cloneChatMessages(candidate[:len(candidate)-1])
 			if s.store != nil {
-				if err := s.store.saveStateWithVersion(summary, previousTurns, &s.storeVersion); err != nil {
-					return "", fatalRequestError(fmt.Errorf("save conversation state: %w", err))
+				version, saveErr := s.store.saveStateWithVersion(summary, previousTurns, s.storeVersion, true)
+				if saveErr != nil {
+					return "", fatalRequestError(fmt.Errorf("save conversation state: %w", saveErr))
 				}
+				s.storeVersion = version
 			}
 			s.summary, s.history = summary, previousTurns
 		} else {
@@ -298,9 +324,11 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		s.contextNotice = contextTrimNotice
 	}
 	if s.store != nil {
-		if err := s.store.saveStateWithVersion(summary, completed, &s.storeVersion); err != nil {
-			return "", fatalRequestError(fmt.Errorf("save conversation state: %w", err))
+		version, saveErr := s.store.saveStateWithVersion(summary, completed, s.storeVersion, true)
+		if saveErr != nil {
+			return "", fatalRequestError(fmt.Errorf("save conversation state: %w", saveErr))
 		}
+		s.storeVersion = version
 	}
 	s.history = completed
 	s.summary = summary

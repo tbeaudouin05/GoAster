@@ -117,6 +117,108 @@ func TestSessionSelection(t *testing.T) {
 	}
 }
 
+func TestTerminalClearPersistsWithoutProviderAndPreservesMarkdownMemory(t *testing.T) {
+	sessionPath := filepath.Join(t.TempDir(), "session.json")
+	store := NewSessionStoreAt(sessionPath)
+	priorMessages := []ChatMessage{
+		{Role: "user", Content: "keep no longer"},
+		{Role: "assistant", Content: "old response"},
+	}
+	if err := store.saveState("old conversation summary", priorMessages); err != nil {
+		t.Fatal(err)
+	}
+
+	memory := NewMemoryStore(filepath.Join(t.TempDir(), "workspace"))
+	if err := os.MkdirAll(filepath.Dir(memory.MemoryPath()), memoryDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	protectedMemory := []byte("verified durable fact\n")
+	if err := os.WriteFile(memory.MemoryPath(), protectedMemory, memoryFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	providerCalls := 0
+	provider := providerFunc(func(context.Context, string, string) (string, error) {
+		providerCalls++
+		return "", errors.New("provider unavailable")
+	})
+	session, err := NewSessionWithStoreAndMemory(defaultConfig(t), provider, store, memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := runWithTestEnvStore(t, context.Background(), strings.NewReader("/clear\n"), &output, session); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Conversation history cleared.") {
+		t.Fatalf("terminal did not confirm the clear: %q", output.String())
+	}
+	if providerCalls != 0 {
+		t.Fatalf("clear called the unavailable provider %d times", providerCalls)
+	}
+	loaded, err := NewSessionStoreAt(sessionPath).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 0 || loaded.Summary != "" {
+		t.Fatalf("persisted conversation after clear = %+v, want empty history and summary", loaded)
+	}
+	conversationInfo, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conversationInfo.Mode().Perm() != 0600 {
+		t.Fatalf("cleared conversation permissions = %04o, want 0600", conversationInfo.Mode().Perm())
+	}
+	gotMemory, err := os.ReadFile(memory.MemoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotMemory, protectedMemory) {
+		t.Fatalf("protected Markdown memory changed: %q", gotMemory)
+	}
+
+	_, err = NewSessionWithStoreAndMemory(defaultConfig(t), provider, NewSessionStoreAt(sessionPath), memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTerminalClearRejectsExtraArgumentsWithoutChangingSavedHistory(t *testing.T) {
+	sessionPath := filepath.Join(t.TempDir(), "session.json")
+	store := NewSessionStoreAt(sessionPath)
+	wantMessages := []ChatMessage{{Role: "user", Content: "retain this"}}
+	if err := store.saveState("retained summary", wantMessages); err != nil {
+		t.Fatal(err)
+	}
+	providerCalls := 0
+	provider := providerFunc(func(context.Context, string, string) (string, error) {
+		providerCalls++
+		return "", errors.New("provider unavailable")
+	})
+	session, err := NewSessionWithStore(defaultConfig(t), provider, NewSessionStoreAt(sessionPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := runWithTestEnvStore(t, context.Background(), strings.NewReader("/clear extra\n"), &output, session); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Usage: /clear") {
+		t.Fatalf("terminal did not explain malformed usage: %q", output.String())
+	}
+	if providerCalls != 0 {
+		t.Fatalf("malformed clear called the provider %d times", providerCalls)
+	}
+	loaded, err := NewSessionStoreAt(sessionPath).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Summary != "retained summary" || !reflect.DeepEqual(loaded.Messages, wantMessages) {
+		t.Fatalf("malformed clear changed saved history: %+v", loaded)
+	}
+}
+
 func TestRequestErrorClassificationIsTypedAndPreservesCause(t *testing.T) {
 	failure := errors.New("provider failed")
 	recoverable := recoverableRequestError(failure)
@@ -152,7 +254,7 @@ func TestLoop(t *testing.T) {
 	})
 	err := runWithTestEnvStore(t, context.Background(), strings.NewReader("\n hello \n"+strings.Join(requests, "\n")+"\n/history\n/clear\n/quit\n/exit\nsecond\n"), &output, NewSession(defaultConfig(t), provider))
 	wantMessages := append([]string{"hello"}, requests...)
-	wantMessages = append(wantMessages, "/history", "/clear", "/quit", "/exit", "second")
+	wantMessages = append(wantMessages, "/history", "/quit", "/exit", "second")
 	if err != nil || !reflect.DeepEqual(messages, wantMessages) {
 		t.Fatalf("messages = %q, error = %v", messages, err)
 	}
@@ -161,8 +263,9 @@ func TestLoop(t *testing.T) {
 		"- /env: securely import environment variables.",
 		"- /get-env: edit the current env file or get a blank template.",
 		"- /file: inspect non-secret files.",
+		"- /clear: clear this conversation's history.",
 		"Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello",
-		"assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear",
+		"assistant [gpt-6.1-sol]> received /history", "Conversation history cleared.",
 		"assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit",
 		"assistant [gpt-6.1-sol]> received second",
 	} {

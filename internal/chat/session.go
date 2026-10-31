@@ -229,92 +229,90 @@ func (s *SessionStore) Save(messages []ChatMessage) error {
 }
 
 func (s *SessionStore) saveState(summary string, messages []ChatMessage) error {
-	return s.saveStateWithVersion(summary, messages, nil)
+	_, err := s.saveStateWithVersion(summary, messages, [sha256.Size]byte{}, false)
+	return err
 }
 
-// A nil version preserves store-level Save behavior. Sessions supply their own
-// token so another user of the same store cannot advance their expected version.
-func (s *SessionStore) saveStateWithVersion(summary string, messages []ChatMessage, version *[sha256.Size]byte) error {
+// Sessions pass their expected token by value so another user of the same
+// store cannot advance their expected version.
+func (s *SessionStore) saveStateWithVersion(summary string, messages []ChatMessage, expectedVersion [sha256.Size]byte, hasExpectedVersion bool) ([sha256.Size]byte, error) {
 	if err := s.validatePath(); err != nil {
-		return err
+		return [sha256.Size]byte{}, err
 	}
 	normalized, _, err := normalizeChatMessages(messages, false)
 	if err != nil {
-		return fmt.Errorf("conversation contains unsupported message data")
+		return [sha256.Size]byte{}, fmt.Errorf("conversation contains unsupported message data")
 	}
 	summary, _ = normalizeSummary(summary)
 	bounded, _ := boundSessionMessages(summary, normalized, false, maxContextTokens, maxSessionMessages)
 	data, err := encodeSessionFile(summary, bounded)
 	if err != nil {
-		return fmt.Errorf("encode conversation state: %w", err)
+		return [sha256.Size]byte{}, fmt.Errorf("encode conversation state: %w", err)
 	}
 	if len(data) > maxSessionFileBytes {
-		return fmt.Errorf("conversation state exceeds the %d-byte limit", maxSessionFileBytes)
+		return [sha256.Size]byte{}, fmt.Errorf("conversation state exceeds the %d-byte limit", maxSessionFileBytes)
 	}
 
 	directory := filepath.Dir(s.Path)
 	unlock, err := s.lock()
 	if err != nil {
-		return err
+		return [sha256.Size]byte{}, err
 	}
 	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, err := sessionVersion(s.Path)
 	if err != nil {
-		return err
+		return [sha256.Size]byte{}, err
 	}
 	expected := s.version
-	if version != nil {
-		expected = *version
+	if hasExpectedVersion {
+		expected = expectedVersion
 	}
 	if current != expected {
-		return errors.New("conversation state changed in another instance; restart to load the latest history")
+		return [sha256.Size]byte{}, errors.New("conversation state changed in another instance; restart to load the latest history")
 	}
 	temporary, err := os.CreateTemp(directory, ".session-*.tmp")
 	if err != nil {
-		return fmt.Errorf("create temporary conversation file: %w", err)
+		return [sha256.Size]byte{}, fmt.Errorf("create temporary conversation file: %w", err)
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
 	if err := temporary.Chmod(0600); err != nil {
 		_ = temporary.Close()
-		return fmt.Errorf("restrict temporary conversation file: %w", err)
+		return [sha256.Size]byte{}, fmt.Errorf("restrict temporary conversation file: %w", err)
 	}
 	n, err := temporary.Write(data)
 	if err != nil {
 		_ = temporary.Close()
-		return fmt.Errorf("write conversation state: %w", err)
+		return [sha256.Size]byte{}, fmt.Errorf("write conversation state: %w", err)
 	}
 	if n != len(data) {
 		_ = temporary.Close()
-		return fmt.Errorf("write conversation state: incomplete write")
+		return [sha256.Size]byte{}, fmt.Errorf("write conversation state: incomplete write")
 	}
 	if err := temporary.Sync(); err != nil {
 		_ = temporary.Close()
-		return fmt.Errorf("sync conversation state: %w", err)
+		return [sha256.Size]byte{}, fmt.Errorf("sync conversation state: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary conversation file: %w", err)
+		return [sha256.Size]byte{}, fmt.Errorf("close temporary conversation file: %w", err)
 	}
 	if err := os.Rename(temporaryName, s.Path); err != nil {
-		return fmt.Errorf("replace conversation state: %w", err)
+		return [sha256.Size]byte{}, fmt.Errorf("replace conversation state: %w", err)
 	}
 	if err := os.Chmod(s.Path, 0600); err != nil {
-		return fmt.Errorf("restrict conversation file: %w", err)
+		return [sha256.Size]byte{}, fmt.Errorf("restrict conversation file: %w", err)
 	}
 	syncDirectory := s.syncDirectory
 	if syncDirectory == nil {
 		syncDirectory = syncSessionDirectory
 	}
 	if err := syncDirectory(directory); err != nil {
-		return fmt.Errorf("sync conversation directory: %w", err)
+		return [sha256.Size]byte{}, fmt.Errorf("sync conversation directory: %w", err)
 	}
 	s.version = sha256.Sum256(data)
-	if version != nil {
-		*version = s.version
-	}
-	return nil
+	return s.version, nil
 }
 
 func (s *SessionStore) validatePath() error {

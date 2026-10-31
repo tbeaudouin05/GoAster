@@ -52,6 +52,10 @@ screens; the OVH skill gives domain guidance for the Create API Keys screen.
 The conversation is saved in `~/.goaster/session.json`; durable Markdown
 memory is kept under `~/.goaster/memory/`. Scheduled chat turns are saved
 locally and run only while the packaged terminal process is active.
+Use `/clear` in the terminal to clear that persistent conversation. The command
+takes no arguments; extra text displays `Usage: /clear` and leaves history as
+it was. Clearing does not change Markdown memory and does not require model
+authentication.
 
 ## 3. Import setup values with `/env`
 
@@ -255,7 +259,10 @@ code.
 
 After the agent passes `/healthz`, start the separately approved Telegram
 adapter service. With systemd, configure the adapter as `Type=notify`; it
-reports ready after the agent is healthy and Telegram accepts its first poll.
+reports ready after the agent process is available and Telegram accepts its
+first poll. It checks authentication separately before telling a paired user
+that normal chat is ready, while `/clear` remains available without model
+authentication.
 Once the adapter is polling, the intended user opens a private chat with the
 bot and sends `/start`, then `/start <PAIRING_CODE>`. The first private
 Telegram account that submits the correct code is paired. GoAster saves that
@@ -282,6 +289,11 @@ are removed after the turn and are not saved in conversation history.
 Downloads are limited to 20 MiB; supported image formats are JPEG, PNG, GIF,
 and WebP. Media albums are ignored.
 
+Send `/clear` in a Telegram chat to clear only that chat's conversation. The
+command takes no arguments; extra text displays `Usage: /clear` and leaves
+history unchanged. It works while model authentication is unavailable and
+does not change Markdown memory.
+
 Telegram's Group Privacy Mode can prevent ordinary group text from reaching a
 bot. See the [Telegram BotFather Group Privacy Mode
 skill](../skills/telegram-group-privacy/SKILL.md) if group chat is needed.
@@ -293,10 +305,10 @@ take effect.
 
 Keep the local packaged app open for local terminal chat and scheduled turns.
 For remote Telegram operation, keep the approved agent and adapter services
-running on the OVH host. The agent must remain authenticated and healthy; the
-adapter depends on it and on a successful Telegram poll. If the adapter was
-started before remote login completed, restart it after `/healthz` returns
-`ok`.
+running on the OVH host. The agent must remain authenticated and healthy for
+normal model replies; the adapter can still receive `/clear` while model
+authentication is unavailable. If the adapter starts before the agent process
+is available, restart it after the agent service is running.
 
 Remote credentials refresh when needed. To reauthenticate, have GoAster invoke
 the same interactive SSH-backed login flow with its service-account target

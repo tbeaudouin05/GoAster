@@ -122,6 +122,24 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 		if message == "" {
 			continue
 		}
+		if IsClearCommand(message) {
+			reply, err := session.Reply(ctx, message)
+			if err != nil {
+				if ui.interactive {
+					ui.renderError(w, "Conversation history could not be cleared.")
+					if flushErr := w.Flush(); flushErr != nil {
+						return flushErr
+					}
+					continue
+				}
+				return err
+			}
+			ui.renderOutcome(w, reply)
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			continue
+		}
 		if message == "/env" {
 			if err := runEnvironmentFileSetupWithUI(terminalInput, w, store, picker, "", "", ui); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {

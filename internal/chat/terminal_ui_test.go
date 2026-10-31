@@ -49,6 +49,7 @@ func TestTerminalUIIntroListsSlashCommandsWithoutQuitLine(t *testing.T) {
 				"- /env: securely import environment variables.",
 				"- /get-env: edit the current env file or get a blank template.",
 				"- /file: inspect non-secret files.",
+				"- /clear: clear this conversation's history.",
 			} {
 				if !strings.Contains(result, want) {
 					t.Errorf("intro missing %q: %s", want, output.String())

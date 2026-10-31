@@ -99,7 +99,7 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 	if p.userID != 42 || len(sent) != 2 || !strings.Contains(sent[1].Text, "Paired") {
 		t.Fatal("valid private pairing failed")
 	}
-	for _, m := range []*message{privateMessage(99, "hello"), privateMessage(99, "/start "+testCode), group, privateMessage(42, "/clear"), privateMessage(42, "")} {
+	for _, m := range []*message{privateMessage(99, "hello"), privateMessage(99, "/start "+testCode), group, privateMessage(42, "")} {
 		a.handle(context.Background(), m)
 	}
 	if len(forwarded) != 0 || len(sent) != 2 {
@@ -125,6 +125,73 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 	}
 }
 
+func TestClearCommandUsesOnlyItsTelegramChatWithoutProviderReadiness(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	var sent []struct {
+		ChatID int64  `json:"chat_id"`
+		Text   string `json:"text"`
+	}
+	var forwarded []struct {
+		Message string `json:"message"`
+		ChatID  int64  `json:"chat_id"`
+	}
+	a := adapter{
+		token: testToken, pairing: paired, apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+			}
+			var payload struct {
+				ChatID int64  `json:"chat_id"`
+				Text   string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			sent = append(sent, payload)
+			return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method != http.MethodPost || r.URL.String() != "http://127.0.0.1:8765/chat" {
+				t.Fatalf("clear command made an unexpected agent request: %s %s", r.Method, r.URL)
+			}
+			var request struct {
+				Message string `json:"message"`
+				ChatID  int64  `json:"chat_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			forwarded = append(forwarded, request)
+			reply := "Conversation history cleared."
+			if request.Message != "/clear" {
+				reply = "Usage: /clear"
+			}
+			return response(http.StatusOK, `{"type":"final","reply":"`+reply+`"}`+"\n"), nil
+		}),
+	}
+
+	a.handle(context.Background(), privateMessage(42, "/clear"))
+	a.handle(context.Background(), textMessage(42, -100123, "group", "/clear extra"))
+	withAttachment := privateMessage(42, "")
+	withAttachment.Caption = "/clear"
+	withAttachment.Document = &document{FileID: "file"}
+	a.handle(context.Background(), withAttachment)
+
+	if len(forwarded) != 2 || forwarded[0].ChatID != 42 || forwarded[0].Message != "/clear" || forwarded[1].ChatID != -100123 || forwarded[1].Message != "/clear extra" {
+		t.Fatalf("clear requests = %#v", forwarded)
+	}
+	if len(sent) != 3 || sent[0].ChatID != 42 || sent[0].Text != "Conversation history cleared." || sent[1].ChatID != -100123 || sent[1].Text != "Usage: /clear" || sent[2].ChatID != 42 || sent[2].Text != "Usage: /clear" {
+		t.Fatalf("clear replies = %#v", sent)
+	}
+}
+
 func TestPairedGroupMessagesForwardChatIDAndReplyToOriginatingChat(t *testing.T) {
 	var sent []struct {
 		ChatID int64  `json:"chat_id"`
@@ -134,7 +201,7 @@ func TestPairedGroupMessagesForwardChatIDAndReplyToOriginatingChat(t *testing.T)
 		Message string `json:"message"`
 		ChatID  int64  `json:"chat_id"`
 	}
-	a := &adapter{
+	a := adapter{
 		token:   testToken,
 		pairing: &pairing{userID: 42},
 		apiBase: "https://example.invalid",
@@ -187,7 +254,7 @@ func TestPollingReadinessOffsetAndRedactedErrors(t *testing.T) {
 	}
 	ready := false
 	a := &adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid", agent: doerFunc(func(r *http.Request) (*http.Response, error) {
-		if r.Method != http.MethodGet || r.URL.String() != "http://127.0.0.1:8765/healthz" {
+		if r.Method != http.MethodGet || r.URL.Host != "127.0.0.1:8765" || r.URL.Path != "/livez" && r.URL.Path != "/healthz" {
 			t.Fatal("unexpected agent health request")
 		}
 		return response(200, "ok\n"), nil
@@ -241,7 +308,7 @@ func TestPollingDispatchesUpdatesConcurrentlyAndCancelsHandlers(t *testing.T) {
 	a := adapter{
 		token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid",
 		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
-			if r.URL.Path == "/healthz" {
+			if r.URL.Path == "/livez" {
 				return response(200, "ok\n"), nil
 			}
 			var payload struct {
@@ -312,27 +379,30 @@ func TestPollingDispatchesUpdatesConcurrentlyAndCancelsHandlers(t *testing.T) {
 	}
 }
 
-func TestPollingDoesNotReportReadyWithoutAgentAuthentication(t *testing.T) {
-	var healthRequests, polls int
+func TestPollingRequiresAgentProcessAvailability(t *testing.T) {
+	var livenessChecks, polls int
 	agentStatus := http.StatusServiceUnavailable
 	a := &adapter{agent: doerFunc(func(r *http.Request) (*http.Response, error) {
-		healthRequests++
+		livenessChecks++
+		if r.URL.Path != "/livez" {
+			t.Fatalf("unexpected readiness request %s", r.URL.Path)
+		}
 		if agentStatus == http.StatusOK {
 			return response(agentStatus, "ok\n"), nil
 		}
-		return response(agentStatus, "private credential detail"), nil
+		return response(agentStatus, "private process detail"), nil
 	}), client: doerFunc(func(*http.Request) (*http.Response, error) {
 		polls++
 		return response(200, `{"ok":true,"result":[]}`), nil
 	})}
 	ready := false
 	err := a.run(context.Background(), func() error { ready = true; return nil })
-	if err == nil || ready || polls != 0 || strings.Contains(err.Error(), "private credential detail") {
-		t.Fatalf("unavailable agent: error=%v ready=%v polls=%d", err, ready, polls)
+	if err == nil || ready || polls != 0 || strings.Contains(err.Error(), "private process detail") {
+		t.Fatalf("unavailable agent process: error=%v ready=%v polls=%d", err, ready, polls)
 	}
 
-	// The agent can become unavailable while the initial Telegram poll runs.
-	healthRequests, polls = 0, 0
+	// The process can exit while the initial Telegram poll runs.
+	livenessChecks, polls = 0, 0
 	agentStatus = http.StatusOK
 	a.client = doerFunc(func(*http.Request) (*http.Response, error) {
 		polls++
@@ -340,8 +410,83 @@ func TestPollingDoesNotReportReadyWithoutAgentAuthentication(t *testing.T) {
 		return response(200, `{"ok":true,"result":[]}`), nil
 	})
 	err = a.run(context.Background(), func() error { ready = true; return nil })
-	if err == nil || ready || polls != 1 || healthRequests != 2 {
-		t.Fatalf("agent became unavailable: error=%v ready=%v polls=%d checks=%d", err, ready, polls, healthRequests)
+	if err == nil || ready || polls != 1 || livenessChecks != 2 {
+		t.Fatalf("agent process exited: error=%v ready=%v polls=%d checks=%d", err, ready, polls, livenessChecks)
+	}
+}
+
+func TestPollingAndClearWorkWhenProviderAuthenticationIsUnavailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	replied := make(chan string, 1)
+	var polls, authenticationChecks int
+	a := adapter{
+		token: testToken, pairing: paired, apiBase: "https://example.invalid",
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch r.URL.Path {
+			case "/livez":
+				return response(http.StatusOK, "ok\n"), nil
+			case "/healthz":
+				authenticationChecks++
+				return response(http.StatusServiceUnavailable, "private credential detail"), nil
+			case "/chat":
+				var request struct {
+					Message string `json:"message"`
+					ChatID  int64  `json:"chat_id"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.ChatID != 42 || request.Message != "/clear" {
+					t.Fatalf("clear request = %+v, error = %v", request, err)
+				}
+				return response(http.StatusOK, `{"type":"final","reply":"Conversation history cleared."}`+"\n"), nil
+			default:
+				t.Fatalf("unexpected agent request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/getUpdates") {
+				polls++
+				if polls == 1 {
+					return response(http.StatusOK, `{"ok":true,"result":[{"update_id":8,"message":{"text":"/clear","from":{"id":42},"chat":{"id":42,"type":"private"}}}]}`), nil
+				}
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			}
+			var payload struct {
+				ChatID int64  `json:"chat_id"`
+				Text   string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			replied <- payload.Text
+			return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+		}),
+	}
+	ready := false
+	done := make(chan error, 1)
+	go func() { done <- a.run(ctx, func() error { ready = true; return nil }) }()
+	select {
+	case text := <-replied:
+		if text != "Conversation history cleared." {
+			t.Fatalf("clear reply = %q", text)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("clear command did not receive a reply")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !ready || polls < 2 || authenticationChecks != 0 {
+		t.Fatalf("polling state ready=%v polls=%d authentication checks=%d", ready, polls, authenticationChecks)
 	}
 }
 
@@ -369,7 +514,8 @@ func TestStartReportsCurrentAgentReadiness(t *testing.T) {
 	a.handle(context.Background(), privateMessage(42, "/start"))
 	available = true
 	a.handle(context.Background(), privateMessage(42, "/start"))
-	if len(sent) != 2 || !strings.Contains(sent[0], "not ready") || !strings.Contains(sent[1], "ready for text messages") {
+	if len(sent) != 2 || !strings.Contains(sent[0], "not ready") || !strings.Contains(sent[0], "/clear") ||
+		!strings.Contains(sent[1], "ready for text messages") || !strings.Contains(sent[1], "/clear") {
 		t.Fatalf("readiness messages = %q", sent)
 	}
 }

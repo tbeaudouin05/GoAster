@@ -351,9 +351,11 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 			if compact {
 				session.history = numberedHistory(maxSessionMessages)
 			}
-			if err := session.store.saveStateWithVersion(session.summary, session.history, &session.storeVersion); err != nil {
+			version, err := session.store.saveStateWithVersion(session.summary, session.history, session.storeVersion, true)
+			if err != nil {
 				t.Fatal(err)
 			}
+			session.storeVersion = version
 			wantHistory, wantSummary := cloneChatMessages(session.history), session.summary
 			if compact {
 				wantHistory = cloneChatMessages(session.history[maxSessionMessages-recentMessagesToKeep+1:])

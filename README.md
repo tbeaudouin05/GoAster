@@ -122,6 +122,12 @@ to the model. Session storage remains bounded to 8 MiB and 32 KiB per message.
 If the saved conversation is malformed, GoAster moves it aside safely and
 starts a new conversation.
 
+Type `/clear` in the terminal to clear the persistent terminal conversation.
+In Telegram, send `/clear` in a chat to clear only that chat's conversation.
+The command takes no arguments; extra text shows `Usage: /clear` and leaves
+history unchanged. Clearing works while model authentication is unavailable
+and does not change protected Markdown memory.
+
 ## Markdown memory
 
 GoAster keeps durable Markdown memory separate from `session.json` under the
@@ -357,12 +363,12 @@ agent or adapter service restart still requires its own explicit approval.
 The health check returns `ok` only when the agent can load its separate
 subscription credential, refreshing it if needed; this does not test a model
 response or detect every revoked token. Start or restart the Telegram adapter
-after the check succeeds. For systemd
-readiness reporting, configure its service as `Type=notify`: the adapter sends
-the ready notification only after the agent is ready and the first Telegram
-poll succeeds. It also checks agent readiness before telling a paired user
-that chat is ready. If the adapter was started too early, restart it after
-the health check. Telegram token and pairing setup are separate steps below;
+after the check succeeds. For systemd readiness reporting, configure its
+service as `Type=notify`: the adapter sends the ready notification after the
+agent process is available and the first Telegram poll succeeds. It checks
+authentication before telling a paired user that normal chat is ready. The
+adapter can receive `/clear` while model authentication is unavailable.
+Telegram token and pairing setup are separate steps below;
 neither the OpenAI device code nor the subscription tokens belong in Telegram.
 
 An `/healthz` result of `ok` marks only remote agent readiness. Full onboarding

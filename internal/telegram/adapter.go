@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"goaster/internal/attachment"
+	"goaster/internal/chat"
 )
 
 type httpDoer interface {
@@ -87,8 +88,9 @@ const (
 )
 
 // Run starts polling only after the token and pairing state are protected.
-// ready is called after the agent is authenticated and Telegram accepts an
-// initial getUpdates request.
+// ready is called after the agent process is available and Telegram accepts
+// an initial getUpdates request; chat commands check model authentication
+// separately so /clear remains usable while it is unavailable.
 func Run(ctx context.Context, paths Paths, ready func() error) error {
 	token, err := readPrivate(paths.Token)
 	if err != nil || ValidateToken(string(token)) != nil {
@@ -109,15 +111,15 @@ func Run(ctx context.Context, paths Paths, ready func() error) error {
 }
 
 func (a *adapter) run(ctx context.Context, ready func() error) error {
-	if !a.agentReady(ctx) {
-		return fmt.Errorf("remote agent is not ready; check its OpenAI authentication")
+	if !a.agentEndpointAvailable(ctx, "/livez") {
+		return fmt.Errorf("remote agent is unavailable")
 	}
 	updates, err := a.getUpdates(ctx, 0, 0)
 	if err != nil {
 		return fmt.Errorf("Telegram polling could not start; check the bot token, connection and webhook settings")
 	}
-	if !a.agentReady(ctx) {
-		return fmt.Errorf("remote agent is not ready; check its OpenAI authentication")
+	if !a.agentEndpointAvailable(ctx, "/livez") {
+		return fmt.Errorf("remote agent is unavailable")
 	}
 	if ready != nil {
 		if err := ready(); err != nil {
@@ -162,13 +164,13 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 	}
 }
 
-func (a *adapter) agentReady(ctx context.Context) bool {
+func (a *adapter) agentEndpointAvailable(ctx context.Context, endpoint string) bool {
 	if a.agent == nil {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8765/healthz", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8765"+endpoint, nil)
 	if err != nil {
 		return false
 	}
@@ -260,10 +262,10 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 			return
 		}
 		if paired {
-			if a.agentReady(ctx) {
-				a.send(ctx, m.Chat.ID, "Paired. Send text, an image, or a document to chat.")
+			if a.agentEndpointAvailable(ctx, "/healthz") {
+				a.send(ctx, m.Chat.ID, "Paired. Send text, an image, or a document to chat. Send /clear to clear this chat's history.")
 			} else {
-				a.send(ctx, m.Chat.ID, "Paired. The remote agent is not ready; check its remote authentication.")
+				a.send(ctx, m.Chat.ID, "Paired. The remote agent is not ready; check its remote authentication. You can still send /clear to clear this chat's history.")
 			}
 		}
 		return
@@ -272,11 +274,24 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		return
 	}
 	if text == "/start" || strings.HasPrefix(text, "/start ") {
-		if a.agentReady(ctx) {
-			a.send(ctx, m.Chat.ID, "GoAster is ready for text messages, images, and documents.")
+		if a.agentEndpointAvailable(ctx, "/healthz") {
+			a.send(ctx, m.Chat.ID, "GoAster is ready for text messages, images, and documents. Send /clear to clear this chat's history.")
 		} else {
-			a.send(ctx, m.Chat.ID, "The remote agent is not ready; check its remote authentication.")
+			a.send(ctx, m.Chat.ID, "The remote agent is not ready; check its remote authentication. You can still send /clear to clear this chat's history.")
 		}
+		return
+	}
+	if chat.IsClearCommand(text) {
+		if hasAttachment {
+			a.send(ctx, m.Chat.ID, "Usage: /clear")
+			return
+		}
+		reply, err := a.askAgent(ctx, text, m.Chat.ID, nil, nil)
+		if err != nil {
+			a.send(ctx, m.Chat.ID, "Conversation history could not be cleared.")
+			return
+		}
+		a.send(ctx, m.Chat.ID, reply)
 		return
 	}
 	if strings.HasPrefix(text, "/") {
