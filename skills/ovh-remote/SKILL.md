@@ -170,9 +170,14 @@ system Go at `$HOME/.local/opt/go1.27.3`: download from
 `https://go.dev/dl/go1.27.3.linux-$arch.tar.gz`, verify it with
 `printf '%s  %s\n' "$go_sha256" "$archive" | sha256sum --check --status`
 before extraction, and stop if the destination already exists but is not that
-exact toolchain. Do not replace the host's system Go. Set `GOTOOLCHAIN=local`
-for builds so the Go command cannot silently select a different toolchain. If
-checksum verification fails, stop without extracting or building.
+exact toolchain. GoAster must force IPv4 for this archive download (with
+`curl`, use `--ipv4`). This host's IPv6 path can return HTTP 404 for the valid
+archive while IPv4 returns HTTP 200; this is a network-path workaround, not
+evidence that the Go release is missing. Keep the pinned checksum and checksum
+verification command unchanged, and verify the archive before extraction. Do
+not replace the host's system Go. Set `GOTOOLCHAIN=local` for builds so the Go
+command cannot silently select a different toolchain. If checksum verification
+fails, stop without extracting or building.
 
 When installing Go, select `$HOME/.local/opt/go1.27.3/bin/go` as `GO_BIN`;
 when reusing system Go, set `GO_BIN` to the path returned by `command -v go`
