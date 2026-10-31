@@ -15,7 +15,9 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"goaster/internal/attachment"
 	"goaster/internal/localenv"
@@ -253,6 +255,120 @@ func TestInteractiveRequestLifecycleShowsWorkingAndRetries(t *testing.T) {
 	}
 	if strings.Contains(result, "temporary provider failure") {
 		t.Fatalf("provider error leaked into the interactive request notice: %q", result)
+	}
+}
+
+func TestInteractiveToolCallProgressShowsWhileToolRunsAndAfterCompletion(t *testing.T) {
+	var output bytes.Buffer
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseTool := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseTool()
+	provider := providerFunc(func(ctx context.Context, _ string, _ string) (string, error) {
+		observer := toolCallObserver(ctx)
+		if observer == nil {
+			close(started)
+			return "", errors.New("tool progress observer missing")
+		}
+		observer("shell_execute", `{"command":"printf PRIVATE_TOKEN","cwd":"/private/path"}`)
+		close(started)
+		select {
+		case <-release:
+			return "Command finished.", nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	})
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- runChatLoopWithUI(
+			context.Background(),
+			TerminalInput{reader: strings.NewReader("run command\n"), interactive: true},
+			&output,
+			NewSession(defaultConfig(t), provider),
+			store,
+			EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }),
+			terminalUI{interactive: true, width: 80},
+		)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow tool did not start")
+	}
+	progress := output.String()
+	if !strings.Contains(progress, "Tool shell_execute: running a command") || !strings.Contains(progress, "Working...") {
+		t.Fatalf("slow tool progress was not visible: %q", progress)
+	}
+	if strings.Contains(progress, "PRIVATE_TOKEN") || strings.Contains(progress, "/private/path") {
+		t.Fatalf("tool arguments leaked into terminal progress: %q", progress)
+	}
+	releaseTool()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Command finished.") {
+		t.Fatalf("completed tool reply was not displayed: %q", output.String())
+	}
+}
+
+func TestInteractiveToolFailureShowsSafeRequestError(t *testing.T) {
+	var output bytes.Buffer
+	calls := 0
+	provider := providerFunc(func(ctx context.Context, _ string, _ string) (string, error) {
+		calls++
+		if calls == 1 {
+			if observer := toolCallObserver(ctx); observer != nil {
+				observer("web_fetch", `{"url":"https://example.test/?token=PRIVATE_TOKEN"}`)
+			}
+			return "", errors.New("private tool failure details")
+		}
+		return "Retry complete.", nil
+	})
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	err := runChatLoopWithUI(
+		context.Background(),
+		TerminalInput{reader: strings.NewReader("fetch\nretry\n"), interactive: true},
+		&output,
+		NewSession(defaultConfig(t), provider),
+		store,
+		EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }),
+		terminalUI{interactive: true, width: 80},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := output.String()
+	if !strings.Contains(result, "Tool web_fetch: fetching a public page") ||
+		!strings.Contains(result, "Request failed. Please try again.") || !strings.Contains(result, "Retry complete.") {
+		t.Fatalf("tool failure and retry lifecycle was not displayed: %q", result)
+	}
+	if strings.Contains(result, "PRIVATE_TOKEN") || strings.Contains(result, "private tool failure details") {
+		t.Fatalf("tool arguments or private failure details leaked into terminal output: %q", result)
+	}
+}
+
+func TestLineProtocolDoesNotAttachToolCallObserver(t *testing.T) {
+	var output bytes.Buffer
+	provider := providerFunc(func(ctx context.Context, _ string, _ string) (string, error) {
+		if toolCallObserver(ctx) != nil {
+			t.Error("line protocol unexpectedly attached a terminal tool progress observer")
+		}
+		return "done", nil
+	})
+	if err := runWithTestEnvStore(t, context.Background(), strings.NewReader("run\n"), &output, NewSession(defaultConfig(t), provider)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "Tool ") || strings.Contains(output.String(), "Working...") {
+		t.Fatalf("line protocol output changed: %q", output.String())
 	}
 }
 

@@ -234,10 +234,17 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 		previousModel, _ := session.modelStatus()
 		var reply string
 		var err error
+		requestContext := ctx
+		if ui.interactive {
+			requestContext = WithToolCallObserver(ctx, func(name, _ string) {
+				ui.renderToolCall(w, name)
+				_ = w.Flush()
+			})
+		}
 		if len(attachments) == 0 {
-			reply, err = session.Reply(ctx, userMessage)
+			reply, err = session.Reply(requestContext, userMessage)
 		} else {
-			reply, err = session.ReplyWithAttachments(ctx, userMessage, attachments)
+			reply, err = session.ReplyWithAttachments(requestContext, userMessage, attachments)
 			if cleanupErr := attachment.CleanupTemporaryDir(attachmentDirectory); cleanupErr != nil {
 				ui.renderWarning(w, "Temporary attachment cleanup failed.")
 			}

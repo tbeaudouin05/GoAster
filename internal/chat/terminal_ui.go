@@ -191,6 +191,52 @@ func (ui terminalUI) renderWorking(output io.Writer) {
 	ui.renderWrapped(output, "  ", "Working...", ui.renderWidth(output), ansiStatus)
 }
 
+func (ui terminalUI) renderToolCall(output io.Writer, name string) {
+	if !ui.interactive {
+		return
+	}
+	ui.renderWrapped(output, "  "+ui.statusMarker()+" ", terminalToolCallStatus(name), ui.renderWidth(output), ansiStatus)
+}
+
+func terminalToolCallStatus(name string) string {
+	name = strings.TrimSpace(name)
+	if !validTerminalToolName(name) {
+		name = "tool"
+	}
+	if runes := []rune(name); len(runes) > 40 {
+		name = string(runes[:37]) + "..."
+	}
+
+	activity := "running"
+	switch name {
+	case "web_search":
+		activity = "searching the web"
+	case "web_fetch":
+		activity = "fetching a public page"
+	case "shell_execute":
+		activity = "running a command"
+	case "cron":
+		activity = "managing scheduled jobs"
+	case "remote_login":
+		activity = "starting remote login approval"
+	}
+	return "Tool " + name + ": " + activity
+}
+
+func validTerminalToolName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, character := range name {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '_' || character == '-' || character == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func (ui terminalUI) renderRequestError(output io.Writer) {
 	if !ui.interactive {
 		return

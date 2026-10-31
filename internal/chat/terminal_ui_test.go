@@ -89,6 +89,42 @@ func TestTerminalUIWrapsAssistantBubbleToAvailableWidth(t *testing.T) {
 	}
 }
 
+func TestTerminalUIToolCallProgressUsesConciseActivityLabels(t *testing.T) {
+	for _, fixture := range []struct {
+		name string
+		want string
+	}{
+		{name: "web_search", want: "Tool web_search: searching the web"},
+		{name: "web_fetch", want: "Tool web_fetch: fetching a public page"},
+		{name: "shell_execute", want: "Tool shell_execute: running a command"},
+		{name: "custom_tool", want: "Tool custom_tool: running"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			var output bytes.Buffer
+			ui := terminalUI{interactive: true, width: 80}
+			ui.renderToolCall(&output, fixture.name)
+			if !strings.Contains(output.String(), fixture.want) {
+				t.Fatalf("tool progress = %q, want %q", output.String(), fixture.want)
+			}
+		})
+	}
+}
+
+func TestTerminalUIToolCallProgressSanitizesToolNamesAndKeepsLineProtocolQuiet(t *testing.T) {
+	var output bytes.Buffer
+	ui := terminalUI{interactive: true, width: 40}
+	ui.renderToolCall(&output, "shell_execute\n\x1b[31msecret")
+	if strings.Contains(output.String(), "\x1b") || strings.Contains(output.String(), "secret") || !strings.Contains(output.String(), "Tool tool: running") {
+		t.Fatalf("unsafe tool name was not reduced to a safe status: %q", output.String())
+	}
+
+	output.Reset()
+	terminalUI{}.renderToolCall(&output, "shell_execute")
+	if output.Len() != 0 {
+		t.Fatalf("line protocol unexpectedly rendered tool progress: %q", output.String())
+	}
+}
+
 func TestWrapTerminalTextPreservesParagraphBreaksAndSplitsLongWords(t *testing.T) {
 	lines := wrapTerminalText("alpha beta\n\n0123456789", 5)
 	want := []string{"alpha", "beta", "", "01234", "56789"}
