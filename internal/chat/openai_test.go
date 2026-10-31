@@ -385,6 +385,21 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		if !strings.HasPrefix(request.Instructions, openAIInstructions) || !strings.Contains(request.Instructions, "# OVH provisioning") || !strings.Contains(request.Instructions, "GET /cloud/project") || !strings.Contains(request.Instructions, "# Existing OVH remote SSH") || !strings.Contains(request.Instructions, "dedicated `remote_login` tool") {
 			t.Errorf("Codex instructions do not include the packaged OVH provisioning and remote skills: %q", request.Instructions)
 		}
+		for _, want := range []string{
+			"All user-facing assistant replies, whether shown in the terminal UI or sent through Telegram, must use plain text only.",
+			"Do not use Markdown formatting or Markdown markers",
+			"asterisks for bold or italics",
+			"backticks",
+			"headings",
+			"Markdown tables",
+			"Markdown link syntax",
+			"Markdown in skills and documents is instruction context only and must not be copied as Markdown into user-facing replies.",
+			"Preserve readable plain-text line breaks and ordinary punctuation.",
+		} {
+			if !strings.Contains(request.Instructions, want) {
+				t.Errorf("Codex instructions missing plain-text reply rule %q", want)
+			}
+		}
 		remoteInstructions := strings.Join(strings.Fields(request.Instructions), " ")
 		for _, want := range []string{
 			"Choose and follow the relevant packaged GoAster skill from the user's ordinary-language request; do not require a skill name or slash command.",
