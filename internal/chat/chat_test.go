@@ -115,6 +115,24 @@ func TestSessionSelection(t *testing.T) {
 	}
 }
 
+func TestRequestErrorClassificationIsTypedAndPreservesCause(t *testing.T) {
+	failure := errors.New("provider failed")
+	recoverable := recoverableRequestError(failure)
+	if classifyRequestError(recoverable) != requestErrorRecoverable || !errors.Is(recoverable, failure) || !errors.Is(recoverable, errRecoverableRequest) {
+		t.Fatalf("recoverable classification = %v", recoverable)
+	}
+	fatal := fatalRequestError(failure)
+	if classifyRequestError(fatal) != requestErrorFatal || !errors.Is(fatal, failure) || !errors.Is(fatal, errFatalRequest) {
+		t.Fatalf("fatal classification = %v", fatal)
+	}
+	if classifyRequestError(failure) != requestErrorFatal {
+		t.Fatal("unclassified errors did not default to the fatal boundary")
+	}
+	if classifyRequestError(recoverableRequestError(context.Canceled)) != requestErrorFatal {
+		t.Fatal("context cancellation crossed the recoverable boundary")
+	}
+}
+
 func TestLoop(t *testing.T) {
 	var output bytes.Buffer
 	var messages []string
@@ -152,6 +170,9 @@ func TestLoop(t *testing.T) {
 	if strings.Contains(output.String(), "OVH setup has started.") {
 		t.Errorf("ordinary-language requests unexpectedly entered the legacy /ovh display: %s", output.String())
 	}
+	if strings.Contains(output.String(), "Working...") {
+		t.Errorf("redirected line protocol unexpectedly included an interactive working state: %s", output.String())
+	}
 }
 
 func TestLoopShowsFallback(t *testing.T) {
@@ -171,6 +192,206 @@ func TestLoopShowsFallback(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
+	}
+}
+
+func TestInteractiveRequestLifecycleShowsWorkingAndRetries(t *testing.T) {
+	var output bytes.Buffer
+	started := make(chan struct{})
+	release := make(chan struct{})
+	calls := 0
+	provider := providerFunc(func(ctx context.Context, _ string, message string) (string, error) {
+		calls++
+		if calls == 1 {
+			close(started)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			return "first reply to " + message, nil
+		}
+		if calls == 2 {
+			return "", errors.New("temporary provider failure")
+		}
+		return "retried reply", nil
+	})
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- runChatLoopWithUI(
+			context.Background(),
+			TerminalInput{reader: strings.NewReader("first\nsecond\nthird\n"), interactive: true},
+			&output,
+			NewSession(defaultConfig(t), provider),
+			store,
+			EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }),
+			terminalUI{interactive: true, width: 80},
+		)
+	}()
+	<-started
+	if !strings.Contains(output.String(), "Working...") {
+		t.Fatalf("working state was not flushed before the delayed request: %q", output.String())
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	result := output.String()
+	if calls != 3 || strings.Count(result, "Working...") != 3 {
+		t.Fatalf("request lifecycle calls/output = %d/%q", calls, result)
+	}
+	if !strings.Contains(result, "Request failed. Please try again.") || !strings.Contains(result, "retried reply") {
+		t.Fatalf("missing recoverable error or retry reply: %q", result)
+	}
+	if strings.Contains(result, "temporary provider failure") {
+		t.Fatalf("provider error leaked into the interactive request notice: %q", result)
+	}
+}
+
+func TestInteractiveAttachmentWorkingStateCleansUpAfterInspection(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(filePath, []byte("inspect this"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var temporaryPath string
+	started := make(chan struct{})
+	release := make(chan struct{})
+	provider := providerFunc(func(ctx context.Context, _ string, message string) (string, error) {
+		if !strings.Contains(message, fileInspectionMessage) {
+			return "ordinary reply", nil
+		}
+		_, temporaryPath, _ = strings.Cut(message, "local_path: ")
+		temporaryPath = strings.TrimSpace(temporaryPath)
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		return "File inspected.", nil
+	})
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- runChatLoopWithUI(
+			context.Background(),
+			TerminalInput{reader: strings.NewReader("/file\n"), interactive: true},
+			&output,
+			NewSession(defaultConfig(t), provider),
+			store,
+			EnvironmentFilePickerFunc(func() (string, error) { return filePath, nil }),
+			terminalUI{interactive: true, width: 80},
+		)
+	}()
+	<-started
+	if !strings.Contains(output.String(), "Working...") {
+		t.Fatalf("working state was not flushed before attachment inspection: %q", output.String())
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if temporaryPath == "" {
+		t.Fatal("provider did not receive the temporary attachment path")
+	}
+	if _, err := os.Stat(temporaryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temporary attachment remained after inspection: %v", err)
+	}
+	result := output.String()
+	if !strings.Contains(result, "File inspection complete.") || !strings.Contains(result, "File inspected.") {
+		t.Fatalf("interactive inspection did not report completion: %q", result)
+	}
+	if strings.Contains(result, temporaryPath) {
+		t.Fatalf("temporary attachment path leaked into interactive output: %q", result)
+	}
+}
+
+func TestInteractiveAttachmentFailureCleansUpBeforeRetry(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(filePath, []byte("inspect this"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var temporaryPath string
+	calls := 0
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		calls++
+		if calls == 1 {
+			_, temporaryPath, _ = strings.Cut(message, "local_path: ")
+			temporaryPath = strings.TrimSpace(temporaryPath)
+			return "", errors.New("inspection provider failed")
+		}
+		return "retry succeeded", nil
+	})
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err := runChatLoopWithUI(
+		context.Background(),
+		TerminalInput{reader: strings.NewReader("/file\nretry\n"), interactive: true},
+		&output,
+		NewSession(defaultConfig(t), provider),
+		store,
+		EnvironmentFilePickerFunc(func() (string, error) { return filePath, nil }),
+		terminalUI{interactive: true, width: 80},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || temporaryPath == "" {
+		t.Fatalf("attachment failure calls/path = %d/%q", calls, temporaryPath)
+	}
+	if _, err := os.Stat(temporaryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temporary attachment remained after a failed inspection: %v", err)
+	}
+	result := output.String()
+	if !strings.Contains(result, "Request failed. Please try again.") || !strings.Contains(result, "retry succeeded") {
+		t.Fatalf("failed attachment did not return to a successful retry: %q", result)
+	}
+	if strings.Contains(result, temporaryPath) || strings.Contains(result, "inspection provider failed") {
+		t.Fatalf("attachment failure leaked path or provider error: %q", result)
+	}
+}
+
+func TestInteractiveMalformedEnvironmentPathReturnsToPrompt(t *testing.T) {
+	var output bytes.Buffer
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	err := runChatLoopWithUI(
+		context.Background(),
+		TerminalInput{reader: strings.NewReader("/env-file\nhello\n"), interactive: true},
+		&output,
+		NewSession(defaultConfig(t), provider),
+		store,
+		EnvironmentFilePickerFunc(func() (string, error) {
+			return "", errors.New("picker must not run for malformed usage")
+		}),
+		terminalUI{interactive: true, width: 80},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(messages, []string{"hello"}) {
+		t.Fatalf("provider messages = %q, want chat to continue after malformed path", messages)
+	}
+	if !strings.Contains(output.String(), "Expected exactly one non-empty file path.") || !strings.Contains(output.String(), "received") {
+		t.Fatalf("interactive malformed path did not return to chat: %q", output.String())
 	}
 }
 

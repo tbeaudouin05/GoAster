@@ -64,12 +64,34 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 	if picker == nil {
 		return fmt.Errorf("environment file picker is nil")
 	}
-	w := bufio.NewWriter(output)
 	terminalInput, ok := input.(TerminalInput)
 	if !ok {
 		terminalInput = NewTerminalInput(input)
 	}
 	ui := newTerminalUI(terminalInput, output)
+	return runChatLoopWithUI(ctx, terminalInput, output, session, store, picker, ui)
+}
+
+type chatLoopSession interface {
+	modelStatus() (string, string)
+	description() string
+	consumeStartupNotice() string
+	consumeContextNotice() string
+	Reply(context.Context, string) (string, error)
+	ReplyWithAttachments(context.Context, string, []attachment.Metadata) (string, error)
+}
+
+type environmentValueStore interface {
+	Save(map[string]string) error
+}
+
+type terminalOutput interface {
+	io.Writer
+	Flush() error
+}
+
+func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output io.Writer, session chatLoopSession, store environmentValueStore, picker EnvironmentFilePicker, ui terminalUI) error {
+	w := bufio.NewWriter(output)
 	status := func() {
 		model, reason := session.modelStatus()
 		ui.renderStatus(w, model, reason)
@@ -100,7 +122,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			continue
 		}
 		if message == "/env" {
-			if err := runEnvironmentFileSetup(terminalInput, w, store, picker, "", ""); err != nil {
+			if err := runEnvironmentFileSetupWithUI(terminalInput, w, store, picker, "", "", ui); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -114,9 +136,16 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		if isEnvironmentFileCommand(message) {
 			path, ok := environmentFileCommandPath(message)
 			if !ok {
-				return fmt.Errorf("expected exactly one non-empty file path")
+				if !ui.interactive {
+					return fmt.Errorf("expected exactly one non-empty file path")
+				}
+				ui.renderError(w, "Expected exactly one non-empty file path.")
+				if err := w.Flush(); err != nil {
+					return err
+				}
+				continue
 			}
-			if err := runEnvironmentFileSetup(terminalInput, w, store, picker, path, ""); err != nil {
+			if err := runEnvironmentFileSetupWithUI(terminalInput, w, store, picker, path, "", ui); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -137,13 +166,13 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		var attachments []attachment.Metadata
 		var attachmentDirectory string
 		if message == fileCommand || message == uploadCommand {
-			fmt.Fprintln(w, "Choose a local file to inspect.")
+			ui.renderInfo(w, "Choose a local file to inspect.")
 			if err := w.Flush(); err != nil {
 				return err
 			}
 			filePicker, ok := picker.(LocalFilePicker)
 			if !ok {
-				fmt.Fprintln(w, "File picker unavailable.")
+				ui.renderWarning(w, "File picker unavailable.")
 				if err := w.Flush(); err != nil {
 					return err
 				}
@@ -151,7 +180,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			}
 			selectedPath, err := filePicker.PickFile()
 			if errors.Is(err, ErrEnvironmentFilePickerCanceled) || err == nil && strings.TrimSpace(selectedPath) == "" {
-				fmt.Fprintln(w, "File inspection canceled.")
+				ui.renderOutcome(w, "File inspection canceled.")
 				if err := w.Flush(); err != nil {
 					return err
 				}
@@ -159,9 +188,9 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			}
 			if err != nil {
 				if errors.Is(err, errEnvironmentFilePickerUnavailable) {
-					fmt.Fprintln(w, "File picker unavailable.")
+					ui.renderWarning(w, "File picker unavailable.")
 				} else {
-					fmt.Fprintln(w, "File selection failed.")
+					ui.renderError(w, "File selection failed.")
 				}
 				if err := w.Flush(); err != nil {
 					return err
@@ -170,7 +199,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			}
 			metadata, directory, err := prepareSelectedFile(selectedPath)
 			if err != nil {
-				fmt.Fprintln(w, "File rejected: choose a regular file up to 20 MiB. Supported images include PNG, JPEG, GIF, and WebP.")
+				ui.renderError(w, "File rejected: choose a regular file up to 20 MiB. Supported images include PNG, JPEG, GIF, and WebP.")
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -180,6 +209,15 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			attachments = []attachment.Metadata{metadata}
 			attachmentDirectory = directory
 		}
+		if ui.interactive {
+			ui.renderWorking(w)
+			if err := w.Flush(); err != nil {
+				if attachmentDirectory != "" {
+					_ = attachment.CleanupTemporaryDir(attachmentDirectory)
+				}
+				return err
+			}
+		}
 		previousModel, _ := session.modelStatus()
 		var reply string
 		var err error
@@ -188,7 +226,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		} else {
 			reply, err = session.ReplyWithAttachments(ctx, userMessage, attachments)
 			if cleanupErr := attachment.CleanupTemporaryDir(attachmentDirectory); cleanupErr != nil {
-				fmt.Fprintln(w, "Temporary attachment cleanup failed.")
+				ui.renderWarning(w, "Temporary attachment cleanup failed.")
 			}
 		}
 		if notice := session.consumeContextNotice(); notice != "" {
@@ -202,9 +240,19 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			if flushErr := w.Flush(); flushErr != nil {
 				return flushErr
 			}
+			if ui.interactive && classifyRequestError(err) == requestErrorRecoverable {
+				ui.renderRequestError(w)
+				if flushErr := w.Flush(); flushErr != nil {
+					return flushErr
+				}
+				continue
+			}
 			return err
 		}
 		ui.renderAssistant(w, model, reply)
+		if len(attachments) > 0 && ui.interactive {
+			ui.renderOutcome(w, "File inspection complete.")
+		}
 	}
 }
 
@@ -316,9 +364,13 @@ func environmentFileCommandPath(message string) (string, bool) {
 	return fields[0], true
 }
 
-func runEnvironmentFileSetup(input TerminalInput, output *bufio.Writer, store *localenv.Store, picker EnvironmentFilePicker, path string, next string) error {
+func runEnvironmentFileSetup(input TerminalInput, output terminalOutput, store environmentValueStore, picker EnvironmentFilePicker, path string, next string) error {
+	return runEnvironmentFileSetupWithUI(input, output, store, picker, path, next, terminalUI{})
+}
+
+func runEnvironmentFileSetupWithUI(input TerminalInput, output terminalOutput, store environmentValueStore, picker EnvironmentFilePicker, path string, next string, ui terminalUI) error {
 	if path == "" {
-		fmt.Fprintln(output, environmentFileGuidance)
+		ui.renderInfo(output, environmentFileGuidance)
 		if err := output.Flush(); err != nil {
 			return err
 		}
@@ -326,41 +378,42 @@ func runEnvironmentFileSetup(input TerminalInput, output *bufio.Writer, store *l
 		path, err = picker.Pick()
 		if err != nil {
 			if errors.Is(err, ErrEnvironmentFilePickerCanceled) {
-				fmt.Fprintln(output, "Environment setup canceled.")
+				ui.renderOutcome(output, "Environment setup canceled.")
 				return nil
 			}
 			if errors.Is(err, errEnvironmentFilePickerUnavailable) {
-				fmt.Fprintln(output, "File picker unavailable. Install zenity (or a compatible package such as qarma or matedialog); for example: sudo apt install zenity")
+				ui.renderWarning(output, "File picker unavailable. Install zenity (or a compatible package such as qarma or matedialog); for example: sudo apt install zenity")
 				return nil
 			}
-			fmt.Fprintf(output, "Environment file selection failed: %v\n", err)
+			ui.renderError(output, fmt.Sprintf("Environment file selection failed: %v", err))
 			return nil
 		}
 		if strings.TrimSpace(path) == "" {
-			fmt.Fprintln(output, "Environment setup canceled.")
+			ui.renderOutcome(output, "Environment setup canceled.")
 			return nil
 		}
 	}
 
 	values, err := localenv.LoadFile(path)
 	if err != nil {
-		fmt.Fprintf(output, "Environment file rejected: %v\n", err)
+		ui.renderError(output, fmt.Sprintf("Environment file rejected: %v", err))
 		return nil
 	}
-	return reviewEnvironmentValues(input, output, store, values, next)
+	return reviewEnvironmentValuesWithUI(input, output, store, values, next, ui)
 }
 
-func reviewEnvironmentValues(input TerminalInput, output *bufio.Writer, store *localenv.Store, values map[string]string, next string) error {
-	fmt.Fprintln(output, "Review environment values (values are masked):")
+func reviewEnvironmentValues(input TerminalInput, output terminalOutput, store environmentValueStore, values map[string]string, next string) error {
+	return reviewEnvironmentValuesWithUI(input, output, store, values, next, terminalUI{})
+}
+
+func reviewEnvironmentValuesWithUI(input TerminalInput, output terminalOutput, store environmentValueStore, values map[string]string, next string, ui terminalUI) error {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	for _, key := range keys {
-		fmt.Fprintf(output, "  %s=********\n", key)
-	}
-	fmt.Fprint(output, "Save these values? [y/N] ")
+	ui.renderEnvironmentReview(output, keys)
+	ui.renderConfirmation(output, "Save these values? [y/N]")
 	if err := output.Flush(); err != nil {
 		return err
 	}
@@ -369,20 +422,25 @@ func reviewEnvironmentValues(input TerminalInput, output *bufio.Writer, store *l
 		if !errors.Is(err, io.EOF) {
 			return fmt.Errorf("read environment confirmation: %w", err)
 		}
-		fmt.Fprintln(output, "\nEnvironment setup canceled.")
+		if ui.interactive {
+			fmt.Fprintln(output)
+			ui.renderOutcome(output, "Environment setup canceled.")
+		} else {
+			fmt.Fprintln(output, "\nEnvironment setup canceled.")
+		}
 		return nil
 	}
 	if !strings.EqualFold(strings.TrimSpace(line), "y") {
-		fmt.Fprintln(output, "Environment setup canceled.")
+		ui.renderOutcome(output, "Environment setup canceled.")
 		return nil
 	}
 	if err := store.Save(values); err != nil {
 		return err
 	}
-	fmt.Fprintln(output, "Environment values saved locally.")
-	fmt.Fprintln(output, "The imported file replaces the previous saved set.")
+	ui.renderOutcome(output, "Environment values saved locally.")
+	ui.renderOutcome(output, "The imported file replaces the previous saved set.")
 	if next != "" {
-		fmt.Fprintln(output, next)
+		ui.renderInfo(output, next)
 	}
 	return nil
 }

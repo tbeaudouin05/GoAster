@@ -17,6 +17,74 @@ import (
 // Providers wrap ErrModelUnavailable when switching models may help.
 var ErrModelUnavailable = errors.New("model unavailable")
 
+type requestErrorClass uint8
+
+const (
+	requestErrorFatal requestErrorClass = iota
+	requestErrorRecoverable
+)
+
+var (
+	errFatalRequest       = errors.New("fatal request")
+	errRecoverableRequest = errors.New("recoverable request")
+)
+
+// classifiedRequestError gives the terminal loop a typed boundary without
+// changing the underlying provider or persistence error returned to callers.
+type classifiedRequestError struct {
+	err   error
+	class requestErrorClass
+}
+
+func (err classifiedRequestError) Error() string {
+	return err.err.Error()
+}
+
+func (err classifiedRequestError) Unwrap() error {
+	return err.err
+}
+
+func (err classifiedRequestError) Is(target error) bool {
+	switch {
+	case err.class == requestErrorFatal && target == errFatalRequest:
+		return true
+	case err.class == requestErrorRecoverable && target == errRecoverableRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+func fatalRequestError(err error) error {
+	if err == nil || errors.Is(err, errFatalRequest) {
+		return err
+	}
+	return classifiedRequestError{err: err, class: requestErrorFatal}
+}
+
+func recoverableRequestError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errFatalRequest) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fatalRequestError(err)
+	}
+	if errors.Is(err, errRecoverableRequest) {
+		return err
+	}
+	return classifiedRequestError{err: err, class: requestErrorRecoverable}
+}
+
+func classifyRequestError(err error) requestErrorClass {
+	if err == nil {
+		return requestErrorRecoverable
+	}
+	if errors.Is(err, errRecoverableRequest) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return requestErrorRecoverable
+	}
+	return requestErrorFatal
+}
+
 type Provider interface {
 	Reply(ctx context.Context, model, message string) (string, error)
 }
@@ -84,12 +152,15 @@ func (s *Session) Reply(ctx context.Context, message string) (string, error) {
 // the persisted conversation keeps the original user text and never retains
 // temporary paths.
 func (s *Session) ReplyWithAttachments(ctx context.Context, message string, attachments []attachment.Metadata) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fatalRequestError(err)
+	}
 	if len(attachments) > attachment.MaxAttachments {
-		return "", fmt.Errorf("too many attachments")
+		return "", recoverableRequestError(fmt.Errorf("too many attachments"))
 	}
 	for _, item := range attachments {
 		if err := item.ValidateMetadata(); err != nil {
-			return "", fmt.Errorf("invalid attachment metadata")
+			return "", recoverableRequestError(fmt.Errorf("invalid attachment metadata"))
 		}
 	}
 	return s.replyWithAttachments(ctx, message, attachments)
@@ -102,7 +173,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 	defer s.mu.Unlock()
 	s.contextNotice = ""
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", fatalRequestError(err)
 	}
 
 	historyMessage := attachment.HistoryPlaceholder(message, attachments)
@@ -124,7 +195,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 			err = errors.New("provider cannot summarize conversation history")
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
+			return "", fatalRequestError(ctxErr)
 		}
 		compact = strings.TrimSpace(compact)
 		if err == nil && compact != "" && utf8.ValidString(compact) && len(compact) <= maxSummaryBytes {
@@ -135,7 +206,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 			previousTurns := cloneChatMessages(candidate[:len(candidate)-1])
 			if s.store != nil {
 				if err := s.store.saveStateWithVersion(summary, previousTurns, &s.storeVersion); err != nil {
-					return "", fmt.Errorf("save conversation state: %w", err)
+					return "", fatalRequestError(fmt.Errorf("save conversation state: %w", err))
 				}
 			}
 			s.summary, s.history = summary, previousTurns
@@ -181,7 +252,10 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 	}
 	reply, err := s.replyWithHistory(replyContext, requestMessage, requestHistory)
 	if err != nil {
-		return "", err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fatalRequestError(ctxErr)
+		}
+		return "", recoverableRequestError(err)
 	}
 
 	// A provider can quote the current-turn reference or image data in its
@@ -212,7 +286,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 	}
 	if s.store != nil {
 		if err := s.store.saveStateWithVersion(summary, completed, &s.storeVersion); err != nil {
-			return "", fmt.Errorf("save conversation state: %w", err)
+			return "", fatalRequestError(fmt.Errorf("save conversation state: %w", err))
 		}
 	}
 	s.history = completed
