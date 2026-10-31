@@ -504,17 +504,51 @@ The observed onboarding screenshot showed setup still `partial` because
 Telegram was not ready. Do not test Telegram or call onboarding complete until
 all four Telegram gates below pass.
 
-Always start with a short status sentence:
+Normal user-facing messages must not expose implementation details such as SSH
+targets or ports, key or `known_hosts` paths, host-key verification, API
+endpoints, systemd service names, root privileges, `healthz`, adapter names, or
+raw tool commands. Translate the current setup state into one short status
+sentence and one concise user action. Keep detailed technical information in
+the operator guidance below when it is needed for safety.
 
-- **Not ready:** “Telegram is not ready. Do not test it yet. Next: [one action].”
-- **Waiting for you:** “I found the server. Next: approve the OpenAI sign-in in the terminal.”
-- **Ready to test:** “Telegram setup is complete. Next: send one normal message to the bot and check for a reply.”
-- **Complete:** “Setup is complete. Telegram replied successfully.”
+#### User-facing status and next action
 
-Do not make the user interpret words such as `healthz`, `adapter`, `pairing
-state`, `SSH`, `API`, or `service`. If a technical detail matters, translate it
-into one short sentence explaining what the user must do.
+Use plain text. Put one short status sentence first, then a blank line, then
+one concise action. Leave a blank line before and after important action
+instructions.
 
+Not ready
+
+Telegram setup is still in progress.
+
+Next: Wait while I finish setup. Do not test Telegram yet.
+
+Waiting for sign-in
+
+I found your server.
+
+Next: Approve the OpenAI sign-in in the terminal.
+
+Waiting for Telegram pairing
+
+Telegram is ready for pairing.
+
+Open a private chat with the Telegram bot you created or selected using
+@BotFather, using the same bot whose token you entered through GoAster's local
+/env flow. Send /start, then send /start followed by the exact pairing string
+GoAster showed you, unchanged. Example only: /start EXAMPLE_CODE_ONLY.
+
+Ready to test
+
+Telegram is ready to test.
+
+Next: Send one normal message to the bot and check for a reply.
+
+Complete
+
+Setup is complete. Telegram replied successfully.
+
+#### Operator readiness and completion gates
 
 An `/healthz` result of `ok` means only that the remote agent is ready. It does
 not complete end-to-end onboarding. Keep the user-facing onboarding status
@@ -544,7 +578,9 @@ bot token, pairing code, or the paired user's numeric ID in a status report.
 
 ### Pair one Telegram user
 
-Explain this sequence to the user before setup:
+Use the “Waiting for Telegram pairing” wording above when the bot is ready.
+The numbered steps below are operator guidance; do not send their setup
+mechanics or internal details to the user.
 
 1. The user creates or selects a bot with `@BotFather` and keeps the returned
    bot token private. The token is not a Telegram pairing code or an OpenAI

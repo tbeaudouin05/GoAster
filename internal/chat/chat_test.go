@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -784,6 +785,60 @@ func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
 	acceptNew := strings.Index(policy, "-o StrictHostKeyChecking=accept-new")
 	if instanceCheck < 0 || acceptNew <= instanceCheck {
 		t.Fatal("OVH instance and IP verification must precede first-use host-key acceptance")
+	}
+}
+
+func TestOVHRemoteUserFacingOnboardingWording(t *testing.T) {
+	const heading = "#### User-facing status and next action"
+	const endHeading = "#### Operator readiness and completion gates"
+	start := strings.Index(skills.OVHRemote, heading)
+	if start < 0 {
+		t.Fatalf("OVH remote skill is missing %q", heading)
+	}
+	content := skills.OVHRemote[start+len(heading):]
+	end := strings.Index(content, endHeading)
+	if end < 0 {
+		t.Fatalf("OVH remote skill is missing %q", endHeading)
+	}
+	wording := strings.TrimSpace(content[:end])
+	plain := strings.Join(strings.Fields(wording), " ")
+	for _, want := range []string{
+		"Telegram setup is still in progress.",
+		"I found your server.",
+		"Telegram is ready for pairing.",
+		"Telegram is ready to test.",
+		"Setup is complete. Telegram replied successfully.",
+		"Open a private chat with the Telegram bot you created or selected using @BotFather, using the same bot whose token you entered through GoAster's local /env flow.",
+		"Send /start, then send /start followed by the exact pairing string GoAster showed you, unchanged.",
+		"Example only: /start EXAMPLE_CODE_ONLY.",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("user-facing OVH onboarding wording missing %q", want)
+		}
+	}
+
+	paragraphs := strings.Split(wording, "\n\n")
+	for _, action := range []string{
+		"Next: Wait while I finish setup. Do not test Telegram yet.",
+		"Next: Approve the OpenAI sign-in in the terminal.",
+		"Open a private chat with the Telegram bot you created or selected using @BotFather, using the same bot whose token you entered through GoAster's local /env flow. Send /start, then send /start followed by the exact pairing string GoAster showed you, unchanged. Example only: /start EXAMPLE_CODE_ONLY.",
+		"Next: Send one normal message to the bot and check for a reply.",
+	} {
+		paragraphIndex := -1
+		for i, paragraph := range paragraphs {
+			if strings.Join(strings.Fields(paragraph), " ") == action {
+				paragraphIndex = i
+				break
+			}
+		}
+		if paragraphIndex <= 0 || paragraphIndex == len(paragraphs)-1 {
+			t.Errorf("user action must be separated by blank lines before and after it: %q", action)
+		}
+	}
+
+	technicalDetails := regexp.MustCompile(`(?i)\b(?:ssh|port|systemd|root|healthz|adapter|shell_execute|remote_login|systemctl)\b|key path|known_hosts(?: path)?|host-key verification|api endpoint(?:s)?|raw tool command`)
+	if detail := technicalDetails.FindString(wording); detail != "" {
+		t.Errorf("user-facing OVH status wording exposes internal detail %q", detail)
 	}
 }
 
