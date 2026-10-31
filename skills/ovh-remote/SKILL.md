@@ -95,6 +95,13 @@ After the agent is installed and its service account is ready for SSH, tell the
 user to run this from the local GoAster terminal, with the remote agent service
 account as the SSH target:
 
+Before running `remote-login`, verify the remote service account has a usable
+login shell, such as `/bin/sh`, rather than `/usr/sbin/nologin`; SSH must be
+able to execute `goaster-agent login`. If the provisioned account uses
+`/usr/sbin/nologin`, change it to `/bin/sh` only as a separately approved
+account mutation under the safe workflow below. Then verify SSH command
+execution as that account before running `remote-login`.
+
 ```text
 goaster remote-login --target goaster@SERVER --key ~/.ssh/goaster-ovh
 ```
