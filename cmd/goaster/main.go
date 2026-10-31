@@ -43,6 +43,13 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 	if err := environmentStore.Load(); err != nil {
 		return err
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("find local home directory: %w", err)
+	}
+	if err := reportSavedRemoteTarget(ctx, home, sshRun, output); err != nil {
+		return fmt.Errorf("report saved GoAster server status: %w", err)
+	}
 
 	store, err := chat.NewCredentialStore(runtimeConfig.AuthFile)
 	if err != nil {

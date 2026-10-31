@@ -44,6 +44,19 @@ func (writer channelWriter) String() string {
 }
 
 func TestRemoteLoginToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *testing.T) {
+	home := t.TempDir()
+	sshDirectory := filepath.Join(home, ".ssh")
+	if err := os.Mkdir(sshDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDirectory, "goaster-ovh"), []byte("TEST-PRIVATE-KEY"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDirectory, "verified_hosts"), []byte("host.example ssh-ed25519 TEST-HOST-KEY"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	input := strings.NewReader("YES\nADMIN-INPUT\n")
 	output := newChannelWriter()
 	var calls [][]string
@@ -86,9 +99,12 @@ func TestRemoteLoginToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *test
 	if len(calls) != 2 {
 		t.Fatalf("SSH calls = %d, want login and health check", len(calls))
 	}
-	home, err := os.UserHomeDir()
+	loaded, err := loadRemoteTargetRecord(home, filepath.Join(home, ".ssh", "goaster-ovh"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("load saved connection record: %v", err)
+	}
+	if loaded != (remoteTargetRecord{Target: "goaster@host.example", Port: 2222, KnownHosts: "~/.ssh/verified_hosts"}) {
+		t.Fatalf("saved connection record = %+v", loaded)
 	}
 	localOutput := output.String()
 	if !strings.Contains(localOutput, "Type YES") || !strings.Contains(localOutput, "DEVICE-CODE-MUST-STAY-LOCAL") || !strings.Contains(localOutput, "Remote agent login and health check completed.") || !strings.Contains(localOutput, filepath.Join(home, ".ssh", "verified_hosts")) {

@@ -136,6 +136,10 @@ func runRemoteLoginWith(ctx context.Context, options remoteLoginOptions, input i
 	if healthErr != nil || healthContextErr != nil {
 		return sshFailure("remote agent health check", healthContextErr, healthErr)
 	}
+	if err := persistRemoteTargetAfterVerification(options); err != nil {
+		_, _ = fmt.Fprintln(output, "Remote agent login and health check succeeded, but the local server connection could not be saved.")
+		return fmt.Errorf("save verified remote connection: %w", err)
+	}
 	if _, err := fmt.Fprintln(output, "Remote agent login and health check completed."); err != nil {
 		return fmt.Errorf("report remote login result: %w", err)
 	}
