@@ -95,6 +95,8 @@ func TestTerminalTextWidthUsesIndependentUnicodeCellFixtures(t *testing.T) {
 	}{
 		{name: "ordinary ZWJ text", text: "a\u200db", want: 2},
 		{name: "non-emoji ZWJ text", text: "\u3031\u200d\u3031", want: 4},
+		{name: "wide non-emoji ZWJ text", text: "\u2329\u200d\u2329", want: 4},
+		{name: "supplementary wide Kana Extended-B character", text: "\U0001aff0", want: 2},
 		{name: "supplementary wide character", text: "\U0001b001", want: 2},
 		{name: "supplementary wide character at range end", text: "\U0001b11f", want: 2},
 		{name: "emoji presentation", text: "\u2600\ufe0f", want: 2},
@@ -138,11 +140,27 @@ func TestTerminalUIWrapsWidthSensitiveUnicodeAtNarrowWidths(t *testing.T) {
 			},
 		},
 		{
+			name:    "wide non-emoji ZWJ text",
+			message: strings.Repeat("\u2329\u200d\u2329", 2),
+			want: []string{
+				prefix + "\u2329\u200d\u2329",
+				prefix + "\u2329\u200d\u2329",
+			},
+		},
+		{
 			name:    "supplementary wide text",
 			message: strings.Repeat("\U0001b11f", 3),
 			want: []string{
 				prefix + "\U0001b11f\U0001b11f",
 				prefix + "\U0001b11f",
+			},
+		},
+		{
+			name:    "supplementary Kana Extended-B text",
+			message: strings.Repeat("\U0001aff0", 3),
+			want: []string{
+				prefix + "\U0001aff0\U0001aff0",
+				prefix + "\U0001aff0",
 			},
 		},
 	}

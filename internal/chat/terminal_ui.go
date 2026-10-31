@@ -727,7 +727,7 @@ func terminalTextUnits(text string) []terminalTextUnit {
 			unit = terminalTextUnitWithMark(unit, runes[index])
 			index++
 		}
-		for index+1 < len(runes) && runes[index] == '\u200d' && terminalEmojiRune(character) && terminalEmojiRune(runes[index+1]) {
+		for index+1 < len(runes) && runes[index] == '\u200d' && terminalEmojiZWJRune(character) && terminalEmojiZWJRune(runes[index+1]) {
 			unit.text += string(runes[index]) + string(runes[index+1])
 			index += 2
 			unit.width = 2
@@ -799,6 +799,11 @@ func terminalEmojiRune(character rune) bool {
 	}
 }
 
+func terminalEmojiZWJRune(character rune) bool {
+	return terminalEmojiRune(character) &&
+		(character >= '\U0001f000' && character <= '\U0001faff' || !terminalWideRune(character))
+}
+
 func terminalRuneWidth(character rune) int {
 	switch {
 	case character == '\n' || character == '\r' || character == '\t':
@@ -823,7 +828,8 @@ func terminalWideRune(character rune) bool {
 		character >= 0x2e80 && character <= 0xa4cf || character >= 0xac00 && character <= 0xd7a3 ||
 		character >= 0xf900 && character <= 0xfaff || character >= 0xfe10 && character <= 0xfe19 ||
 		character >= 0xfe30 && character <= 0xfe6f || character >= 0xff00 && character <= 0xff60 ||
-		character >= 0xffe0 && character <= 0xffe6 || character >= 0x1b000 && character <= 0x1b122 ||
+		character >= 0xffe0 && character <= 0xffe6 || character >= 0x1aff0 && character <= 0x1afff ||
+		character >= 0x1b000 && character <= 0x1b122 ||
 		character >= 0x1f000 && character <= 0x1faff ||
 		character >= 0x20000 && character <= 0x3fffd)
 }
