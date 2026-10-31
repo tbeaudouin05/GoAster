@@ -188,7 +188,9 @@ func (ui terminalUI) renderWorking(output io.Writer) {
 	if !ui.interactive {
 		return
 	}
+	fmt.Fprintln(output)
 	ui.renderWrapped(output, "  ", "Working...", ui.renderWidth(output), ansiStatus)
+	fmt.Fprintln(output)
 }
 
 func (ui terminalUI) renderToolCall(output io.Writer, name string) {
@@ -268,6 +270,7 @@ func (ui terminalUI) renderBubble(output io.Writer, label, message string) {
 		fmt.Fprintln(output)
 		ui.renderWrapped(output, "  ", label+":", width, ansiAssistant)
 		ui.renderWrapped(output, "  ", message, width, ansiAssistant)
+		fmt.Fprintln(output)
 		return
 	}
 
@@ -286,6 +289,7 @@ func (ui terminalUI) renderBubble(output io.Writer, label, message string) {
 		fmt.Fprintln(output, ui.paint(ansiAssistant, content))
 	}
 	fmt.Fprintln(output, ui.paint(ansiBorder, ui.boxBottom(boxWidth)))
+	fmt.Fprintln(output)
 }
 
 func (ui terminalUI) renderFinish(output io.Writer) {

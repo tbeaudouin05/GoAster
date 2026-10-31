@@ -89,6 +89,46 @@ func TestTerminalUIWrapsAssistantBubbleToAvailableWidth(t *testing.T) {
 	}
 }
 
+func TestTerminalUIAddsVerticalSpacingAroundConversationSections(t *testing.T) {
+	for _, fixture := range []struct {
+		name  string
+		width int
+	}{
+		{name: "boxed reply", width: 40},
+		{name: "narrow reply", width: 20},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			ui := terminalUI{interactive: true, width: fixture.width}
+			var output bytes.Buffer
+
+			ui.renderWorking(&output)
+			if got, want := output.String(), "\n  Working...\n\n"; got != want {
+				t.Fatalf("working status spacing = %q, want %q", got, want)
+			}
+
+			output.Reset()
+			ui.renderAssistant(&output, "gpt-test", "hello")
+			if got := output.String(); !strings.HasPrefix(got, "\n  ") || !strings.HasSuffix(got, "\n\n") {
+				t.Fatalf("assistant block lacks vertical margins: %q", got)
+			}
+
+			ui.renderPrompt(&output)
+			if !strings.HasSuffix(output.String(), "\n\n  You › ") {
+				t.Fatalf("prompt is not separated from the preceding answer: %q", output.String())
+			}
+		})
+	}
+
+	var output bytes.Buffer
+	lineUI := terminalUI{}
+	lineUI.renderWorking(&output)
+	lineUI.renderAssistant(&output, "gpt-test", "hello")
+	lineUI.renderPrompt(&output)
+	if got, want := output.String(), "assistant [gpt-test]> hello\nyou> "; got != want {
+		t.Fatalf("line protocol spacing = %q, want %q", got, want)
+	}
+}
+
 func TestTerminalUIToolCallProgressUsesConciseActivityLabels(t *testing.T) {
 	for _, fixture := range []struct {
 		name string
