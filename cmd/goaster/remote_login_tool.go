@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"goaster/internal/chat"
@@ -16,10 +15,11 @@ import (
 const remoteLoginToolName = "remote_login"
 
 const (
-	remoteLoginToolInvalid   = "Remote login was not started because its request was invalid."
-	remoteLoginToolDeclined  = "Remote login was not started because local terminal approval was not granted."
-	remoteLoginToolFailed    = "Remote login or its health check failed. Review the local terminal output before continuing."
-	remoteLoginToolSucceeded = "Remote login and the remote health check completed successfully."
+	remoteLoginToolNoTerminal = "Remote login was not started because no protected controlling terminal is available. Run GoAster from an interactive terminal."
+	remoteLoginToolInvalid    = "Remote login was not started because its request was invalid."
+	remoteLoginToolDeclined   = "Remote login was not started because local terminal approval was not granted."
+	remoteLoginToolFailed     = "Remote login or its health check failed. Review the local terminal output before continuing."
+	remoteLoginToolSucceeded  = "Remote login and the remote health check completed successfully."
 )
 
 type remoteLoginToolArguments struct {
@@ -29,20 +29,18 @@ type remoteLoginToolArguments struct {
 	Port       int    `json:"port,omitempty"`
 }
 
-func registerRemoteLoginTool(registrar chat.ToolRegistrar, approvalInput chat.TerminalInput, interactiveInput io.Reader, output, errorOutput io.Writer, sshRun sshRunner) error {
-	return registrar.RegisterTool(newRemoteLoginTool(approvalInput, interactiveInput, output, errorOutput, sshRun))
+// remoteLoginHandoff is owned by the local CLI. Only a generic status crosses
+// this boundary; interactive streams are never supplied by the model tool.
+type remoteLoginHandoff func(context.Context, remoteLoginOptions) string
+
+func registerRemoteLoginTool(registrar chat.ToolRegistrar, handoff remoteLoginHandoff) error {
+	return registrar.RegisterTool(newRemoteLoginTool(handoff))
 }
 
-func newRemoteLoginTool(approvalInput chat.TerminalInput, interactiveInput io.Reader, output, errorOutput io.Writer, sshRun sshRunner) chat.Tool {
-	if output == nil {
-		output = io.Discard
-	}
-	if errorOutput == nil {
-		errorOutput = io.Discard
-	}
+func newRemoteLoginTool(handoff remoteLoginHandoff) chat.Tool {
 	return chat.Tool{
 		Name:        remoteLoginToolName,
-		Description: "After the user has explicitly approved the exact existing remote host in chat and its GoAster service account is verified ready, start the existing local interactive OpenAI login and health check. It asks for a separate YES approval in the local terminal, attaches the login directly to the terminal, and returns only a generic status. Never use this for provisioning, an unverified host, or a host that is not ready.",
+		Description: "After the user has explicitly approved the exact existing remote host in chat and its GoAster service account is verified ready, start the existing local interactive OpenAI login and health check. It asks for a separate YES approval in the local terminal, attaches the login directly to the terminal, and returns only a generic status. If no protected controlling terminal is available, it stops without connecting; retry from an interactive GoAster terminal. Never use this for provisioning, an unverified host, or a host that is not ready.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -69,50 +67,20 @@ func newRemoteLoginTool(approvalInput chat.TerminalInput, interactiveInput io.Re
 			"additionalProperties": false,
 		},
 		Handler: func(ctx context.Context, arguments string) (string, error) {
-			return executeRemoteLoginTool(ctx, arguments, approvalInput, interactiveInput, output, errorOutput, sshRun), nil
+			return executeRemoteLoginTool(ctx, arguments, handoff), nil
 		},
 	}
 }
 
-func executeRemoteLoginTool(ctx context.Context, arguments string, approvalInput chat.TerminalInput, interactiveInput io.Reader, output, errorOutput io.Writer, sshRun sshRunner) string {
-	if ctx == nil || ctx.Err() != nil {
+func executeRemoteLoginTool(ctx context.Context, arguments string, handoff remoteLoginHandoff) string {
+	if ctx == nil || ctx.Err() != nil || handoff == nil {
 		return remoteLoginToolFailed
 	}
 	options, err := parseRemoteLoginToolOptions(arguments)
 	if err != nil {
-		fmt.Fprintln(output, "Remote login was not started because its request was invalid.")
 		return remoteLoginToolInvalid
 	}
-	if interactiveInput == nil {
-		fmt.Fprintln(output, "Remote login requires the local interactive terminal.")
-		return remoteLoginToolFailed
-	}
-	knownHosts := "default known_hosts file"
-	if options.KnownHostsFile != "" {
-		knownHosts = strconv.Quote(options.KnownHostsFile)
-	}
-
-	if _, err := fmt.Fprintf(output,
-		"\nRemote login approval required.\nTarget: %q\nSSH port: %d\nLocal SSH key: %s\nKnown-hosts file: %s\nHost-key verification: strict; an unknown or changed key will stop the connection.\nType YES to start the interactive login and health check: ",
-		options.Target, options.Port, strconv.Quote(options.IdentityFile), knownHosts); err != nil {
-		return remoteLoginToolFailed
-	}
-	if flusher, ok := output.(interface{ Flush() error }); ok {
-		if err := flusher.Flush(); err != nil {
-			return remoteLoginToolFailed
-		}
-	}
-	answer, completed, err := approvalInput.ReadLine(4096)
-	if err != nil || !completed || !strings.EqualFold(strings.TrimSpace(answer), "yes") {
-		fmt.Fprintln(output, "\nRemote login canceled; no connection was made.")
-		return remoteLoginToolDeclined
-	}
-
-	if err := runRemoteLoginWith(ctx, options, interactiveInput, output, errorOutput, sshRun); err != nil {
-		fmt.Fprintf(errorOutput, "Remote login did not complete: %v. Review the local terminal output before continuing.\n", err)
-		return remoteLoginToolFailed
-	}
-	return remoteLoginToolSucceeded
+	return handoff(ctx, options)
 }
 
 func parseRemoteLoginToolOptions(arguments string) (remoteLoginOptions, error) {

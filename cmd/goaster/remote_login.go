@@ -39,7 +39,7 @@ func runRemoteLogin(ctx context.Context, args []string, input io.Reader, output,
 	if err != nil {
 		return err
 	}
-	return runRemoteLoginWith(ctx, options, input, output, errorOutput, sshRun)
+	return runRemoteLoginOnTerminal(ctx, options, openControllingTerminal, sshRun)
 }
 
 func parseRemoteLogin(args []string, output io.Writer) (remoteLoginOptions, error) {

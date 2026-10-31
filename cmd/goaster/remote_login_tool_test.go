@@ -46,7 +46,6 @@ func (writer channelWriter) String() string {
 func TestRemoteLoginToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *testing.T) {
 	input := strings.NewReader("YES\nADMIN-INPUT\n")
 	output := newChannelWriter()
-	errorOutput := newChannelWriter()
 	var calls [][]string
 	registered := chat.Tool{}
 	registrar := functionToolRegistrar{register: func(tool chat.Tool) error {
@@ -64,7 +63,7 @@ func TestRemoteLoginToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *test
 		}
 		return nil
 	}
-	if err := registerRemoteLoginTool(registrar, chat.NewTerminalInput(input), input, &output, &errorOutput, runner); err != nil {
+	if err := registerRemoteLoginTool(registrar, newProtectedLoginHandoff(testTerminalOpener(input, output), runner)); err != nil {
 		t.Fatalf("register remote login tool: %v", err)
 	}
 	if registered.Name != remoteLoginToolName || registered.Handler == nil {
@@ -132,11 +131,11 @@ func TestRemoteLoginToolDeclineAndInvalidArgumentsDoNotConnect(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
-			tool := newRemoteLoginTool(chat.NewTerminalInput(strings.NewReader(test.input)), strings.NewReader("unused"), io.Discard, io.Discard,
+			tool := newRemoteLoginTool(newProtectedLoginHandoff(testTerminalOpener(strings.NewReader(test.input), io.Discard),
 				func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
 					calls++
 					return nil
-				})
+				}))
 			result, err := tool.Handler(context.Background(), test.arguments)
 			if err != nil {
 				t.Fatalf("remote_login handler: %v", err)
@@ -155,8 +154,7 @@ func TestRemoteLoginToolReturnsOnlyGenericFailureStatus(t *testing.T) {
 	secret := "DEVICE-CODE-OR-SSH-OUTPUT"
 	calls := 0
 	output := newChannelWriter()
-	errorOutput := newChannelWriter()
-	tool := newRemoteLoginTool(chat.NewTerminalInput(strings.NewReader("YES\n")), strings.NewReader(""), output, errorOutput,
+	tool := newRemoteLoginTool(newProtectedLoginHandoff(testTerminalOpener(strings.NewReader("YES\n"), output),
 		func(_ context.Context, _ []string, _ io.Reader, gotOutput, _ io.Writer) error {
 			calls++
 			if calls == 1 {
@@ -164,7 +162,7 @@ func TestRemoteLoginToolReturnsOnlyGenericFailureStatus(t *testing.T) {
 				return nil
 			}
 			return errors.New(secret)
-		})
+		}))
 	result, err := tool.Handler(context.Background(), `{"target":"goaster@host.example","key":"/tmp/key"}`)
 	if err != nil {
 		t.Fatalf("remote_login handler: %v", err)
@@ -176,8 +174,7 @@ func TestRemoteLoginToolReturnsOnlyGenericFailureStatus(t *testing.T) {
 		t.Fatalf("SSH calls = %d, want login and health check", calls)
 	}
 	localOutput := output.String()
-	localErrorOutput := errorOutput.String()
-	if !strings.Contains(localOutput, secret) || strings.Contains(localErrorOutput, secret) || !strings.Contains(localErrorOutput, "Review the local terminal output") {
-		t.Fatalf("local outputs = stdout %q, stderr %q", localOutput, localErrorOutput)
+	if strings.Count(localOutput, secret) != 1 || !strings.Contains(localOutput, "Review the local terminal output") {
+		t.Fatalf("local terminal output = %q", localOutput)
 	}
 }

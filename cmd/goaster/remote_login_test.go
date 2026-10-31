@@ -9,10 +9,9 @@ import (
 	"testing"
 )
 
-func TestRemoteLoginUsesDirectSSHWithInheritedStreamsAndHealthCheck(t *testing.T) {
+func TestRemoteLoginUsesProtectedTerminalAndHealthCheck(t *testing.T) {
 	input := strings.NewReader("terminal input")
 	var output bytes.Buffer
-	var errorOutput bytes.Buffer
 	var calls [][]string
 	var inputs []io.Reader
 	var outputs []io.Writer
@@ -25,13 +24,19 @@ func TestRemoteLoginUsesDirectSSHWithInheritedStreamsAndHealthCheck(t *testing.T
 		return nil
 	}
 
-	err := runWithSSH(context.Background(), []string{
-		"remote-login",
+	options, err := parseRemoteLogin([]string{
 		"--target", "goaster@example.invalid",
 		"--key", "/tmp/goaster-ovh",
 		"--port", "2222",
 		"--known-hosts", "/tmp/known_hosts",
-	}, input, &output, &errorOutput, runner)
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := testTerminal{Reader: input, Writer: &output}
+	err = runRemoteLoginOnTerminal(context.Background(), options, func() (io.ReadWriteCloser, error) {
+		return terminal, nil
+	}, runner)
 	if err != nil {
 		t.Fatalf("remote login: %v", err)
 	}
@@ -39,8 +44,8 @@ func TestRemoteLoginUsesDirectSSHWithInheritedStreamsAndHealthCheck(t *testing.T
 		t.Fatalf("SSH calls = %d, want login and health check", len(calls))
 	}
 	for index := range inputs {
-		if inputs[index] != input || outputs[index] != &output || errorOutputs[index] != &errorOutput {
-			t.Fatalf("SSH call %d did not inherit terminal streams", index)
+		if inputs[index] != terminal || outputs[index] != terminal || errorOutputs[index] != terminal {
+			t.Fatalf("SSH call %d did not use protected terminal streams", index)
 		}
 	}
 

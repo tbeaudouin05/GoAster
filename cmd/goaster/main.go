@@ -53,7 +53,7 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 		return err
 	}
 	terminalInput := chat.NewTerminalInput(input)
-	if err := registerRemoteLoginTool(codexProvider, terminalInput, input, output, errorOutput, sshRun); err != nil {
+	if err := registerRemoteLoginTool(codexProvider, newProtectedLoginHandoff(openControllingTerminal, sshRun)); err != nil {
 		return fmt.Errorf("register remote login tool: %w", err)
 	}
 	session, err := chat.NewPersistentSession(runtimeConfig.Config, codexProvider)

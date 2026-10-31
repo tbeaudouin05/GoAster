@@ -294,8 +294,17 @@ goaster remote-login --target root@OVH_HOST --key ~/.ssh/goaster-ovh
 ```
 
 The command requires an explicit `--target` and local `--key`, invokes OpenSSH
-directly with inherited terminal input/output, and does not pass through the
-model's `shell_execute` tool. It requires strict host-key verification, uses
+directly through the local CLI's protected controlling-terminal handoff, and
+does not pass through the model's `shell_execute` tool. Both the command and
+`remote_login` open only the current process's `/dev/tty` on supported Unix
+systems; redirected standard streams are never used for interactive SSH.
+If the process has no controlling terminal (for example, detached tool
+execution), or the platform does not support this handoff, login stops before
+connecting and returns a generic terminal-unavailable status. Start GoAster
+from an interactive terminal to retry. The handoff never searches for another
+pseudoterminal or saves device codes to chat or files. The model receives only
+a generic success, failure, decline, invalid-request, or terminal-unavailable
+status. It requires strict host-key verification, uses
 only the supplied key, and never accepts a password, token, or credential-file
 argument. The host must already have a trusted entry in the user's
 `known_hosts`; use `--known-hosts PATH` when the approved file is not the
