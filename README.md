@@ -155,6 +155,23 @@ Enter one message per line. Blank lines are ignored. End the input stream with
 EOF (Ctrl-D on Unix) to exit. Ctrl-C or closing the terminal also stops the
 process where supported.
 
+## Remote privilege model
+
+The remote GoAster installation is intentionally **root-run**. Both
+`goaster-agent` and `goaster-telegram` run as `root`, and remote onboarding
+uses `root@OVH_HOST` for SSH and the interactive login. This is required for
+GoAster's `shell_execute` and self-management capabilities to administer its
+own server, services, users, SSH configuration, firewall, packages, and
+protected application state. The normal onboarding path must not create or use
+a separate unprivileged `goaster` runtime account.
+
+This is a deliberate full-administration tradeoff, not a least-privilege
+design. A compromised prompt, Telegram account, credential, or model mistake
+has host-wide impact and can affect system files, SSH access, secrets, firewall
+rules, and the GoAster installation itself. The existing strict host-key
+checks, explicit approval gates, secret-handling rules, and separate local and
+remote OpenAI credentials remain mandatory.
+
 ## OVH provisioning and remote access
 
 For the end-to-end path from packaged launch to remote Telegram operation, see
@@ -228,8 +245,10 @@ chat or include them in screenshots. For a new host, provision
 the OVH resource with explicit approval, then use the SSH skill to bootstrap
 it; for an existing host, start with SSH bootstrap.
 After remote bootstrap and agent service setup, GoAster itself automatically
-starts the existing SSH-backed remote OpenAI login as the remote service
-account through its `remote_login` handoff. After the exact host and local key
+starts the existing SSH-backed remote OpenAI login as `root` through its
+`remote_login` handoff. The remote agent and Telegram adapter intentionally
+run as root so GoAster can fully self-manage its own server. After the exact
+host and local key
 are approved in chat, the handoff displays them in the local terminal and
 requires the administrator to type `YES` before connecting. It then attaches
 the terminal directly to the login flow, waits while the administrator
@@ -264,14 +283,14 @@ again or create another server. If the saved server cannot be reached, it says
 so and asks for the next simple action. The record never contains the private
 key, OpenAI login, Telegram token, pairing code, or environment values.
 
-After the remote agent is installed and its service account is ready for SSH,
-GoAster's `remote_login` handoff invokes the existing local flow below, using
-the remote agent service account as the SSH target. This is the onboarder's
-invocation, not a command the administrator needs to type during normal
-onboarding:
+After the remote agent is installed and root SSH is ready, GoAster's
+`remote_login` handoff invokes the existing local flow below, using `root` as
+the SSH target. The normal onboarding path must not create or use a separate
+unprivileged GoAster runtime account. This is the onboarder's invocation, not
+a command the administrator needs to type during normal onboarding:
 
 ```text
-goaster remote-login --target goaster@OVH_HOST --key ~/.ssh/goaster-ovh
+goaster remote-login --target root@OVH_HOST --key ~/.ssh/goaster-ovh
 ```
 
 The command requires an explicit `--target` and local `--key`, invokes OpenSSH
@@ -287,9 +306,9 @@ administrator. The administrator opens the URL in a browser and approves the
 remote device authorization; GoAster waits for that approval and the login to
 finish. Do not relay the URL, code, tokens, or login output through GoAster or
 Telegram chat. The remote login saves its own credentials as
-`~/.goaster/agent-auth.json` under the service user's remote home, with `0600`
-file and `0700` directory permissions. This file is separate from
-`~/.goaster/auth.json`, even if both programs use the same home; GoAster never
+`/root/.goaster/agent-auth.json` under root's remote home, with `0600` file and
+`0700` directory permissions. This file is separate from
+`/root/.goaster/auth.json`, even if both programs use the same home; GoAster never
 copies the local file. After login exits successfully, the command runs a
 separate read-only SSH health check against the remote agent's loopback
 `/healthz` endpoint and reports failure clearly. If login is canceled or the

@@ -15,6 +15,24 @@ implementation with the administrator's terminal attached. Never run that
 login through `shell_execute`, capture its output for chat, or ask the
 administrator to type the command during normal onboarding.
 
+## Required remote privilege model
+
+The remote GoAster installation is intentionally **root-run**. Install and run
+both `/usr/local/bin/goaster-agent` and `/usr/local/bin/goaster-telegram` as
+`root`, and use `root@SERVER` as the SSH target for the interactive remote
+login. The normal onboarding path must not create or use a separate
+unprivileged `goaster` runtime account. Full root access is required because
+GoAster's `shell_execute` and self-management responsibilities include
+administering its own server, services, users, SSH configuration, firewall,
+packages, and protected application state.
+
+This is a deliberate full-administration tradeoff, not a least-privilege
+design. A compromised prompt, Telegram account, credential, or model mistake
+can affect the entire host, including system files, SSH access, secrets,
+firewall rules, and the GoAster installation itself. Keep the existing strict
+host-key verification, explicit approval gates, secret-handling rules, and
+separate local versus remote OpenAI credentials.
+
 ## Reuse an existing GoAster server connection
 
 At the start of onboarding, look for a usable GoAster SSH private key under the
@@ -39,7 +57,7 @@ paths outside the local user's home or `.ssh` directory.
 A safe record looks like this:
 
 ```json
-{"target":"goaster@141.95.179.66","port":22,"known_hosts":"~/.ssh/known_hosts"}
+{"target":"root@141.95.179.66","port":22,"known_hosts":"~/.ssh/known_hosts"}
 ```
 
 On every restart, if both the private key and its record exist, first perform a
@@ -133,21 +151,20 @@ specifically needs an interactive session.
 
 ## Orchestrate the interactive remote login
 
-After the agent is installed and its service account is ready for SSH, the
-onboarder must use the dedicated `remote_login` tool with the remote agent
-service account as the SSH target. Keep the administrator's terminal attached
-while they complete OpenAI device authorization. The administrator must
-approve the authorization in the browser; the onboarder waits for the
-interactive login to finish before continuing. That approval is required
-before the separate remote service credential is saved. Do not relay the login
-URL, one-time code, terminal output, or credentials through chat.
+After the agent is installed and the root account is ready for SSH, the
+onboarder must use the dedicated `remote_login` tool with `root` as the SSH
+target. Keep the administrator's terminal attached while they complete OpenAI
+device authorization. The administrator must approve the authorization in the
+browser; the onboarder waits for the interactive login to finish before
+continuing. That approval is required before the separate remote root
+credential is saved. Do not relay the login URL, one-time code, terminal
+output, or credentials through chat.
 
-Before invoking `remote-login`, verify the remote service account has a usable
-login shell, such as `/bin/sh`, rather than `/usr/sbin/nologin`; SSH must be
-able to execute `goaster-agent login`. If the provisioned account uses
-`/usr/sbin/nologin`, change it to `/bin/sh` only as a separately approved
-account mutation under the safe workflow below. Then verify SSH command
-execution as that account before invoking `remote-login`.
+Before invoking `remote-login`, verify that the confirmed SSH target is exactly
+`root@SERVER` and that root SSH command execution is available under the
+approved host policy. Do not create or switch to an unprivileged runtime
+account as part of onboarding. If root SSH is unavailable, stop and report the
+blocker; do not weaken SSH or silently substitute another account.
 
 Before using the tool, show the exact target and local key to the user in chat
 and get explicit approval to contact that host. Then call `remote_login` with
@@ -160,7 +177,7 @@ The tool invokes the existing flow with this command shape, filling in the
 confirmed target and approved local key:
 
 ```text
-goaster remote-login --target goaster@SERVER --key ~/.ssh/goaster-ovh
+goaster remote-login --target root@SERVER --key ~/.ssh/goaster-ovh
 ```
 
 The flow launches OpenSSH directly with inherited terminal I/O and forces an
@@ -185,8 +202,8 @@ session for the read-only `curl` check of
 `http://127.0.0.1:8765/healthz`; continue onboarding only when it returns `ok`.
 Treat a canceled login or failed health check as a failure or uncertain result.
 Do not relay the device code, login output, or tokens to the model or chat. The
-remote login writes only the remote service user's separate
-`~/.goaster/agent-auth.json`; it never copies the local `~/.goaster/auth.json`.
+remote login writes only root's separate
+`/root/.goaster/agent-auth.json`; it never copies the local `/root/.goaster/auth.json`.
 For reauthentication, keep the agent service running so the command's
 built-in read-only health check can reach it, invoke the same interactive
 flow, and wait for administrator approval and a successful health check. Any
@@ -325,9 +342,10 @@ environment values or secret-bearing output.
 
 Do not create or modify service units as an implicit part of this bootstrap.
 Inspect existing units read-only and confirm their `ExecStart` paths use the
-installed binaries. Run the agent from `/usr/local/bin/goaster-agent` under
-its configured unprivileged service account and `HOME`; run
-`/usr/local/bin/goaster-telegram` as root because its state checks require it.
+installed binaries. Run both `/usr/local/bin/goaster-agent` and
+`/usr/local/bin/goaster-telegram` as `root`, with `HOME=/root`. Do not create
+or use a separate unprivileged GoAster runtime account. Root execution is
+required for the agent's full server self-management through `shell_execute`.
 If no units exist, present the exact service definitions for review and get
 separate approval before creating them. Starting or restarting either unit
 also needs its own approval. Start the agent first, then have the onboarder
@@ -355,9 +373,9 @@ After installation and agent service setup, the onboarder invokes the local
 OpenAI remote login flow with `remote_login`; the administrator does not type
 the command during normal onboarding. The onboarder waits for the
 administrator's approval and the command's read-only health check to return
-`ok` before continuing with Telegram setup. The login writes the remote service
-user's `~/.goaster/agent-auth.json` with `0600` permissions in a `0700`
-directory. For reauthentication, keep the agent service running while the
+`ok` before continuing with Telegram setup. The login writes root's `/root/.goaster/agent-auth.json` with `0600`
+permissions in a `0700` directory. For reauthentication, keep the root-run
+agent service running while the
 onboarder invokes the same interactive flow, wait for device approval and
 health-check success, and obtain separate explicit approval before any agent
 or adapter service restart.

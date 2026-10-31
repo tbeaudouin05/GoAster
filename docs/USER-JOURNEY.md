@@ -148,13 +148,29 @@ installs the binaries. The local package does not need Go for this remote
 build. Review each proposed remote change and approve it separately as the
 skill requires.
 
+## Remote privilege model
+
+The remote installation intentionally runs both `goaster-agent` and
+`goaster-telegram` as `root`. The SSH target and remote login target are
+therefore `root@OVH_HOST`; onboarding must not create or use a separate
+unprivileged `goaster` runtime account. Root is required because the agent's
+`shell_execute` and self-management capabilities must be able to administer the
+full server, including its services, users, SSH configuration, firewall,
+packages, and protected state.
+
+This is a deliberate full-administration tradeoff, not a least-privilege
+design. A compromised prompt, Telegram account, credential, or model mistake
+has host-wide impact. Keep strict host-key verification, explicit approval
+gates, secret-handling rules, and separate local versus remote OpenAI
+credentials in force.
+
 ## 5. Complete the remote agent login
 
 The remote agent starts without a ChatGPT subscription credential. After its
 approved installation and agent service setup, GoAster automatically invokes
 the existing SSH-backed login flow through the `remote_login` handoff, targeting
-the same service account that runs the agent. After the exact host and local
-key are approved in chat, the handoff displays them in the local terminal and
+`root`, the account that runs both remote GoAster services. The normal path must not create or use a separate unprivileged runtime
+account. After the exact host and local key are approved in chat, the handoff displays them in the local terminal and
 requires the administrator to type `YES` before connecting. It then attaches
 the terminal directly to the SSH login. The administrator does not type the
 login command as part of the normal path. GoAster waits for the administrator
@@ -163,7 +179,7 @@ to approve the OpenAI device authorization before it continues onboarding.
 The handoff invokes the existing local flow with these arguments:
 
 ```text
-goaster remote-login --target goaster@OVH_HOST --key ~/.ssh/goaster-ovh
+goaster remote-login --target root@OVH_HOST --key ~/.ssh/goaster-ovh
 ```
 
 The flow requires explicit target and key inputs, launches OpenSSH directly
@@ -179,7 +195,7 @@ URL in a browser, signs in with the subscription account, and approves the
 remote device authorization; GoAster waits for that approval. Keep the URL,
 code, tokens, and login output in the interactive terminal and browser flow;
 never relay them through GoAster or Telegram chat. This login writes a separate
-`~/.goaster/agent-auth.json` on the remote host. Keep the local
+`/root/.goaster/agent-auth.json` on the remote host. Keep the local
 `~/.goaster/auth.json`, its tokens, and the local conversation on your own
 machine; GoAster never copies them to the host. After successful authorization,
 the existing command runs its separate read-only SSH health check against
