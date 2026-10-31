@@ -385,6 +385,23 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		if !strings.HasPrefix(request.Instructions, openAIInstructions) || !strings.Contains(request.Instructions, "# OVH provisioning") || !strings.Contains(request.Instructions, "GET /cloud/project") {
 			t.Errorf("Codex instructions do not include the packaged OVH skill: %q", request.Instructions)
 		}
+		internetInstructions := strings.Join(strings.Fields(request.Instructions), " ")
+		if !strings.Contains(internetInstructions, "name: internet-fetch") || !strings.Contains(internetInstructions, "# Internet fetch") {
+			t.Errorf("Codex instructions do not include the packaged internet-fetch skill: %q", request.Instructions)
+		}
+		for _, want := range []string{
+			"Make the normal request first",
+			"at most twice after the initial attempt",
+			"one IPv4-only probe for the same exact hostname and URL",
+			"Never change system or application network settings",
+			"Limit redirects to five",
+			"The known OVH Go archive IPv6 404 case is an example",
+			"not immediate proof that the archive is missing",
+		} {
+			if !strings.Contains(internetInstructions, want) {
+				t.Errorf("Codex instructions missing internet-fetch guidance %q", want)
+			}
+		}
 		for _, want := range []string{
 			"GET /cloud/project",
 			"GET /cloud/project/*",

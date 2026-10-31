@@ -12,6 +12,14 @@ shell and returns stdout, stderr, and the exit code; it accepts an optional
 working directory and bounded timeout in milliseconds. GoAster has no provider,
 API-key, or web-search flag configuration.
 
+GoAster packages the [internet-fetch skill](skills/internet-fetch/SKILL.md)
+with the executable and includes it in tool-enabled model instructions. It
+guides normal retrieval first, bounded retries, and a one-request IPv4 check
+for suspicious endpoint-specific failures, with safe redirect and timeout
+handling and careful diagnosis of apparent missing resources. This is
+instruction guidance; the built-in `web_fetch` networking behavior is
+unchanged.
+
 ## Install and launch
 
 The packaged GoAster app is the only supported user entrypoint. Download the

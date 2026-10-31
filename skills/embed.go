@@ -7,3 +7,9 @@ import _ "embed"
 //
 //go:embed ovh/SKILL.md
 var OVHProvisioning string
+
+// InternetFetch contains reusable guidance for reliable public internet
+// content retrieval that is packaged into the GoAster executable.
+//
+//go:embed internet-fetch/SKILL.md
+var InternetFetch string

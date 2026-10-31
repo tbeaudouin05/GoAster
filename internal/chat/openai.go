@@ -1131,6 +1131,7 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 	instructions := openAIInstructions
 	if allowTools {
 		instructions += "\n\nThe following packaged GoAster skill is available for the user-facing onboarding workflow:\n\n" + skills.OVHProvisioning
+		instructions += "\n\nThe following packaged GoAster skill is available for reliable internet content retrieval:\n\n" + skills.InternetFetch
 	}
 	// Memory is injected into normal model instructions, but intentionally not
 	// into the no-tools summarization request. This keeps conversation-summary
