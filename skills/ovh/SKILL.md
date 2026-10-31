@@ -217,10 +217,15 @@ creation approval. Use a broad, rounded estimate or range based on official
 published prices. If converting an hourly rate to a monthly amount, state the
 approximate-hours-per-month assumption.
 
-Keep the user-facing price explanation to a sentence or two, for example:
+Keep the user-facing price explanation concise, for example:
 “OVH’s public price for this setup is approximately [currency and amount]/month, based on
 the [official OVH price list](URL) checked [YYYY-MM-DD]. This is a broad
-estimate, not an exact quote.” Add a short note with region, currency, VAT
+estimate, not an exact quote.” When an hourly estimate is available, also
+include this concise cost and cleanup information:
+“Estimated cost: ~US$0.02 for 1 hour, or ~US$0.40 for 24 hours, before tax.
+Delete the server after testing to stop compute charges. Retained storage or
+snapshots may still incur fees.” Keep the `~` qualifiers; these amounts are
+approximate, not an exact quote. Add a short note with region, currency, VAT
 treatment, or material uncovered charges only when needed to interpret the
 estimate. Do not present a numeric price as applying to the selected region
 unless the official source establishes both the region and currency, or imply
