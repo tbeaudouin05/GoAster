@@ -385,7 +385,23 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		if !strings.HasPrefix(request.Instructions, openAIInstructions) || !strings.Contains(request.Instructions, "# OVH provisioning") || !strings.Contains(request.Instructions, "GET /cloud/project") || !strings.Contains(request.Instructions, "# Existing OVH remote SSH") || !strings.Contains(request.Instructions, "dedicated `remote_login` tool") {
 			t.Errorf("Codex instructions do not include the packaged OVH provisioning and remote skills: %q", request.Instructions)
 		}
-		internetInstructions := strings.Join(strings.Fields(request.Instructions), " ")
+		remoteInstructions := strings.Join(strings.Fields(request.Instructions), " ")
+		for _, want := range []string{
+			"An `/healthz` result of `ok` means only that the remote agent is ready.",
+			"Keep the user-facing onboarding status `partial` until all four Telegram gates have been verified:",
+			"The bot token was supplied through the local `/env` flow and installed by the separately approved remote setup.",
+			"The Telegram adapter reports ready after the agent health check and a real successful Telegram poll.",
+			"The intended Telegram account completed private pairing and received the pairing confirmation.",
+			"That paired user sent a fresh ordinary text message from a real Telegram chat and confirmed that a reply from the remote agent arrived in the same chat.",
+			"At each interaction that leaves an item incomplete, state that setup is `partial`, name the next unsatisfied gate and its exact next action, and nudge the user to continue.",
+			"Do not describe an agent-ready but Telegram-incomplete setup as complete.",
+			"Report full onboarding complete only after all four Telegram gates pass.",
+		} {
+			if !strings.Contains(remoteInstructions, want) {
+				t.Errorf("Codex instructions missing Telegram onboarding gate %q", want)
+			}
+		}
+		internetInstructions := remoteInstructions
 		if !strings.Contains(internetInstructions, "name: internet-fetch") || !strings.Contains(internetInstructions, "# Internet fetch") {
 			t.Errorf("Codex instructions do not include the packaged internet-fetch skill: %q", request.Instructions)
 		}

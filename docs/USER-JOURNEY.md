@@ -184,7 +184,8 @@ never relay them through GoAster or Telegram chat. This login writes a separate
 machine; GoAster never copies them to the host. After successful authorization,
 the existing command runs its separate read-only SSH health check against
 `http://127.0.0.1:8765/healthz` and reports whether the running agent is ready.
-Continue onboarding only when this check returns `ok`.
+Continue to Telegram setup only when this check returns `ok`; this marks the
+remote agent ready, not the full onboarding complete.
 
 The agent must pass the health check before Telegram chat can work. If login is
 canceled or the check fails, inspect the remote service before retrying. For
@@ -193,7 +194,14 @@ built-in health check can reach it, and have GoAster invoke the same
 interactive flow again. Any separate agent or adapter service restart requires
 its own explicit approval.
 
-## 6. Set up Telegram and pair one user
+## 6. Set up Telegram and verify the full path
+
+Full onboarding stays **partial** until all four Telegram gates are complete:
+the bot token is supplied through the approved local `/env` flow and installed
+by the separately approved remote setup, the adapter reports ready after a
+successful Telegram poll, the intended account is paired, and that user
+completes a real Telegram message/reply smoke test. GoAster keeps prompting for
+the next pending step; agent-ready with Telegram incomplete is still partial.
 
 Create or select a bot with `@BotFather` and keep its bot token private. Use
 GoAster's local `/env` flow for the token; do not put it in a chat message,
@@ -214,6 +222,13 @@ Telegram account that submits the correct code is paired. GoAster saves that
 account's numeric Telegram user ID and removes the verifier. The paired ID
 persists across adapter restarts. The code has no automatic expiry, so keep it
 private and use it only for the intended user.
+
+For the required end-to-end smoke test, have the paired user send a fresh,
+ordinary text message in the private Telegram chat and confirm that the remote
+agent's reply arrives in that same chat. A healthy `/healthz`, adapter
+readiness, or pairing confirmation alone does not pass this test. Report full
+onboarding complete only after this real message and reply succeed; otherwise
+report partial and continue prompting for the pending step.
 
 ## 7. Chat through Telegram
 

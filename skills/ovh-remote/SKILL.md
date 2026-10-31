@@ -331,6 +331,34 @@ and an initial successful poll before sending its ready notification. If it was
 started before remote login, restart it after the agent is ready, with the
 required approval. Preserve the existing Telegram token and pairing boundaries.
 
+### Full onboarding completion gate
+
+An `/healthz` result of `ok` means only that the remote agent is ready. It does
+not complete end-to-end onboarding. Keep the user-facing onboarding status
+`partial` until all four Telegram gates have been verified:
+
+1. The bot token was supplied through the local `/env` flow and installed by
+   the separately approved remote setup.
+2. The Telegram adapter reports ready after the agent health check and a real
+   successful Telegram poll. A successful poll confirms token and connection
+   readiness, but does not prove that a paired user's message gets a reply.
+3. The intended Telegram account completed private pairing and received the
+   pairing confirmation.
+4. That paired user sent a fresh ordinary text message from a real Telegram
+   chat and confirmed that a reply from the remote agent arrived in the same
+   chat. This real message/reply smoke test is required; `/healthz`, adapter
+   readiness, a pairing confirmation, an API probe, or a simulated test does
+   not satisfy it.
+
+While onboarding is active, keep the gate open until every item is verified.
+At each interaction that leaves an item incomplete, state that setup is
+`partial`, name the next unsatisfied gate and its exact next action, and nudge
+the user to continue. If the user defers a step or it fails, keep the status
+`partial` and resume with that pending action on the next relevant turn. Do not
+describe an agent-ready but Telegram-incomplete setup as complete. Report full
+onboarding complete only after all four Telegram gates pass. Never include the
+bot token, pairing code, or the paired user's numeric ID in a status report.
+
 ### Pair one Telegram user
 
 Explain this sequence to the user before setup:
@@ -384,6 +412,11 @@ expected impact, then obtain fresh explicit approval under the safe workflow
 above. Do not assume that approval to install binaries or authenticate the
 agent also approves Telegram setup. The user sends the pairing command only
 after the adapter is running and ready for Telegram polling.
+
+After pairing, ask the intended user to send a fresh ordinary text message
+in the private Telegram chat and confirm that the agent's reply arrives in
+that same chat. Keep onboarding `partial` until that real round trip succeeds;
+do not infer it from the adapter's ready notification or the pairing reply.
 
 Whenever configuring GoAster's Telegram adapter on an OVH remote, explicitly
 mention the packaged [Telegram BotFather Group Privacy Mode skill](../telegram-group-privacy/SKILL.md).

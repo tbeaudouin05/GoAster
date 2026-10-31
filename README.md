@@ -301,6 +301,14 @@ that chat is ready. If the adapter was started too early, restart it after
 the health check. Telegram token and pairing setup are separate steps below;
 neither the OpenAI device code nor the subscription tokens belong in Telegram.
 
+An `/healthz` result of `ok` marks only remote agent readiness. Full onboarding
+remains **partial** until the Telegram token is supplied through the approved
+local `/env` flow and installed by the separately approved remote setup, the
+adapter reports ready after a successful Telegram poll, the intended user is
+paired, and that user completes a real Telegram message/reply smoke test. Keep
+prompting for the next pending step; agent-ready with Telegram incomplete is
+not complete.
+
 ### Telegram user pairing
 
 Telegram pairing is a separate setup step after the remote agent login passes
@@ -333,6 +341,13 @@ off. Other Telegram accounts are ignored. The adapter forwards the message to
 the remote agent and sends the reply back to the originating chat. Pairing does
 not grant SSH access, server administration, or access to another Telegram
 account.
+
+After pairing, have the intended user send a fresh ordinary text message in
+the private Telegram chat and confirm that the remote agent's reply arrives in
+that same chat. This real round trip is the required smoke test; `/healthz`,
+adapter readiness, and pairing confirmation alone do not prove it. Report
+onboarding complete only after all four Telegram gates pass. Until then, report
+the setup as partial and keep nudging the user toward the pending step.
 
 Images are fully decoded and validated from their downloaded bytes, including
 images sent as Telegram documents; supported formats are JPEG, PNG, GIF, and
