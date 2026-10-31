@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 type doerFunc func(*http.Request) (*http.Response, error)
@@ -228,6 +229,86 @@ func TestPollingReadinessOffsetAndRedactedErrors(t *testing.T) {
 	})
 	if err := a.run(context.Background(), func() error { ready = true; return nil }); err == nil || ready {
 		t.Fatal("invalid polling response was accepted as ready")
+	}
+}
+
+func TestPollingDispatchesUpdatesConcurrentlyAndCancelsHandlers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	entered := make(chan int64, 2)
+	canceled := make(chan struct{}, 2)
+	polled := make(chan int64, 1)
+	a := adapter{
+		token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid",
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/healthz" {
+				return response(200, "ok\n"), nil
+			}
+			var payload struct {
+				ChatID int64 `json:"chat_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				return nil, err
+			}
+			entered <- payload.ChatID
+			<-r.Context().Done()
+			canceled <- struct{}{}
+			return nil, r.Context().Err()
+		}),
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(r.URL.Path, "/getUpdates") {
+				return response(200, `{"ok":true,"result":true}`), nil
+			}
+			var payload struct {
+				Offset int64 `json:"offset"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				return nil, err
+			}
+			if payload.Offset == 0 {
+				return response(200, `{"ok":true,"result":[
+					{"update_id":10,"message":{"text":"first","from":{"id":42},"chat":{"id":-100,"type":"group"}}},
+					{"update_id":11,"message":{"text":"second","from":{"id":42},"chat":{"id":-200,"type":"group"}}}
+				]}`), nil
+			}
+			polled <- payload.Offset
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}),
+	}
+	done := make(chan error, 1)
+	go func() { done <- a.run(ctx, nil) }()
+	chats := make(map[int64]bool)
+	for i := 0; i < 2; i++ {
+		select {
+		case id := <-entered:
+			chats[id] = true
+		case <-ctx.Done():
+			t.Fatal("distinct updates did not reach the agent concurrently")
+		}
+	}
+	if !chats[-100] || !chats[-200] {
+		t.Fatalf("dispatched chats = %v", chats)
+	}
+	select {
+	case offset := <-polled:
+		if offset != 12 {
+			t.Fatalf("poll offset = %d, want 12", offset)
+		}
+	case <-ctx.Done():
+		t.Fatal("polling blocked behind active handlers")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("polling did not stop after cancellation")
+	}
+	if len(canceled) != 2 {
+		t.Fatalf("canceled handlers = %d, want 2", len(canceled))
 	}
 }
 

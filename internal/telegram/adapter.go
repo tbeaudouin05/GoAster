@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"goaster/internal/attachment"
@@ -23,6 +24,7 @@ type httpDoer interface {
 type adapter struct {
 	token              string
 	pairing            *pairing
+	pairingMu          sync.Mutex
 	client             httpDoer
 	agent              httpDoer
 	apiBase            string
@@ -123,12 +125,21 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 		}
 	}
 	var offset int64
+	var handlers sync.WaitGroup
+	defer handlers.Wait()
 	for {
 		for _, item := range updates {
+			if ctx.Err() != nil {
+				return nil
+			}
 			if item.ID < offset {
 				continue
 			}
-			a.handle(ctx, item.Message)
+			handlers.Add(1)
+			go func() {
+				defer handlers.Done()
+				a.handle(ctx, item.Message)
+			}()
 			if item.ID < int64(^uint64(0)>>1) {
 				offset = item.ID + 1
 			}
@@ -233,7 +244,14 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if text == "" && hasAttachment {
 		text = strings.TrimSpace(m.Caption)
 	}
-	if a.pairing.userID == 0 {
+	a.pairingMu.Lock()
+	pairedUserID := a.pairing.userID
+	paired := false
+	if pairedUserID == 0 && m.Chat.Type == "private" && strings.HasPrefix(text, "/start ") {
+		paired = a.pairing.tryPair(m.From.ID, strings.TrimSpace(strings.TrimPrefix(text, "/start ")))
+	}
+	a.pairingMu.Unlock()
+	if pairedUserID == 0 {
 		if m.Chat.Type != "private" {
 			return
 		}
@@ -241,7 +259,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 			a.send(ctx, m.Chat.ID, "Send /start followed by the one-time pairing code shown in GoAster.")
 			return
 		}
-		if strings.HasPrefix(text, "/start ") && a.pairing.tryPair(m.From.ID, strings.TrimSpace(strings.TrimPrefix(text, "/start "))) {
+		if paired {
 			if a.agentReady(ctx) {
 				a.send(ctx, m.Chat.ID, "Paired. Send text, an image, or a document to chat.")
 			} else {
@@ -250,7 +268,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		}
 		return
 	}
-	if m.From.ID != a.pairing.userID {
+	if m.From.ID != pairedUserID {
 		return
 	}
 	if text == "/start" || strings.HasPrefix(text, "/start ") {

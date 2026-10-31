@@ -1172,6 +1172,11 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 	request.Header.Set("User-Agent", "goaster")
 	request.Header.Set("originator", openAIOriginator)
 	request.Header.Set("OpenAI-Beta", "responses=experimental")
+	release, err := providerCalls.acquire(ctx)
+	if err != nil {
+		return codexParsedResponse{}, 0, err
+	}
+	defer release()
 	response, err := p.client().Do(request)
 	if err != nil {
 		return codexParsedResponse{}, 0, fmt.Errorf("Codex request: %w", err)
