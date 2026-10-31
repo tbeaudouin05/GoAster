@@ -646,6 +646,44 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 	}
 }
 
+func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
+	policy := strings.Join(strings.Fields(skills.OVHRemote), " ")
+	for _, want := range []string{
+		"Existing hosts and saved targets must have an already trusted `known_hosts` entry.",
+		"Never use trust-on-first-use for an existing target, an unrelated target, or a target whose provenance is unclear.",
+		"query the selected OVH project read-only by the exact instance ID returned by the create operation.",
+		"returned instance ID matches exactly",
+		"current public IP matches the expected IP verified and reported by the provisioning workflow.",
+		"Use only the approved local private key whose matching public key was registered for this instance",
+		"If the API lookup fails, the instance ID or IP differs",
+		"do not connect or accept a host key.",
+		"unique target-specific file under the local `~/.ssh` directory",
+		"-o StrictHostKeyChecking=accept-new",
+		"-o UserKnownHostsFile=<target-specific-known_hosts-file>",
+		"-o GlobalKnownHostsFile=none",
+		"`accept-new` stores the first key presented by the verified IP in this instance's file and rejects a changed key.",
+		"Do not use `ssh-keyscan` or another separately collected fingerprint as an independent trust source",
+		"do not ask the user to retrieve a host fingerprint from OVHcloud Manager for this new-server flow.",
+		"`StrictHostKeyChecking=yes` with `UpdateHostKeys=no` for every SSH command",
+		"Set `GlobalKnownHostsFile=none` with this explicit file so no other known-hosts source can authorize a changed key.",
+		"Pass the file in `remote_login`'s optional `known_hosts` field",
+		"Never use `accept-new` again for this target.",
+		"If the first attempt fails, inspect the OVH instance, exact IP, and known-hosts file before any retry",
+	} {
+		if !strings.Contains(policy, want) {
+			t.Errorf("OVH remote SSH policy missing first-contact trust safeguard %q", want)
+		}
+	}
+	if strings.Contains(policy, "For a first connection, obtain and compare the host-key fingerprint through a trusted channel") {
+		t.Fatal("OVH remote SSH policy still requires manual fingerprint verification for every first connection")
+	}
+	instanceCheck := strings.Index(policy, "Before any SSH connection, query the selected OVH project read-only")
+	acceptNew := strings.Index(policy, "-o StrictHostKeyChecking=accept-new")
+	if instanceCheck < 0 || acceptNew <= instanceCheck {
+		t.Fatal("OVH instance and IP verification must precede first-use host-key acceptance")
+	}
+}
+
 func TestEnvUsesPickerAndCancellationPreservesSavedValues(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "env")
 	store := localenv.NewStoreAt(storePath)

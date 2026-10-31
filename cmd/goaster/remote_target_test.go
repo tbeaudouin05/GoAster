@@ -237,6 +237,7 @@ func TestSavedRemoteTargetReusePerformsReadOnlyStrictHostKeyCheck(t *testing.T) 
 		"BatchMode=yes",
 		"StrictHostKeyChecking=yes",
 		"UpdateHostKeys=no",
+		"GlobalKnownHostsFile=none",
 		"UserKnownHostsFile=" + knownHosts,
 		"root@host.example",
 		remoteHealthCommand,

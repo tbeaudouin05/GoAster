@@ -162,12 +162,16 @@ func sshArguments(options remoteLoginOptions, allocateTTY bool, remoteCommand st
 		"-o", "KbdInteractiveAuthentication=no",
 		"-o", "PreferredAuthentications=publickey",
 		"-o", "StrictHostKeyChecking=yes",
+		"-o", "UpdateHostKeys=no",
 		"-o", "ConnectTimeout=" + strconv.Itoa(remoteConnectTimeout),
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 	}
 	if options.KnownHostsFile != "" {
-		arguments = append(arguments, "-o", "UserKnownHostsFile="+options.KnownHostsFile)
+		arguments = append(arguments,
+			"-o", "GlobalKnownHostsFile=none",
+			"-o", "UserKnownHostsFile="+options.KnownHostsFile,
+		)
 	}
 	return append(arguments, "--", options.Target, remoteCommand)
 }

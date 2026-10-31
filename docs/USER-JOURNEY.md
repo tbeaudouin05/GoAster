@@ -203,11 +203,16 @@ to approve the OpenAI device authorization before it continues onboarding.
 
 The flow requires explicit target and key inputs, launches OpenSSH directly
 outside model `shell_execute`, and inherits the local terminal's input and
-output. It uses strict host-key verification and the supplied key only; the
-remote host must already have a trusted `known_hosts` entry. GoAster passes
-the approved known-hosts file's path when it is not the default. Do not accept
-a changed or unknown host key without checking its
-fingerprint through a trusted channel.
+output. For a newly provisioned OVH host, the preceding bootstrap first checks
+the exact instance ID and expected public IP through the OVH API, then uses the
+approved client key for one read-only first connection with OpenSSH's
+`StrictHostKeyChecking=accept-new`. That connection saves the key in a
+target-specific `known_hosts` file; the protected login receives that same
+file. The login and all later connections use only that file, strict host-key
+checking, and disabled host-key updates, so a changed key is rejected.
+Existing hosts still need a trusted `known_hosts` entry or fingerprint
+verification through a trusted channel before connection. Do not use
+`ssh-keyscan` as an independent trust source.
 
 The terminal displays the URL and one-time code. The administrator opens the
 URL in a browser, signs in with the subscription account, and approves the

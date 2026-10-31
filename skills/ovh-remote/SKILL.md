@@ -98,9 +98,69 @@ Keep private keys, agent credentials, passwords, tokens, and environment values
 on the host. Never ask the user to paste a secret into chat, put a secret in
 SSH arguments or a script, enable shell tracing, or print an environment or
 private-key file. Do not weaken host verification with
-`StrictHostKeyChecking=no`. Prefer an already trusted `known_hosts` entry. For
-a first connection, obtain and compare the host-key fingerprint through a
-trusted channel and get explicit approval before accepting it.
+`StrictHostKeyChecking=no`. Existing hosts and saved targets must have an
+already trusted `known_hosts` entry. If an existing host has no trusted entry,
+obtain and compare its host-key fingerprint through a trusted channel and get
+explicit approval before connecting. Never use trust-on-first-use for an
+existing target, an unrelated target, or a target whose provenance is unclear.
+
+### First SSH contact for a newly provisioned OVH instance
+
+Use this one-time trust-on-first-use path only when the user requested a new
+OVH host and the provisioning skill has just created it. Do not substitute a
+saved or unrelated target. Before any SSH connection, query the selected OVH
+project read-only by the exact instance ID returned by the create operation.
+Verify that the returned instance ID matches exactly, the instance is ready,
+and its current public IP matches the expected IP verified and reported by the
+provisioning workflow. Use that verified IP as the SSH destination. Use only
+the approved local private key whose matching public key was registered for
+this instance in the approved provisioning configuration; do not ask for or
+substitute another key.
+
+If the API lookup fails, the instance ID or IP differs, the instance is not
+ready, the approved key cannot be matched, or any value is ambiguous, do not
+connect or accept a host key. Follow the provisioning mismatch/error fallback:
+stop, report the discrepancy or uncertainty, and ask what the user wants to do
+next. A display name, region, or saved connection is not an instance-ID/IP
+match.
+
+For an exact match, use a unique target-specific file under the local
+`~/.ssh` directory, with a safe filename derived from the instance ID (for
+example, `goaster-ovh-<instance-id>.known_hosts`). Keep `~/.ssh` owner-only,
+and make sure this file does not already exist or resolve through a symlink.
+If it exists, stop and inspect it; do not clear or replace it. For the first
+read-only SSH preflight only, connect to the verified IP with the approved key
+and OpenSSH options equivalent to:
+
+```text
+-o IdentitiesOnly=yes
+-o PreferredAuthentications=publickey
+-o PasswordAuthentication=no
+-o KbdInteractiveAuthentication=no
+-o GlobalKnownHostsFile=none
+-o UserKnownHostsFile=<target-specific-known_hosts-file>
+-o StrictHostKeyChecking=accept-new
+-o UpdateHostKeys=no
+```
+
+Run the client with a restrictive umask so OpenSSH creates the file with
+owner-only permissions. `accept-new` stores the first key presented by the
+verified IP in this instance's file and rejects a changed key. This exception
+applies only to that first preflight for this exact new instance. Do not use
+`ssh-keyscan` or another separately collected fingerprint as an independent
+trust source, and do not ask the user to retrieve a host fingerprint from
+OVHcloud Manager for this new-server flow.
+
+After that first connection, use the same target-specific file and
+`StrictHostKeyChecking=yes` with `UpdateHostKeys=no` for every SSH command,
+including bootstrap stages and the `remote_login` handoff. Set
+`GlobalKnownHostsFile=none` with this explicit file so no other known-hosts
+source can authorize a changed key. Pass the file in `remote_login`'s optional
+`known_hosts` field so the protected login uses the same entry and the saved
+connection record retains its path. Never use `accept-new` again for this
+target. If the first attempt fails, inspect the OVH instance, exact IP, and
+known-hosts file before any retry; do not delete the entry or repeat first-use
+acceptance. Stop on a changed-key warning or any unresolved mismatch.
 
 If setup needs environment variables, name each one, briefly explain its
 purpose and where to find its value (the remote service docs or host
@@ -144,6 +204,7 @@ exec ssh -i "$key" \
   -o BatchMode=yes \
   -o ConnectTimeout=10 \
   -o StrictHostKeyChecking=yes \
+  -o UpdateHostKeys=no \
   "$user@$host" 'uname -a; id; printf "ready\\n"'
 HOST_SCRIPT
 "$tmp"
@@ -205,7 +266,7 @@ returns only a generic status to the model. It is outside model
 non-default known-hosts file.
 The command always uses `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes`, the
 supplied key, key-only authentication, and bounded connection/session
-timeouts. It does not auto-accept a host key or interpolate a user command
+timeouts, with `UpdateHostKeys=no`. It does not auto-accept a host key or interpolate a user command
 through a local shell. The target must already have a trusted host-key entry;
 obtain and compare a first-connection fingerprint through a trusted channel
 before running it.

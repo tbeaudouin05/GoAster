@@ -530,7 +530,10 @@ func readOnlyRemoteHealthArguments(options remoteLoginOptions) []string {
 		"-o", "ServerAliveCountMax=3",
 	}
 	if options.KnownHostsFile != "" {
-		arguments = append(arguments, "-o", "UserKnownHostsFile="+options.KnownHostsFile)
+		arguments = append(arguments,
+			"-o", "GlobalKnownHostsFile=none",
+			"-o", "UserKnownHostsFile="+options.KnownHostsFile,
+		)
 	}
 	return append(arguments, "--", options.Target, remoteHealthCommand)
 }
