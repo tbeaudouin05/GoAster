@@ -49,9 +49,11 @@ The OAuth tokens and ChatGPT account ID are saved locally in
 
 ## Ask GoAster for what you need
 
-At the `you>` prompt, describe your goal in ordinary language. GoAster follows
-the relevant packaged skill; you do not need to name a skill or enter a slash
-command to select one. For example:
+At GoAster's chat prompt, describe your goal in ordinary language. In an
+interactive terminal, GoAster shows a compact header and readable message
+bubbles; redirected or scripted input keeps the line-oriented `you>` prompt.
+GoAster follows the relevant packaged skill; you do not need to name a skill or
+enter a slash command to select one. For example:
 
 - “Create a new OVH server and install GoAster on it.”
 - “Provision a new OVH server.”

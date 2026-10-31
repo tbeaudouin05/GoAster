@@ -65,30 +65,25 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 		return fmt.Errorf("environment file picker is nil")
 	}
 	w := bufio.NewWriter(output)
-	status := func() {
-		model, reason := session.modelStatus()
-		fmt.Fprintf(w, "Active model: %s\n", model)
-		if reason != "" {
-			fmt.Fprintf(w, "Fallback reason: %s\n", reason)
-		}
-	}
-	fmt.Fprintf(w, "GoAster — %s\n", session.description())
-	fmt.Fprintln(w, "Type a message, then press Enter.")
-	fmt.Fprintln(w, "Describe what you want, such as a new OVH server or GoAster installed on an existing one.")
-	fmt.Fprintln(w, "Use /env for local secret setup and /file to inspect non-secret files.")
-	status()
-	if notice := session.consumeStartupNotice(); notice != "" {
-		fmt.Fprintf(w, "Notice: %s\n", notice)
-	}
 	terminalInput, ok := input.(TerminalInput)
 	if !ok {
 		terminalInput = NewTerminalInput(input)
+	}
+	ui := newTerminalUI(terminalInput, output)
+	status := func() {
+		model, reason := session.modelStatus()
+		ui.renderStatus(w, model, reason)
+	}
+	ui.renderIntro(w, session.description())
+	status()
+	if notice := session.consumeStartupNotice(); notice != "" {
+		ui.renderNotice(w, "Notice", notice)
 	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		fmt.Fprint(w, "you> ")
+		ui.renderPrompt(w)
 		if err := w.Flush(); err != nil {
 			return err
 		}
@@ -97,7 +92,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			if !errors.Is(readErr, io.EOF) {
 				return fmt.Errorf("read message: %w", readErr)
 			}
-			fmt.Fprintln(w)
+			ui.renderFinish(w)
 			return w.Flush()
 		}
 		message := strings.TrimSpace(line)
@@ -197,7 +192,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			}
 		}
 		if notice := session.consumeContextNotice(); notice != "" {
-			fmt.Fprintf(w, "Context notice: %s\n", notice)
+			ui.renderNotice(w, "Context notice", notice)
 		}
 		model, _ := session.modelStatus()
 		if model != previousModel {
@@ -209,7 +204,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 			}
 			return err
 		}
-		fmt.Fprintf(w, "assistant [%s]> %s\n", model, reply)
+		ui.renderAssistant(w, model, reply)
 	}
 }
 

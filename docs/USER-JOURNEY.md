@@ -28,8 +28,10 @@ an OpenAI API key.
 
 ## 2. Chat in the local terminal
 
-Enter a message at `you>` and press Enter. GoAster replies in the same
-terminal. The local chat includes its built-in web search, web fetch, and
+Enter a message at GoAster's chat prompt and press Enter. An interactive
+terminal shows a compact header and readable message bubbles; redirected input
+keeps the line-oriented `you>` prompt. GoAster replies in the same terminal.
+The local chat includes its built-in web search, web fetch, and
 `shell_execute` tools. Enter one message per line; blank lines are ignored.
 Use EOF (Ctrl-D on Unix) or close the terminal to exit.
 

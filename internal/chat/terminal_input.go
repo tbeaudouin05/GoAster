@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 const maxTerminalInputLineBytes = 1024 * 1024
@@ -12,14 +14,28 @@ const maxTerminalInputLineBytes = 1024 * 1024
 // TerminalInput reads chat and approval lines without buffering past a line,
 // leaving later terminal input available to an interactive child process.
 type TerminalInput struct {
-	reader io.Reader
+	reader      io.Reader
+	interactive bool
+}
+
+type terminalFileDescriptor interface {
+	Fd() uintptr
 }
 
 func NewTerminalInput(reader io.Reader) TerminalInput {
 	if reader == nil {
 		reader = strings.NewReader("")
 	}
-	return TerminalInput{reader: reader}
+	device, ok := reader.(terminalFileDescriptor)
+	return TerminalInput{
+		reader:      reader,
+		interactive: ok && term.IsTerminal(int(device.Fd())),
+	}
+}
+
+// Interactive reports whether input comes directly from a terminal device.
+func (input TerminalInput) Interactive() bool {
+	return input.interactive
 }
 
 func (input TerminalInput) Read(buffer []byte) (int, error) {
