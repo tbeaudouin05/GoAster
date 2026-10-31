@@ -1,6 +1,6 @@
 ---
 name: ovh-remote
-description: Bootstrap and operate an existing OVHcloud host over SSH through GoAster's shell_execute, building GoAster agent binaries remotely from the latest main branch with explicit approval for changes.
+description: Bootstrap and operate an existing OVHcloud host over SSH through GoAster's shell_execute, and guide the separate local terminal action for the remote agent's interactive OpenAI login.
 ---
 
 # Existing OVH remote SSH
@@ -8,7 +8,10 @@ description: Bootstrap and operate an existing OVHcloud host over SSH through Go
 This is an instruction-only skill for operating an already existing OVHcloud
 remote. It does not provision, resize, delete, or otherwise manage OVH
 resources through the OVH API. Use the host's OpenSSH client through GoAster's
-`shell_execute` tool.
+`shell_execute` tool for non-interactive bootstrap and verification. Use the
+dedicated local `goaster remote-login` terminal command for the interactive
+remote OpenAI login; never run that login through `shell_execute` or a model
+tool.
 
 ## Confirm the target and access
 
@@ -85,6 +88,37 @@ create the equivalent temporary `.ps1` file and remove it in a `finally` block.
 Do not store a remote script, credentials, or command transcript in the
 repository. Use bounded timeouts for network operations unless the user
 specifically needs an interactive session.
+
+## Start the interactive remote login locally
+
+After the agent is installed and its service account is ready for SSH, tell the
+user to run this from the local GoAster terminal, with the remote agent service
+account as the SSH target:
+
+```text
+goaster remote-login --target goaster@SERVER --key ~/.ssh/goaster-ovh
+```
+
+The command launches OpenSSH directly with inherited terminal I/O, so the
+remote device-login URL and one-time code stay in the user's terminal. It is
+outside model `shell_execute` and does not accept local `auth.json`, OAuth
+tokens, or any other credential data. `--target` and `--key` are required;
+`--known-hosts PATH` is available for an approved non-default known-hosts file.
+The command always uses `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes`, the
+supplied key, key-only authentication, and bounded connection/session
+timeouts. It does not auto-accept a host key or interpolate a user command
+through a local shell. The target must already have a trusted host-key entry;
+obtain and compare a first-connection fingerprint through a trusted channel
+before running it.
+
+After the interactive login exits successfully, GoAster opens a second strict
+SSH session for the read-only `curl` check of
+`http://127.0.0.1:8765/healthz`. Treat a failed login or health check as a
+failure or uncertain result. Do not relay the device code, login output, or
+tokens to the model. The remote login writes only the remote service user's
+separate `~/.goaster/agent-auth.json`; it never copies the local
+`~/.goaster/auth.json`. Stop the agent service before reauthentication and
+restart it only through the separately approved service workflow afterward.
 
 ## Safe workflow
 
@@ -252,15 +286,14 @@ Do not add Markdown link formatting around the URL. Never relay passwords,
 OAuth tokens, or saved credential files. The URL and one-time code are safe to
 relay only for the active login prompt.
 
-After installation, direct the user to open a separate SSH terminal and run
-`goaster-agent login` on the remote as the agent service user with the same
-`HOME` as the service. The user opens the displayed verification URL and enters
-the remote device's one-time code. Do not run this login through `shell_execute`
-or any chat tool that would relay the code or login output to the model. Do not
-ask the user to paste the code or tokens into chat. The login writes the remote
-service user's `~/.goaster/agent-auth.json` with `0600` permissions in a
-`0700` directory. For reauthentication, stop the agent service before the login
-and restart it afterward, with the approvals required above.
+Use the local `goaster remote-login` command described above after installation.
+The user opens the displayed verification URL and enters the remote device's
+one-time code in that local terminal. Do not run this login through
+`shell_execute` or any chat tool that would relay the code or login output to
+the model. Do not ask the user to paste the code or tokens into chat. The login
+writes the remote service user's `~/.goaster/agent-auth.json` with `0600`
+permissions in a `0700` directory. For reauthentication, stop the agent service
+before the login and restart it afterward, with the approvals required above.
 
 Do not claim the agent is ready for Telegram chat until remote login succeeds
 and the running agent's loopback `http://127.0.0.1:8765/healthz` returns `ok`.

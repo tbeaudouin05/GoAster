@@ -227,18 +227,18 @@ through GoAster's local `/env` environment-file flow. Never paste keys into
 chat or include them in screenshots. For a new host, provision
 the OVH resource with explicit approval, then use the SSH skill to bootstrap
 it; for an existing host, start with SSH bootstrap.
-Next, complete a separate remote OpenAI device login from an SSH terminal and
-verify `/healthz`; then complete the separately approved Telegram token and
-pairing setup below. Keep the local terminal's OpenAI credentials on the local
-machine.
+Next, complete the separate remote OpenAI device login with GoAster's local
+`remote-login` terminal command and verify `/healthz`; then complete the
+separately approved Telegram token and pairing setup below. Keep the local
+terminal's OpenAI credentials on the local machine.
 
 The local package does not need Go to bootstrap the remote agent: the SSH skill
 verifies or installs pinned Go 1.27.3 on the existing Linux host, clones the
 latest `main` branch from this repository at bootstrap time, records the
 resolved commit, builds `goaster-agent` and `goaster-telegram` from that
 checkout on the host, then installs the resulting binaries. The Go archive
-checksums and remote build steps are documented in the skill. This manual SSH
-bootstrap does not manage the OVH resource lifecycle or add an agent
+checksums and remote build steps are documented in the skill. This SSH bootstrap
+does not manage the OVH resource lifecycle or add an agent
 self-update feature.
 
 The terminal and remote agent require **two independent OpenAI device logins**.
@@ -248,38 +248,45 @@ OVH host. A freshly installed remote agent has no subscription credentials and
 does not use the terminal's credential file. The agent can run while waiting
 for login, but its loopback `/healthz` and `/chat` endpoints return unavailable.
 
-After the remote agent is installed, open a separate SSH terminal to the OVH
-host and run `goaster-agent login` as the same user and with the same `HOME`
-that the agent service uses. For example, if the service runs as `goaster`,
-uses `/var/lib/goaster` as its home, and the binary is installed in
-`/usr/local/bin`:
+After the remote agent is installed and its service account is ready for SSH,
+run this local GoAster command from a terminal, using the remote agent service
+account as the SSH target:
 
-```sh
-ssh -t USER@OVH_HOST 'sudo -u goaster env HOME=/var/lib/goaster /usr/local/bin/goaster-agent login'
+```text
+goaster remote-login --target goaster@OVH_HOST --key ~/.ssh/goaster-ovh
 ```
 
-Use the URL and one-time code displayed in that SSH terminal to authorize the
-remote device. Do not paste the code, tokens, or login output into GoAster or
-Telegram chat, and do not run this interactive login through a chat tool that
-would relay its output to the model. The remote login saves its own credentials
-as `~/.goaster/agent-auth.json` under the service user's remote home, with
-`0600` file and `0700` directory permissions. This file is separate from
-`~/.goaster/auth.json`, even if both programs use the same home. If login fails
-or is canceled, run the remote login again; keep the host and any separately
-configured Telegram state for inspection. The same command can reauthenticate
-the remote agent later; stop the agent service first and restart it afterward.
+The command requires an explicit `--target` and local `--key`, invokes OpenSSH
+directly with inherited terminal input/output, and does not pass through the
+model's `shell_execute` tool. It requires strict host-key verification, uses
+only the supplied key, and never accepts a password, token, or credential-file
+argument. The host must already have a trusted entry in the user's
+`known_hosts`; use `--known-hosts PATH` when the approved file is not the
+default. Do not bypass a host-key mismatch or accept an unverified fingerprint.
 
-After login completes and the agent is running, check its readiness on the OVH
-host with `curl --fail http://127.0.0.1:8765/healthz`. It returns `ok` only
-when the agent can load its separate subscription credential, refreshing it if
-needed; this does not test a model response or detect every revoked token.
-Start or restart the Telegram adapter after the check succeeds. For systemd
+Use the URL and one-time code displayed in the local terminal to authorize the
+remote device. Do not paste the code, tokens, or login output into GoAster or
+Telegram chat. The remote login saves its own credentials as
+`~/.goaster/agent-auth.json` under the service user's remote home, with `0600`
+file and `0700` directory permissions. This file is separate from
+`~/.goaster/auth.json`, even if both programs use the same home; GoAster never
+copies the local file. After login exits successfully, the command runs a
+separate read-only SSH health check against the remote agent's loopback
+`/healthz` endpoint and reports failure clearly. If login is canceled or the
+health check fails, inspect the remote service before retrying. The same local
+command can reauthenticate the remote agent later; stop the agent service first
+and restart it afterward.
+
+The health check returns `ok` only when the agent can load its separate
+subscription credential, refreshing it if needed; this does not test a model
+response or detect every revoked token. Start or restart the Telegram adapter
+after the check succeeds. For systemd
 readiness reporting, configure its service as `Type=notify`: the adapter sends
 the ready notification only after the agent is ready and the first Telegram
 poll succeeds. It also checks agent readiness before telling a paired user
 that chat is ready. If the adapter was started too early, restart it after
-login. Telegram token and pairing setup are separate steps below; neither the
-OpenAI device code nor the subscription tokens belong in Telegram.
+the health check. Telegram token and pairing setup are separate steps below;
+neither the OpenAI device code nor the subscription tokens belong in Telegram.
 
 ### Telegram user pairing
 

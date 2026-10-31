@@ -21,6 +21,13 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, input io.Reader, output, errorOutput io.Writer) error {
+	return runWithSSH(ctx, args, input, output, errorOutput, executeSSH)
+}
+
+func runWithSSH(ctx context.Context, args []string, input io.Reader, output, errorOutput io.Writer, sshRun sshRunner) error {
+	if len(args) > 0 && args[0] == "remote-login" {
+		return runRemoteLogin(ctx, args[1:], input, output, errorOutput, sshRun)
+	}
 	runtimeConfig, err := chat.ParseRuntimeConfig(args, errorOutput)
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
