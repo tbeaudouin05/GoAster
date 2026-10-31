@@ -15,7 +15,7 @@ import (
 const remoteLoginToolName = "remote_login"
 
 const (
-	remoteLoginToolNoTerminal = "Remote login was not started because no protected controlling terminal is available. Run GoAster from an interactive terminal."
+	remoteLoginToolNoTerminal = "Remote login was not started because no protected terminal is available. Run GoAster from an interactive terminal."
 	remoteLoginToolInvalid    = "Remote login was not started because its request was invalid."
 	remoteLoginToolDeclined   = "Remote login was not started because local terminal approval was not granted."
 	remoteLoginToolFailed     = "Remote login or its health check failed. Review the local terminal output before continuing."
@@ -40,7 +40,7 @@ func registerRemoteLoginTool(registrar chat.ToolRegistrar, handoff remoteLoginHa
 func newRemoteLoginTool(handoff remoteLoginHandoff) chat.Tool {
 	return chat.Tool{
 		Name:        remoteLoginToolName,
-		Description: "After the user has explicitly approved the exact existing remote host in chat and its GoAster service account is verified ready, start the existing local interactive OpenAI login and health check. It asks for a separate YES approval in the local terminal, attaches the login directly to the terminal, and returns only a generic status. If no protected controlling terminal is available, it stops without connecting; retry from an interactive GoAster terminal. Never use this for provisioning, an unverified host, or a host that is not ready.",
+		Description: "After the user has explicitly approved the exact existing remote host in chat and its GoAster service account is verified ready, start the existing local interactive OpenAI login and health check. It asks for a separate YES approval in the local terminal, attaches the login directly to the terminal, and returns only a generic status. It uses the controlling terminal when available; otherwise it uses inherited stdin and stdout only when both are the same actual terminal device. If no protected terminal is available, it stops without connecting; retry from an interactive GoAster terminal. Never use this for provisioning, an unverified host, or a host that is not ready.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

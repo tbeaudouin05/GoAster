@@ -5,7 +5,8 @@ go 1.22
 require (
 	github.com/ncruces/zenity v0.10.14
 	golang.org/x/image v0.20.0
-	golang.org/x/sys v0.25.0
+	golang.org/x/sys v0.26.0
+	golang.org/x/term v0.25.0
 )
 
 require (

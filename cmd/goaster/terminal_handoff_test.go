@@ -33,9 +33,12 @@ func TestProtectedHandoffSelectsOnlyControllingTerminal(t *testing.T) {
 	closed := make(chan bool, 1)
 	opened, calls := 0, 0
 	terminal := testTerminal{Reader: strings.NewReader("YES\n"), Writer: output, closed: closed}
-	handoff := newProtectedLoginHandoff(func() (io.ReadWriteCloser, error) {
+	handoff := newProtectedLoginHandoffWithFallback(func() (io.ReadWriteCloser, error) {
 		opened++
 		return terminal, nil
+	}, func() (io.ReadWriteCloser, error) {
+		t.Fatal("inherited stdio fallback replaced the controlling terminal")
+		return nil, nil
 	}, func(ctx context.Context, _ []string, input io.Reader, stdout, stderr io.Writer) error {
 		calls++
 		if input != terminal || stdout != terminal || stderr != terminal {

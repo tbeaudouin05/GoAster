@@ -170,8 +170,12 @@ Before using the tool, show the exact target and local key to the user in chat
 and get explicit approval to contact that host. Then call `remote_login` with
 the confirmed target and approved local key. The tool prints the target, key
 path, port, and strict host-key policy in the local terminal and requires the
-administrator to type `YES` there before connecting. If local approval is
-declined or unavailable, stop without connecting.
+administrator to type `YES` there before connecting. It opens `/dev/tty` when
+available. If the model tool has no controlling terminal, it may use inherited
+stdin and stdout only when both refer to the same actual terminal device; pipes,
+detached processes without terminal stdio, and unrelated devices fail safely.
+If approval is declined or no protected terminal is available, stop without
+connecting.
 
 The tool invokes the existing flow with this command shape, filling in the
 confirmed target and approved local key:
@@ -180,11 +184,13 @@ confirmed target and approved local key:
 goaster remote-login --target root@SERVER --key ~/.ssh/goaster-ovh
 ```
 
-The flow launches OpenSSH directly with inherited terminal I/O and forces an
+The flow launches OpenSSH directly with protected terminal I/O and forces an
 interactive SSH terminal, so the remote device-login URL and one-time code are
-shown in the administrator's attached terminal. Its output is written only to
-that terminal; the tool returns only a generic success or failure status to
-the model. It is outside model `shell_execute` and does not accept local
+shown in the administrator's attached terminal. It uses the controlling
+terminal first and accepts inherited stdin/stdout only when they are the same
+actual terminal device. Its output is written only to that terminal; the tool
+returns only a generic status to the model. It is outside model
+`shell_execute` and does not accept local
 `auth.json`, OAuth tokens, or any other credential data. `--target` and
 `--key` are required;
 `--known-hosts PATH` is available for an approved non-default known-hosts file.

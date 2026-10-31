@@ -10,11 +10,12 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/term"
+
 	"goaster/internal/chat"
 )
 
-// controllingTerminalOpener never selects a terminal from tool stdio, an
-// environment variable, or a list of other processes' pseudoterminals.
+// controllingTerminalOpener selects this process's controlling terminal.
 type controllingTerminalOpener func() (io.ReadWriteCloser, error)
 
 func openControllingTerminal() (io.ReadWriteCloser, error) {
@@ -29,14 +30,24 @@ func openControllingTerminal() (io.ReadWriteCloser, error) {
 }
 
 func newProtectedLoginHandoff(open controllingTerminalOpener, sshRun sshRunner) remoteLoginHandoff {
+	return newProtectedLoginHandoffWithFallback(open, nil, sshRun)
+}
+
+func newProtectedLoginHandoffWithFallback(open, fallback controllingTerminalOpener, sshRun sshRunner) remoteLoginHandoff {
 	return func(ctx context.Context, options remoteLoginOptions) string {
 		if ctx == nil || ctx.Err() != nil || sshRun == nil {
 			return remoteLoginToolFailed
 		}
-		if open == nil {
-			return remoteLoginToolNoTerminal
+		var terminal io.ReadWriteCloser
+		var err error
+		if open != nil {
+			terminal, err = open()
 		}
-		terminal, err := open()
+		if err != nil || terminal == nil {
+			if fallback != nil {
+				terminal, err = fallback()
+			}
+		}
 		if err != nil || terminal == nil {
 			return remoteLoginToolNoTerminal
 		}
@@ -45,8 +56,51 @@ func newProtectedLoginHandoff(open controllingTerminalOpener, sshRun sshRunner) 
 	}
 }
 
-// The explicit CLI command uses the same protected terminal selection, without
-// adding the model tool's separate approval prompt to that existing command.
+type terminalDevice interface {
+	Fd() uintptr
+	Stat() (os.FileInfo, error)
+}
+
+type inheritedTerminal struct {
+	input  io.Reader
+	output io.Writer
+}
+
+func (terminal inheritedTerminal) Read(content []byte) (int, error) {
+	return terminal.input.Read(content)
+}
+
+func (terminal inheritedTerminal) Write(content []byte) (int, error) {
+	return terminal.output.Write(content)
+}
+
+// Close leaves the process-owned standard streams open.
+func (terminal inheritedTerminal) Close() error {
+	return nil
+}
+
+func openInheritedTerminal(input io.Reader, output io.Writer) (io.ReadWriteCloser, error) {
+	inputDevice, inputIsDevice := input.(terminalDevice)
+	outputDevice, outputIsDevice := output.(terminalDevice)
+	if !inputIsDevice || !outputIsDevice {
+		return nil, errors.New("inherited standard streams are not terminal devices")
+	}
+	inputInfo, err := inputDevice.Stat()
+	if err != nil || inputInfo == nil {
+		return nil, errors.New("inherited standard input is unavailable")
+	}
+	outputInfo, err := outputDevice.Stat()
+	if err != nil || outputInfo == nil {
+		return nil, errors.New("inherited standard output is unavailable")
+	}
+	if !os.SameFile(inputInfo, outputInfo) || !term.IsTerminal(int(inputDevice.Fd())) || !term.IsTerminal(int(outputDevice.Fd())) {
+		return nil, errors.New("inherited standard streams are not the same terminal device")
+	}
+	return inheritedTerminal{input: input, output: output}, nil
+}
+
+// The explicit CLI command uses its configured controlling-terminal opener
+// without adding the model tool's separate approval prompt.
 func runRemoteLoginOnTerminal(ctx context.Context, options remoteLoginOptions, open controllingTerminalOpener, sshRun sshRunner) error {
 	terminal, err := open()
 	if err != nil || terminal == nil {
