@@ -407,7 +407,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 			"When the starting point is unclear, use available context or clarify before proceeding.",
 			"Respect an explicitly requested new resource or host; do not silently substitute a saved connection.",
 			"Use both workflows in sequence when the user requests a new host and installation.",
-			"The local /env and /file commands remain available for secret setup and non-secret file inspection.",
+			"The local /env and /get-env commands remain available for secret setup; /file remains available for non-secret file inspection.",
 			"name: telegram-group-privacy",
 			"select this workflow; `/setprivacy` remains an operational BotFather command.",
 			"forwards text only from the Telegram account paired during setup; messages from other group members and non-text messages are not forwarded to the agent.",

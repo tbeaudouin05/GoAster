@@ -17,7 +17,7 @@ func TestRunDoesNotAcceptLoginCommand(t *testing.T) {
 		t.Fatalf("chat help error = %v", err)
 	}
 	help := helpOutput.String()
-	for _, want := range []string{"Describe what you want in chat", "/env", "/file"} {
+	for _, want := range []string{"Describe what you want in chat", "/env", "/get-env", "/file"} {
 		if !strings.Contains(help, want) {
 			t.Errorf("chat help missing %q: %s", want, help)
 		}

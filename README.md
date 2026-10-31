@@ -65,7 +65,7 @@ enter a slash command to select one. For example:
 GoAster asks for clarification if it cannot tell whether you want a new OVH
 resource or help with an existing host. Memory consolidation is optional and
 runs only when requested. For local secret setup and non-secret file inspection,
-use the operational `/env` and `/file` flows described below.
+use the operational `/env`, `/get-env`, and `/file` flows described below.
 
 ## Build packages (developers)
 
@@ -95,6 +95,11 @@ where to find its value, and invites you to ask for more explanation of any
 variable. Enter secret values only through GoAster's local `/env`
 environment-file flow; never paste them into chat. GoAster masks imported
 values before saving them locally.
+
+Type `/get-env` to save a private copy of the current environment file. If no
+environment file has been saved, GoAster creates a blank template with
+`OVH_KEY=` and `TELEGRAM_TOKEN=`. Fill in the values, then re-upload the
+completed file with `/env`. The saved file is written with `0600` permissions.
 
 To inspect a local file, type `/file` in the terminal and choose it in the
 native file picker. Files up to 20 MiB are supported. PNG, JPEG, GIF, and WebP

@@ -27,7 +27,7 @@ const (
 	ansiStatus      = "\x1b[38;5;249m"
 	ansiDescription = "\x1b[38;5;245m"
 
-	terminalIntroHelp = "Use slash commands: /env to securely upload environment variables, /file to upload screenshots and other types of files."
+	terminalIntroHelp = "Use /env to securely import environment variables, /get-env to save your env file or a blank template, and /file to inspect non-secret files."
 	terminalQuitHelp  = "Ctrl-D to quit."
 )
 

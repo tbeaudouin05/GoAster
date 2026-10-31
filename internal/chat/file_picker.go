@@ -20,6 +20,11 @@ type EnvironmentFilePicker interface {
 	Pick() (string, error)
 }
 
+// EnvironmentFileSavePicker chooses where /get-env writes a private copy.
+type EnvironmentFileSavePicker interface {
+	PickSavePath() (string, error)
+}
+
 // LocalFilePicker selects any local file for a terminal chat command.
 type LocalFilePicker interface {
 	PickFile() (string, error)
@@ -30,6 +35,11 @@ type EnvironmentFilePickerFunc func() (string, error)
 
 // Pick selects a local environment file.
 func (f EnvironmentFilePickerFunc) Pick() (string, error) {
+	return f()
+}
+
+// PickSavePath adapts the same injectable path picker for /get-env.
+func (f EnvironmentFilePickerFunc) PickSavePath() (string, error) {
 	return f()
 }
 
@@ -61,6 +71,25 @@ func (nativeLocalFilePicker) PickFile() (string, error) {
 	path, err := zenity.SelectFile(
 		zenity.Title("Choose a local file"),
 		zenity.FileFilters{
+			{Name: "All files", Patterns: []string{"*"}},
+		},
+	)
+	if errors.Is(err, zenity.ErrCanceled) {
+		return "", ErrEnvironmentFilePickerCanceled
+	}
+	if err != nil {
+		return "", wrapNativeFilePickerError(err)
+	}
+	return path, nil
+}
+
+func (nativeLocalFilePicker) PickSavePath() (string, error) {
+	path, err := zenity.SelectFileSave(
+		zenity.Title("Save GoAster environment file"),
+		zenity.Filename("goaster.env"),
+		zenity.ConfirmOverwrite(),
+		zenity.FileFilters{
+			{Name: "Environment files", Patterns: []string{"*.env", "*.txt"}},
 			{Name: "All files", Patterns: []string{"*"}},
 		},
 	)

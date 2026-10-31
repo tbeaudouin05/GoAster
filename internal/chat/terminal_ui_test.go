@@ -45,7 +45,7 @@ func TestTerminalUIIntroExplainsSlashCommandsAndQuit(t *testing.T) {
 			test.ui.renderIntro(&output, "chat provider")
 
 			result := strings.Join(strings.Fields(output.String()), " ")
-			want := "Use slash commands: /env to securely upload environment variables, /file to upload screenshots and other types of files. Ctrl-D to quit."
+			want := "Use /env to securely import environment variables, /get-env to save your env file or a blank template, and /file to inspect non-secret files. Ctrl-D to quit."
 			if !strings.Contains(result, want) {
 				t.Errorf("intro missing %q: %s", want, output.String())
 			}

@@ -34,6 +34,7 @@ If a server is already found, I will say one of these:
 If no server is saved, I will guide you through creating one. I will ask before anything that could cost money or change your OVH account. Starting this screen does not create or change anything.`
 
 const environmentFileCommand = "/env-file"
+const getEnvironmentFileCommand = "/get-env"
 const fileCommand = "/file"
 const uploadCommand = "/upload"
 const fileInspectionMessage = "Please inspect the attached file and explain what it shows, what I should do next, and any risks. Do not ask for, transcribe, or reveal secrets found in the file."
@@ -123,6 +124,18 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 		}
 		if message == "/env" {
 			if err := runEnvironmentFileSetupWithUI(terminalInput, w, store, picker, "", "", ui); err != nil {
+				if flushErr := w.Flush(); flushErr != nil {
+					return flushErr
+				}
+				return err
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			continue
+		}
+		if message == getEnvironmentFileCommand {
+			if err := runGetEnvironmentFileWithUI(w, store, picker, ui); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -400,6 +413,66 @@ func runEnvironmentFileSetupWithUI(input TerminalInput, output terminalOutput, s
 		return nil
 	}
 	return reviewEnvironmentValuesWithUI(input, output, store, values, next, ui)
+}
+
+type savedEnvironmentFileStore interface {
+	Load() error
+	Values() map[string]string
+	HasSavedFile() bool
+}
+
+func runGetEnvironmentFileWithUI(output terminalOutput, store environmentValueStore, picker EnvironmentFilePicker, ui terminalUI) error {
+	fileStore, ok := store.(savedEnvironmentFileStore)
+	if !ok || fileStore.Load() != nil {
+		ui.renderError(output, "Could not read the saved environment file.")
+		return nil
+	}
+
+	hasSavedFile := fileStore.HasSavedFile()
+	values := fileStore.Values()
+	if !hasSavedFile {
+		values = localenv.RequiredTemplateValues()
+		ui.renderInfo(output, "No saved environment file was found. Choose where to save a blank template.")
+	} else {
+		ui.renderInfo(output, "Choose where to save your current environment file.")
+	}
+	if err := output.Flush(); err != nil {
+		return err
+	}
+
+	saver, ok := picker.(EnvironmentFileSavePicker)
+	if !ok {
+		ui.renderWarning(output, "Environment file save dialog unavailable.")
+		return nil
+	}
+	path, err := saver.PickSavePath()
+	if err != nil {
+		if errors.Is(err, ErrEnvironmentFilePickerCanceled) {
+			ui.renderOutcome(output, "Environment file download canceled.")
+			return nil
+		}
+		if errors.Is(err, errEnvironmentFilePickerUnavailable) {
+			ui.renderWarning(output, "File picker unavailable. Install zenity (or a compatible package such as qarma or matedialog); for example: sudo apt install zenity")
+			return nil
+		}
+		ui.renderError(output, "Environment file save failed.")
+		return nil
+	}
+	if strings.TrimSpace(path) == "" {
+		ui.renderOutcome(output, "Environment file download canceled.")
+		return nil
+	}
+	if err := localenv.NewStoreAt(path).Save(values); err != nil {
+		ui.renderError(output, "Could not save the environment file.")
+		return nil
+	}
+	if hasSavedFile {
+		ui.renderOutcome(output, fmt.Sprintf("Environment file saved to: %s", path))
+		return nil
+	}
+	ui.renderOutcome(output, fmt.Sprintf("Blank environment template saved to: %s", path))
+	ui.renderInfo(output, "Fill in the values, then re-upload the completed file with /env.")
+	return nil
 }
 
 func reviewEnvironmentValues(input TerminalInput, output terminalOutput, store environmentValueStore, values map[string]string, next string) error {

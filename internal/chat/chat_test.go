@@ -156,7 +156,7 @@ func TestLoop(t *testing.T) {
 	}
 	for _, want := range []string{
 		"chat provider", "Type a message, then press Enter.",
-		"Use slash commands: /env to securely upload environment variables, /file to upload screenshots and other types of files.",
+		"Use /env to securely import environment variables, /get-env to save your env file or a blank template, and /file to inspect non-secret files.",
 		"Ctrl-D to quit.",
 		"Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello",
 		"assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear",
@@ -561,6 +561,112 @@ func TestEnvUsesPickerAndCancellationPreservesSavedValues(t *testing.T) {
 	for _, unwanted := range []string{"Usage: /env <local-file-path>", "Review environment values", "Save these values?"} {
 		if strings.Contains(output.String(), unwanted) {
 			t.Errorf("canceled /env entered an unexpected flow: %s", &output)
+		}
+	}
+}
+
+func TestGetEnvSavesExistingEnvironmentWithoutPrintingValues(t *testing.T) {
+	secretValues := map[string]string{
+		"OVH_KEY":        "private-ovh-value",
+		"TELEGRAM_TOKEN": "private-telegram-value",
+	}
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Save(secretValues); err != nil {
+		t.Fatal(err)
+	}
+	downloadPath := filepath.Join(t.TempDir(), "goaster.env")
+	pickerCalls := 0
+	picker := EnvironmentFilePickerFunc(func() (string, error) {
+		pickerCalls++
+		return downloadPath, nil
+	})
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	var output bytes.Buffer
+	input := strings.NewReader("/get-env\ncontinue chatting\n")
+	if err := RunWithEnvStoreAndPicker(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
+		t.Fatal(err)
+	}
+	if pickerCalls != 1 {
+		t.Fatalf("save picker calls = %d, want 1", pickerCalls)
+	}
+	if !reflect.DeepEqual(messages, []string{"continue chatting"}) {
+		t.Fatalf("provider messages = %q, want only ordinary chat", messages)
+	}
+	data, err := os.ReadFile(downloadPath)
+	if err != nil {
+		t.Fatal("environment file was not saved")
+	}
+	if !bytes.Equal(data, []byte("OVH_KEY=private-ovh-value\nTELEGRAM_TOKEN=private-telegram-value\n")) {
+		t.Fatal("saved environment file did not match the stored settings")
+	}
+	info, err := os.Stat(downloadPath)
+	if err != nil {
+		t.Fatal("could not inspect saved environment file")
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("saved environment permissions = %04o, want 0600", info.Mode().Perm())
+	}
+	for _, secret := range []string{"private-ovh-value", "private-telegram-value"} {
+		if strings.Contains(output.String(), secret) {
+			t.Errorf("terminal output exposed a saved environment value")
+		}
+	}
+	if !strings.Contains(output.String(), "Environment file saved to: "+downloadPath) {
+		t.Errorf("terminal output did not report the download path: %s", &output)
+	}
+}
+
+func TestGetEnvCreatesExactBlankTemplateAndGuidance(t *testing.T) {
+	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	downloadPath := filepath.Join(t.TempDir(), "goaster.env")
+	pickerCalls := 0
+	picker := EnvironmentFilePickerFunc(func() (string, error) {
+		pickerCalls++
+		return downloadPath, nil
+	})
+	var messages []string
+	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
+		messages = append(messages, message)
+		return "received", nil
+	})
+	var output bytes.Buffer
+	input := strings.NewReader("/get-env\ncontinue chatting\n")
+	if err := RunWithEnvStoreAndPicker(context.Background(), input, &output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
+		t.Fatal(err)
+	}
+	if pickerCalls != 1 {
+		t.Fatalf("save picker calls = %d, want 1", pickerCalls)
+	}
+	if !reflect.DeepEqual(messages, []string{"continue chatting"}) {
+		t.Fatalf("provider messages = %q, want only ordinary chat", messages)
+	}
+	data, err := os.ReadFile(downloadPath)
+	if err != nil {
+		t.Fatal("blank environment template was not saved")
+	}
+	if !bytes.Equal(data, []byte("OVH_KEY=\nTELEGRAM_TOKEN=\n")) {
+		t.Fatal("template variable names or KEY= format did not match the required settings")
+	}
+	info, err := os.Stat(downloadPath)
+	if err != nil {
+		t.Fatal("could not inspect saved environment template")
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("template permissions = %04o, want 0600", info.Mode().Perm())
+	}
+	for _, want := range []string{
+		"Blank environment template saved to: " + downloadPath,
+		"Fill in the values, then re-upload the completed file with /env.",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("terminal output missing %q: %s", want, &output)
 		}
 	}
 }

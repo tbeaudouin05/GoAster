@@ -17,12 +17,15 @@ const (
 	fileName      = "env"
 	maxLineSize   = 1024 * 1024
 	maxFileSize   = 1024 * 1024
+	ovhKeyName    = "OVH_KEY"
+	telegramName  = "TELEGRAM_TOKEN"
 )
 
 // Store keeps environment settings separate from chat messages and providers.
 type Store struct {
-	path   string
-	values map[string]string
+	path      string
+	values    map[string]string
+	savedFile bool
 }
 
 // NewStore locates the default settings file at ~/.goaster/env.
@@ -42,6 +45,20 @@ func NewStoreAt(path string) *Store {
 // Values returns a copy of the values loaded or saved by this store.
 func (s *Store) Values() map[string]string {
 	return clone(s.values)
+}
+
+// HasSavedFile reports whether the most recent Load or Save found a saved env file.
+func (s Store) HasSavedFile() bool {
+	return s.savedFile
+}
+
+// RequiredTemplateValues returns the blank integration settings GoAster asks
+// users to configure through the local environment-file flow.
+func RequiredTemplateValues() map[string]string {
+	return map[string]string{
+		ovhKeyName:   "",
+		telegramName: "",
+	}
 }
 
 // LoadFile reads and validates KEY=VALUE settings from a local regular file.
@@ -122,6 +139,7 @@ func (s *Store) Load() error {
 	info, err := os.Lstat(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		s.values = make(map[string]string)
+		s.savedFile = false
 		return nil
 	}
 	if err != nil {
@@ -155,6 +173,7 @@ func (s *Store) Load() error {
 		return fmt.Errorf("parse environment settings: %w", err)
 	}
 	s.values = values
+	s.savedFile = true
 	return nil
 }
 
@@ -214,6 +233,7 @@ func (s *Store) Save(values map[string]string) error {
 		return fmt.Errorf("replace environment settings: %w", err)
 	}
 	s.values = clone(values)
+	s.savedFile = true
 	return nil
 }
 

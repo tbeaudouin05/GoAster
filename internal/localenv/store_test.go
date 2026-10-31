@@ -23,6 +23,27 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestRequiredTemplateValuesAndSavedFileState(t *testing.T) {
+	want := map[string]string{"OVH_KEY": "", "TELEGRAM_TOKEN": ""}
+	if !reflect.DeepEqual(RequiredTemplateValues(), want) {
+		t.Fatal("required template names did not match")
+	}
+
+	store := NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if store.HasSavedFile() {
+		t.Fatal("missing environment file was reported as saved")
+	}
+	if err := store.Save(want); err != nil {
+		t.Fatal(err)
+	}
+	if !store.HasSavedFile() {
+		t.Fatal("saved environment file was not reported")
+	}
+}
+
 func TestParseRejectsInvalidInputWithoutEchoingValues(t *testing.T) {
 	for index, input := range []string{
 		"missing-separator sample-value",
