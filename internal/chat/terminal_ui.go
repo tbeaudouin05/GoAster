@@ -26,6 +26,9 @@ const (
 	ansiPrompt      = "\x1b[38;5;150m"
 	ansiStatus      = "\x1b[38;5;249m"
 	ansiDescription = "\x1b[38;5;245m"
+
+	terminalIntroHelp = "Use slash commands: /env to securely upload environment variables, /file to upload screenshots and other types of files."
+	terminalQuitHelp  = "Ctrl-D to quit."
 )
 
 // terminalUI keeps the interactive presentation separate from the line-based
@@ -102,8 +105,8 @@ func (ui terminalUI) renderIntro(output io.Writer, description string) {
 	if !ui.interactive {
 		fmt.Fprintf(output, "GoAster — %s\n", description)
 		fmt.Fprintln(output, "Type a message, then press Enter.")
-		fmt.Fprintln(output, "Describe what you want, such as a new OVH server or GoAster installed on an existing one.")
-		fmt.Fprintln(output, "Use /env for local secret setup and /file to inspect non-secret files.")
+		fmt.Fprintln(output, terminalIntroHelp)
+		fmt.Fprintln(output, terminalQuitHelp)
 		return
 	}
 
@@ -115,12 +118,7 @@ func (ui terminalUI) renderIntro(output io.Writer, description string) {
 			separator = " - "
 		}
 		ui.renderWrapped(output, "  ", "GoAster"+separator+description, width, ansiBorder)
-		ui.renderWrapped(output, "  ", "Describe what you want in plain language.", width, ansiDescription)
-		hint := "/env  local secrets  ·  /file  inspect files  ·  Ctrl-D  quit"
-		if ui.ascii {
-			hint = "/env  local secrets  |  /file  inspect files  |  Ctrl-D  quit"
-		}
-		ui.renderWrapped(output, "  ", hint, width, ansiDescription)
+		ui.renderIntroHelp(output, width)
 		fmt.Fprintln(output)
 		return
 	}
@@ -132,13 +130,13 @@ func (ui terminalUI) renderIntro(output io.Writer, description string) {
 		fmt.Fprintln(output, ui.paint(ansiBorder, ui.boxLine(line, boxWidth, innerWidth)))
 	}
 	fmt.Fprintln(output, ui.paint(ansiBorder, ui.boxBottom(boxWidth)))
-	ui.renderWrapped(output, "  ", "Describe what you want in plain language.", width, ansiDescription)
-	hint := "/env  local secrets  ·  /file  inspect files  ·  Ctrl-D  quit"
-	if ui.ascii {
-		hint = "/env  local secrets  |  /file  inspect files  |  Ctrl-D  quit"
-	}
-	ui.renderWrapped(output, "  ", hint, width, ansiDescription)
+	ui.renderIntroHelp(output, width)
 	fmt.Fprintln(output)
+}
+
+func (ui terminalUI) renderIntroHelp(output io.Writer, width int) {
+	ui.renderWrapped(output, "  ", terminalIntroHelp, width, ansiDescription)
+	ui.renderWrapped(output, "  ", terminalQuitHelp, width, ansiDescription)
 }
 
 func (ui terminalUI) renderStatus(output io.Writer, model, reason string) {

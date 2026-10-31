@@ -31,6 +31,37 @@ func TestTerminalUIKeepsLineProtocolOutsideInteractiveTerminals(t *testing.T) {
 	}
 }
 
+func TestTerminalUIIntroExplainsSlashCommandsAndQuit(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		ui   terminalUI
+	}{
+		{name: "line protocol", ui: terminalUI{}},
+		{name: "interactive", ui: terminalUI{interactive: true, width: 40}},
+		{name: "interactive ASCII", ui: terminalUI{interactive: true, ascii: true, width: 40}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			test.ui.renderIntro(&output, "chat provider")
+
+			result := strings.Join(strings.Fields(output.String()), " ")
+			want := "Use slash commands: /env to securely upload environment variables, /file to upload screenshots and other types of files. Ctrl-D to quit."
+			if !strings.Contains(result, want) {
+				t.Errorf("intro missing %q: %s", want, output.String())
+			}
+			for _, stale := range []string{
+				"Describe what you want in plain language.",
+				"/env  local secrets",
+				"/file  inspect files",
+			} {
+				if strings.Contains(output.String(), stale) {
+					t.Errorf("intro still contains stale help %q: %s", stale, output.String())
+				}
+			}
+		})
+	}
+}
+
 func TestTerminalUIWrapsAssistantBubbleToAvailableWidth(t *testing.T) {
 	var output bytes.Buffer
 	ui := terminalUI{interactive: true, width: 48}

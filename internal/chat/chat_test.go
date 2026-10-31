@@ -156,8 +156,8 @@ func TestLoop(t *testing.T) {
 	}
 	for _, want := range []string{
 		"chat provider", "Type a message, then press Enter.",
-		"Describe what you want, such as a new OVH server or GoAster installed on an existing one.",
-		"Use /env for local secret setup and /file to inspect non-secret files.",
+		"Use slash commands: /env to securely upload environment variables, /file to upload screenshots and other types of files.",
+		"Ctrl-D to quit.",
 		"Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello",
 		"assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear",
 		"assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit",
