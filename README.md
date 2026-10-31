@@ -256,6 +256,14 @@ OVH host. A freshly installed remote agent has no subscription credentials and
 does not use the terminal's credential file. The agent can run while waiting
 for login, but its loopback `/healthz` and `/chat` endpoints return unavailable.
 
+GoAster also remembers a successful server connection locally. It saves a
+small non-secret connection record beside the dedicated SSH key, containing
+only the server address, port, and optional known-hosts file. On the next start,
+GoAster checks that saved server first and does not ask you to type the address
+again or create another server. If the saved server cannot be reached, it says
+so and asks for the next simple action. The record never contains the private
+key, OpenAI login, Telegram token, pairing code, or environment values.
+
 After the remote agent is installed and its service account is ready for SSH,
 GoAster's `remote_login` handoff invokes the existing local flow below, using
 the remote agent service account as the SSH target. This is the onboarder's

@@ -20,14 +20,18 @@ Check the relevant service docs or dashboard for each variable's purpose and whe
 Enter secret values only through this local environment-file flow; never paste them into chat.
 GoAster masks values and saves confirmed settings locally.`
 
-const ovhOnboardingStart = `OVH onboarding started.
-If you already have a provisioned OVH host, say so and use the existing-host SSH workflow; do not provision another resource. After the remote service account is ready and you approve contacting that exact host, GoAster runs the local interactive remote-login flow itself.
-Before provisioning, create your Public Cloud project yourself in OVHcloud Manager: https://www.ovh.com/manager/#/hub/public-cloud
-Sign in, accept the terms, choose “Discover the Public Cloud universe,” then create and name the project. After creation, Discovery mode is the restricted starting state. If the project still shows the Discovery mode label, click OVHcloud Manager's Enable or Activate button only to start the payment-method activation flow. Then provide or add a payment method in that flow to deactivate and exit Discovery mode. The required final state is an active project with no Discovery mode label. GoAster cannot provision a server while the project remains in Discovery mode.
-Official steps: https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/create-a-public-cloud-project
-Return to GoAster only after the project is active and the Discovery mode label is gone. After approved credentials are available through the local /env flow, GoAster will verify the user-created project with the read-only GET /cloud/project. If no usable active project is found, stop and direct the user to finish creating the project or completing payment-method activation in Manager; GoAster does not create projects.
-Read-only next step: use the known OVH account/API endpoint and check GET /cloud/project. A project may have any name; do not require it to be named GoAster. Present the discovered project name, ID, and status, then ask whether the user wants to use it. Continue with quota, region, image, flavor, network, SSH-key, and instance checks only after the user confirms; the confirmation permits only read-only OVH inspection. Ask for a preferred Public Cloud deployment region only after project confirmation and only if it is genuinely unknown. Otherwise use the defaults: GoAster remote-agent workload, Ubuntu LTS, the smallest suitable machine, SSH-key-only access (automatically generate a dedicated local key if no usable key is available), SSH on TCP 22 unrestricted, and no other inbound application ports. Pricing retrieval is best-effort: report an official estimate if available, or say the price is unknown and continue to explicit approval based on the smallest suitable machine. Keep the US$8/month ceiling when a known estimate is available. Wait for explicit approval of the exact configuration before billable creation, SSH-key registration, or access/network changes. Use the local /env flow for secrets; never paste credentials into chat.
-Starting onboarding does not provision or change any OVH resource.`
+const ovhOnboardingStart = `OVH setup has started.
+
+I will first check whether GoAster already has a server connection saved on this computer. If it does, I will check that same server. I will not create a second server.
+
+You do not need to understand SSH, API calls, or service names. I will tell you one simple next step at a time.
+
+If a server is already found, I will say one of these:
+- “The server is ready. Please approve the OpenAI sign-in in the terminal.”
+- “The server is ready, but Telegram still needs setup. Do not test Telegram yet.”
+- “Setup is complete. Please send one normal message to the Telegram bot and check that it replies.”
+
+If no server is saved, I will guide you through creating one. I will ask before anything that could cost money or change your OVH account. Starting this screen does not create or change anything.`
 
 const environmentFileCommand = "/env-file"
 const fileCommand = "/file"

@@ -15,6 +15,46 @@ implementation with the administrator's terminal attached. Never run that
 login through `shell_execute`, capture its output for chat, or ask the
 administrator to type the command during normal onboarding.
 
+## Reuse an existing GoAster server connection
+
+At the start of onboarding, look for a usable GoAster SSH private key under the
+local user's `.ssh` directory. If the key has a matching connection record next
+to it, reuse that record instead of asking the user to type the server address
+again. The record is a local, non-secret JSON file named by adding
+`.goaster-target.json` to the private-key path, for example:
+
+```text
+~/.ssh/goaster-ovh-1793406745
+~/.ssh/goaster-ovh-1793406745.goaster-target.json
+```
+
+The record may contain only the SSH target, port, and optional known-hosts path.
+It must never contain a private key, password, token, OpenAI credential,
+Telegram token, pairing code, or environment value. Create its parent directory
+with mode `0700`, write the record with mode `0600`, write atomically through a
+temporary file in the same directory, and reject symlinks, malformed JSON,
+unknown fields, empty targets, whitespace/control characters, invalid ports, and
+paths outside the local user's home or `.ssh` directory.
+
+A safe record looks like this:
+
+```json
+{"target":"goaster@141.95.179.66","port":22,"known_hosts":"~/.ssh/known_hosts"}
+```
+
+On every restart, if both the private key and its record exist, first perform a
+read-only strict-host-key SSH check against that exact target. Check only whether
+GoAster's remote agent answers its local health check and whether the separate
+remote OpenAI login is already present and usable. Do not provision, install,
+restart, pair Telegram, or change OVH state during this automatic check. If the
+check fails, say plainly that the saved server could not be confirmed and ask
+for one next action; do not silently create another server.
+
+After a newly created host or an existing host has been successfully verified,
+save or refresh this record before continuing. On later starts, use the saved
+record automatically and tell the user in simple terms that GoAster found the
+server. Never print the private key or any secret-bearing remote output.
+
 ## Confirm the target and access
 
 Before connecting, establish the exact hostname or IP address, SSH username,
@@ -331,7 +371,19 @@ and an initial successful poll before sending its ready notification. If it was
 started before remote login, restart it after the agent is ready, with the
 required approval. Preserve the existing Telegram token and pairing boundaries.
 
-### Full onboarding completion gate
+### Plain-language status rules
+
+Always start with a short status sentence:
+
+- **Not ready:** “Telegram is not ready. Do not test it yet. Next: [one action].”
+- **Waiting for you:** “I found the server. Next: approve the OpenAI sign-in in the terminal.”
+- **Ready to test:** “Telegram setup is complete. Next: send one normal message to the bot and check for a reply.”
+- **Complete:** “Setup is complete. Telegram replied successfully.”
+
+Do not make the user interpret words such as `healthz`, `adapter`, `pairing
+state`, `SSH`, `API`, or `service`. If a technical detail matters, translate it
+into one short sentence explaining what the user must do.
+
 
 An `/healthz` result of `ok` means only that the remote agent is ready. It does
 not complete end-to-end onboarding. Keep the user-facing onboarding status
