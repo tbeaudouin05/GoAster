@@ -76,6 +76,8 @@ func TestPairedAttachmentDownloadsAndForwardsBytesAndCaption(t *testing.T) {
 		apiBase: "https://example.invalid",
 		client: doerFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
 			case strings.HasSuffix(r.URL.Path, "/getFile"):
 				var request struct {
 					FileID string `json:"file_id"`
@@ -145,6 +147,8 @@ func TestTelegramDocumentImageIsClassifiedFromBytes(t *testing.T) {
 		apiBase: "https://example.invalid",
 		client: doerFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
 			case strings.HasSuffix(r.URL.Path, "/getFile"):
 				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/photo.bin"}}`), nil
 			case strings.HasPrefix(r.URL.Path, "/file/bot"):
@@ -180,6 +184,8 @@ func TestUnsupportedImageIsReportedExplicitly(t *testing.T) {
 		apiBase: "https://example.invalid",
 		client: doerFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
 			case strings.HasSuffix(r.URL.Path, "/getFile"):
 				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/bad.png"}}`), nil
 			case strings.HasPrefix(r.URL.Path, "/file/bot"):
@@ -222,6 +228,9 @@ func TestPairedMediaOnlyMessageIsForwarded(t *testing.T) {
 		pairing: &pairing{userID: 42},
 		apiBase: "https://example.invalid",
 		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/sendChatAction") {
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			}
 			if strings.HasSuffix(r.URL.Path, "/getFile") {
 				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"photos/file.jpg"}}`), nil
 			}
@@ -309,6 +318,9 @@ func TestAttachmentDownloadEnforcesBoundedSizeAndRedactsErrors(t *testing.T) {
 		apiBase:            "https://example.invalid",
 		attachmentMaxBytes: 4,
 		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/sendChatAction") {
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			}
 			if strings.HasSuffix(r.URL.Path, "/getFile") {
 				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/large.bin"}}`), nil
 			}

@@ -49,6 +49,9 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 		ChatID  int64  `json:"chat_id"`
 	}
 	a := &adapter{token: testToken, pairing: p, apiBase: "https://example.invalid", client: doerFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/sendChatAction") {
+			return response(200, `{"ok":true,"result":true}`), nil
+		}
 		var payload struct {
 			ChatID int64  `json:"chat_id"`
 			Text   string `json:"text"`
@@ -135,6 +138,9 @@ func TestPairedGroupMessagesForwardChatIDAndReplyToOriginatingChat(t *testing.T)
 		pairing: &pairing{userID: 42},
 		apiBase: "https://example.invalid",
 		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/sendChatAction") {
+				return response(200, `{"ok":true,"result":true}`), nil
+			}
 			var payload struct {
 				ChatID int64  `json:"chat_id"`
 				Text   string `json:"text"`

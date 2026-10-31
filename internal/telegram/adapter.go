@@ -77,6 +77,11 @@ type telegramFile struct {
 	FilePath string `json:"file_path"`
 }
 
+const (
+	telegramTypingRefreshInterval = 4 * time.Second
+	telegramTypingActionTimeout   = 2 * time.Second
+)
+
 // Run starts polling only after the token and pairing state are protected.
 // ready is called after the agent is authenticated and Telegram accepts an
 // initial getUpdates request.
@@ -264,22 +269,28 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if text == "" && !hasAttachment {
 		return
 	}
+	stopTyping := a.startTyping(ctx, m.Chat.ID)
+	defer stopTyping()
+	sendFinal := func(text string) {
+		stopTyping()
+		a.send(ctx, m.Chat.ID, text)
+	}
 	attachments, err := a.downloadAttachments(ctx, m)
 	if err != nil {
 		if errors.Is(err, attachment.ErrUnsupportedImage) {
-			a.send(ctx, m.Chat.ID, "That image format is unsupported. Supported image formats are JPEG, PNG, GIF, and WebP.")
+			sendFinal("That image format is unsupported. Supported image formats are JPEG, PNG, GIF, and WebP.")
 			return
 		}
-		a.send(ctx, m.Chat.ID, "The Telegram attachment could not be downloaded safely.")
+		sendFinal("The Telegram attachment could not be downloaded safely.")
 		return
 	}
 	reply, err := a.askAgent(ctx, text, m.Chat.ID, attachments)
 	if err != nil {
 		if errors.Is(err, attachment.ErrUnsupportedImage) {
-			a.send(ctx, m.Chat.ID, "That image format is unsupported. Supported image formats are JPEG, PNG, GIF, and WebP.")
+			sendFinal("That image format is unsupported. Supported image formats are JPEG, PNG, GIF, and WebP.")
 			return
 		}
-		a.send(ctx, m.Chat.ID, "The remote agent could not answer. Check its remote authentication.")
+		sendFinal("The remote agent could not answer. Check its remote authentication.")
 		return
 	}
 	// Telegram limits message size. Chunks also handle non-BMP characters.
@@ -289,9 +300,43 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		if n > 2000 {
 			n = 2000
 		}
-		a.send(ctx, m.Chat.ID, string(runes[:n]))
+		sendFinal(string(runes[:n]))
 		runes = runes[n:]
 	}
+}
+
+func (a *adapter) startTyping(ctx context.Context, chatID int64) func() {
+	typingCtx, cancel := context.WithCancel(ctx)
+	stopped := make(chan struct{})
+
+	a.sendChatAction(typingCtx, chatID)
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(telegramTypingRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-typingCtx.Done():
+				return
+			case <-ticker.C:
+				a.sendChatAction(typingCtx, chatID)
+			}
+		}
+	}()
+
+	return func() {
+		cancel()
+		<-stopped
+	}
+}
+
+func (a *adapter) sendChatAction(ctx context.Context, chatID int64) {
+	actionCtx, cancel := context.WithTimeout(ctx, telegramTypingActionTimeout)
+	defer cancel()
+	_ = a.call(actionCtx, "sendChatAction", struct {
+		ChatID int64  `json:"chat_id"`
+		Action string `json:"action"`
+	}{chatID, "typing"}, nil)
 }
 
 func (a *adapter) send(ctx context.Context, userID int64, text string) {
