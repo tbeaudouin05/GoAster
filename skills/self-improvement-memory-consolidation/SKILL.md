@@ -7,9 +7,13 @@ description: Optional user-managed daily maintenance workflow for reviewing GoAs
 
 This is an optional, user-managed daily maintenance skill for GoAster's
 Markdown memory. It is an instruction-only workflow: a user may invoke it
-manually or from their own scheduler or cron after choosing the review scope
-and policy. It does not run automatically, install a cron job, add a scheduler
-subsystem, or change GoAster configuration.
+with an ordinary-language request, manually or from their own scheduler or cron
+after choosing the review scope and policy. Do not require a skill name or
+slash command. Apply this workflow only when memory consolidation is requested;
+its restrictions do not apply to unrelated tasks. Respect the requested scope:
+asking for proposed facts does not authorize writing them. It does not run
+automatically, install a cron job, add a scheduler subsystem, or change
+GoAster configuration.
 
 ## Storage contract
 

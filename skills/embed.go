@@ -19,3 +19,13 @@ var OVHRemote string
 //
 //go:embed internet-fetch/SKILL.md
 var InternetFetch string
+
+// TelegramGroupPrivacy contains guidance for Telegram group setup.
+//
+//go:embed telegram-group-privacy/SKILL.md
+var TelegramGroupPrivacy string
+
+// MemoryConsolidation contains the optional user-managed memory workflow.
+//
+//go:embed self-improvement-memory-consolidation/SKILL.md
+var MemoryConsolidation string

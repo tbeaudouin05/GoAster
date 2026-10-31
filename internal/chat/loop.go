@@ -74,6 +74,8 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 	}
 	fmt.Fprintf(w, "GoAster — %s\n", session.description())
 	fmt.Fprintln(w, "Type a message, then press Enter.")
+	fmt.Fprintln(w, "Describe what you want, such as a new OVH server or GoAster installed on an existing one.")
+	fmt.Fprintln(w, "Use /env for local secret setup and /file to inspect non-secret files.")
 	status()
 	if notice := session.consumeStartupNotice(); notice != "" {
 		fmt.Fprintf(w, "Notice: %s\n", notice)

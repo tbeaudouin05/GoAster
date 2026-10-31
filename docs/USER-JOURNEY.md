@@ -33,6 +33,14 @@ terminal. The local chat includes its built-in web search, web fetch, and
 `shell_execute` tools. Enter one message per line; blank lines are ignored.
 Use EOF (Ctrl-D on Unix) or close the terminal to exit.
 
+Describe what you want in ordinary language. GoAster follows the relevant
+packaged skill without requiring a skill name or slash command. For example,
+ask “Create a new OVH server and install GoAster on it,” “Install GoAster on
+my existing OVH server,” “Help my Telegram bot receive group messages,” or
+“Review my daily memory notes and propose durable facts to keep.” You can also
+ask GoAster to find or explain public web content. Memory consolidation is
+optional and runs only when requested.
+
 To inspect a local file, type `/file` and choose it in the native file picker.
 GoAster accepts supported images and other files up to 20 MiB, attaching images
 for visual inspection and documents for its local tools. Do not select files
@@ -55,9 +63,14 @@ directory permissions. The imported file replaces the previously saved set;
 canceling leaves it unchanged. The relevant skill explains which settings are
 needed and where to find them.
 
-## 4. Choose the correct OVH path
+## 4. Ask for the OVH setup you need
 
-Before starting OVH provisioning, create the Public Cloud project yourself in
+Ask GoAster to create a new OVH server and install GoAster, or to install it on
+an OVH server you already have. GoAster follows the appropriate workflow and
+asks if your intended starting point is unclear.
+
+For a new server, before starting OVH provisioning, create the Public Cloud
+project yourself in
 [Public Cloud in OVHcloud Manager](https://www.ovh.com/manager/#/hub/public-cloud).
 Sign in, accept the terms, choose **Discover the Public Cloud universe**, then
 create and name the project. After creation, **Discovery mode** is the
@@ -77,12 +90,12 @@ project, GoAster stops and directs the user to finish creating the project or
 completing payment-method activation in OVHcloud Manager; GoAster does not
 create projects through the API.
 
-The two packaged OVH skills cover different starting points:
+The packaged OVH workflows cover different starting points:
 
-| Starting point | Skill sequence | What it does |
-| --- | --- | --- |
-| There is no OVH host yet | [OVH provisioning](../skills/ovh/SKILL.md), then [OVH remote SSH](../skills/ovh-remote/SKILL.md) | The first skill expects a user-created active project, then uses defaults for a GoAster remote agent, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, automatic generation of a dedicated local SSH key when needed, unrestricted SSH on TCP 22, and no other inbound application ports. It asks for the preferred deployment region only when genuinely unknown. Before creation approval, it checks current official OVH prices with `web_search` and `web_fetch` and gives a brief broad estimate. If price is unknown, it says so and gets the user's acknowledgment before requesting explicit approval. The US$8/month ceiling applies when a price is known. The second connects to that host and bootstraps GoAster on it. |
-| An OVH host already exists | [OVH remote SSH](../skills/ovh-remote/SKILL.md) only | The SSH skill checks and bootstraps that host. It does not create or manage OVH resources through the OVH API. |
+| Example request | What GoAster does |
+| --- | --- |
+| “Create a new OVH server and install GoAster on it.” | The [provisioning workflow](../skills/ovh/SKILL.md) expects a user-created active project, then uses defaults for a GoAster remote agent, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, automatic generation of a dedicated local SSH key when needed, unrestricted SSH on TCP 22, and no other inbound application ports. It asks for the preferred deployment region only when genuinely unknown. Before creation approval, it checks current official OVH prices with `web_search` and `web_fetch` and gives a brief broad estimate. If price is unknown, it says so and gets the user's acknowledgment before requesting explicit approval. The US$8/month ceiling applies when a price is known. The [SSH workflow](../skills/ovh-remote/SKILL.md) then connects to that host and bootstraps GoAster. |
+| “Install GoAster on my existing OVH server.” | The [SSH workflow](../skills/ovh-remote/SKILL.md) checks and bootstraps that host. It does not create or manage OVH resources through the OVH API. |
 
 **New resource path:** use the account/API endpoint already known from
 credentials or the Create API Keys URL; that is separate from the preferred
@@ -94,9 +107,9 @@ Before creation approval, give a brief broad estimate with its official source
 and any region, currency, or VAT context needed to interpret it. If pricing
 cannot be verified, say the cost is unknown and get the user's acknowledgment
 before requesting explicit approval. Apply the US$8/month ceiling when a
-price is known. Then use the remote SSH skill to bootstrap the provisioned and
-verified resource. **Existing host path:** start with the remote SSH skill
-and skip provisioning.
+price is known. GoAster then uses the remote SSH workflow to bootstrap the
+provisioned and verified resource. **Existing host path:** GoAster starts with
+the remote SSH workflow and skips provisioning.
 
 ### Create API keys for a new resource
 
@@ -175,21 +188,17 @@ the existing SSH-backed login flow through the `remote_login` handoff, targeting
 account. After the exact host and local key are approved in chat, the handoff displays them in the local terminal and
 requires the administrator to type `YES` before connecting. It then attaches
 the terminal directly to the SSH login. The administrator does not type the
-login command as part of the normal path. GoAster waits for the administrator
+login command as part of the normal path. `remote_login` is an internal tool;
+the underlying `goaster remote-login` command is for exceptional manual use.
+Users do not normally type either name. GoAster waits for the administrator
 to approve the OpenAI device authorization before it continues onboarding.
-
-The handoff invokes the existing local flow with these arguments:
-
-```text
-goaster remote-login --target root@OVH_HOST --key ~/.ssh/goaster-ovh
-```
 
 The flow requires explicit target and key inputs, launches OpenSSH directly
 outside model `shell_execute`, and inherits the local terminal's input and
 output. It uses strict host-key verification and the supplied key only; the
-remote host must already have a trusted `known_hosts` entry. Use
-`--known-hosts PATH` only when the approved known-hosts file is not the
-default. Do not accept a changed or unknown host key without checking its
+remote host must already have a trusted `known_hosts` entry. GoAster passes
+the approved known-hosts file's path when it is not the default. Do not accept
+a changed or unknown host key without checking its
 fingerprint through a trusted channel.
 
 The terminal displays the URL and one-time code. The administrator opens the
@@ -223,7 +232,7 @@ the next pending step; agent-ready with Telegram incomplete is still partial.
 
 Create or select a bot with `@BotFather` and keep its bot token private. Use
 GoAster's local `/env` flow for the token; do not put it in a chat message,
-SSH argument, or script. Follow the Telegram setup steps in the
+SSH argument, or script. Ask GoAster to continue Telegram setup; it follows the
 [OVH remote SSH skill](../skills/ovh-remote/SKILL.md). That setup stores the
 token and a verifier for a fresh, random, one-time pairing code on the remote
 host. The approved remote setup receives the bot token and only the pairing

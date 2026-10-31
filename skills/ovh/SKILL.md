@@ -6,6 +6,13 @@ description: Provision OVHcloud resources from the host with explicit user appro
 # OVH provisioning
 
 This is an instruction skill for the GoAster agent, not executable code.
+Apply it when the user asks in ordinary language to provision a new OVH
+resource; do not require a skill name or slash command. If the user wants to
+install GoAster on an existing host, follow the OVH remote SSH skill instead.
+If the intended starting point is unclear from the request and available
+context, clarify it before provisioning. For a requested new host and
+installation, proceed to the remote SSH workflow after provisioning and
+verification.
 
 ## Run host commands
 

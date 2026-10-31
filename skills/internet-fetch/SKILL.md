@@ -7,7 +7,9 @@ description: Retrieve public internet content reliably with bounded retries and 
 
 This is an instruction skill for the GoAster agent, not executable code. It
 guides read-only retrieval of public internet content and does not change a
-client's networking defaults.
+client's networking defaults. Apply it when an ordinary-language request
+requires public internet retrieval; do not require a skill name or slash
+command.
 
 ## Retrieval workflow
 

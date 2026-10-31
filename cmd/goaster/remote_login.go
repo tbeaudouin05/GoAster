@@ -51,6 +51,7 @@ func parseRemoteLogin(args []string, output io.Writer) (remoteLoginOptions, erro
 	flags.SetOutput(output)
 	flags.Usage = func() {
 		fmt.Fprintln(output, "Usage: goaster remote-login --target USER@HOST --key PATH [options]")
+		fmt.Fprintln(output, "This is an internal command for exceptional use. Normally, ask GoAster in chat to set up or sign in to the remote agent.")
 		flags.PrintDefaults()
 	}
 	flags.StringVar(&options.Target, "target", "", "SSH target for the remote agent service account (required)")

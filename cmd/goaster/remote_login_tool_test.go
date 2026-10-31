@@ -82,6 +82,9 @@ func TestRemoteLoginToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *test
 	if registered.Name != remoteLoginToolName || registered.Handler == nil {
 		t.Fatalf("registered tool = %+v", registered)
 	}
+	if !strings.Contains(registered.Description, "internal tool") || !strings.Contains(registered.Description, "do not ask the user to type its name or the goaster remote-login command") {
+		t.Fatalf("tool description does not explain the internal handoff: %q", registered.Description)
+	}
 	if registered.Parameters["additionalProperties"] != false {
 		t.Fatalf("tool schema allows extra arguments: %+v", registered.Parameters)
 	}

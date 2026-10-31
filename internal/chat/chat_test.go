@@ -118,16 +118,28 @@ func TestSessionSelection(t *testing.T) {
 func TestLoop(t *testing.T) {
 	var output bytes.Buffer
 	var messages []string
+	requests := []string{
+		"Provision a new OVH server.",
+		"Create a new OVH server and install GoAster on it.",
+		"Install GoAster on my existing OVH server.",
+		"Find and explain this public document.",
+		"Help my Telegram bot receive messages in a group.",
+		"Review my daily memory notes and propose durable facts to keep.",
+	}
 	provider := providerFunc(func(_ context.Context, model, message string) (string, error) {
 		messages = append(messages, message)
 		return "received " + message, nil
 	})
-	err := runWithTestEnvStore(t, context.Background(), strings.NewReader("\n hello \n/history\n/clear\n/quit\n/exit\nsecond\n"), &output, NewSession(defaultConfig(t), provider))
-	if err != nil || !reflect.DeepEqual(messages, []string{"hello", "/history", "/clear", "/quit", "/exit", "second"}) {
+	err := runWithTestEnvStore(t, context.Background(), strings.NewReader("\n hello \n"+strings.Join(requests, "\n")+"\n/history\n/clear\n/quit\n/exit\nsecond\n"), &output, NewSession(defaultConfig(t), provider))
+	wantMessages := append([]string{"hello"}, requests...)
+	wantMessages = append(wantMessages, "/history", "/clear", "/quit", "/exit", "second")
+	if err != nil || !reflect.DeepEqual(messages, wantMessages) {
 		t.Fatalf("messages = %q, error = %v", messages, err)
 	}
 	for _, want := range []string{
 		"chat provider", "Type a message, then press Enter.",
+		"Describe what you want, such as a new OVH server or GoAster installed on an existing one.",
+		"Use /env for local secret setup and /file to inspect non-secret files.",
 		"Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello",
 		"assistant [gpt-6.1-sol]> received /history", "assistant [gpt-6.1-sol]> received /clear",
 		"assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit",
@@ -136,6 +148,9 @@ func TestLoop(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
+	}
+	if strings.Contains(output.String(), "OVH setup has started.") {
+		t.Errorf("ordinary-language requests unexpectedly entered the legacy /ovh display: %s", output.String())
 	}
 }
 

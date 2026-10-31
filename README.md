@@ -47,6 +47,24 @@ starts directly.
 The OAuth tokens and ChatGPT account ID are saved locally in
 `~/.goaster/auth.json` with `0600` permissions inside a `0700` directory.
 
+## Ask GoAster for what you need
+
+At the `you>` prompt, describe your goal in ordinary language. GoAster follows
+the relevant packaged skill; you do not need to name a skill or enter a slash
+command to select one. For example:
+
+- “Create a new OVH server and install GoAster on it.”
+- “Provision a new OVH server.”
+- “Install GoAster on my existing OVH server.”
+- “Find and explain this public document.”
+- “Help my Telegram bot receive messages in a group.”
+- “Review my daily memory notes and propose durable facts to keep.”
+
+GoAster asks for clarification if it cannot tell whether you want a new OVH
+resource or help with an existing host. Memory consolidation is optional and
+runs only when requested. For local secret setup and non-secret file inspection,
+use the operational `/env` and `/file` flows described below.
+
 ## Build packages (developers)
 
 Packaging requires Go 1.22+ and a POSIX-compatible shell. From the repository
@@ -116,11 +134,11 @@ marked Markdown context, newest note first. If the memory files are empty or
 missing, the existing request behavior is unchanged.
 
 Conversation summarization continues to update only the conversation summary
-in `session.json`; it never rewrites `MEMORY.md`. Use the packaged
+in `session.json`; it never rewrites `MEMORY.md`. Ask GoAster to review and
+consolidate memory when you want the optional, user-managed workflow in the
 [self-improvement-memory-consolidation skill](skills/self-improvement-memory-consolidation/SKILL.md)
-for an optional, user-managed daily maintenance workflow that reviews daily
-notes and promotes only verified durable facts into protected long-term
-memory. Users may invoke it from their own cron or scheduler; GoAster does not
+to review daily notes and promote only verified durable facts into protected
+long-term memory. Users may invoke it from their own cron or scheduler; GoAster does not
 install or provide an operating-system cron entry. The skill remains
 user-managed and is not automatically scheduled by GoAster.
 
@@ -177,10 +195,10 @@ remote OpenAI credentials remain mandatory.
 For the end-to-end path from packaged launch to remote Telegram operation, see
 the [GoAster user journey](docs/USER-JOURNEY.md).
 
-GoAster includes two packaged OVH skills for separate stages. Use the
-[OVH provisioning skill](skills/ovh/SKILL.md) to provision new OVHcloud
-resources. It requires a user-created active project and verifies it with
-read-only project discovery before checking quota, region, and options. Before
+GoAster follows the [OVH provisioning skill](skills/ovh/SKILL.md) when you ask
+for new OVHcloud resources. It requires a user-created active project and
+verifies it with read-only project discovery before checking quota, region,
+and options. Before
 creation approval, GoAster uses `web_search` and `web_fetch` to check current
 official OVH prices and gives a brief, broad estimate with its source. It adds
 region, currency, or VAT context when needed. If pricing cannot be verified,
@@ -192,11 +210,11 @@ remote agent on Ubuntu LTS, the smallest suitable machine, SSH-key-only access
 SSH on TCP 22, and no other inbound application ports. It asks for a preferred
 deployment region only when that preference is genuinely unknown. The
 US$8/month ceiling applies when a price is known. It waits for explicit
-approval before billable creation or other mutations. Use the
-[OVH remote SSH skill](skills/ovh-remote/SKILL.md) to connect to and bootstrap
-an already-existing OVH host, including a host just provisioned with the first
-skill. It starts with read-only SSH preflight, requires fresh explicit approval
-before each remote mutation, and verifies the result; it does not provision
+approval before billable creation or other mutations. When you ask to install
+GoAster on an existing OVH host, including one just provisioned, GoAster follows
+the [OVH remote SSH skill](skills/ovh-remote/SKILL.md). It starts with read-only
+SSH preflight, requires fresh explicit approval before each remote mutation,
+and verifies the result; it does not provision
 resources through the OVH API.
 
 Before starting OVH provisioning, create the Public Cloud project yourself in
@@ -243,9 +261,9 @@ in screenshots.
 **End-to-end:** Start in local GoAster chat and sign in to OVHcloud directly on
 its website. Enter the generated OVH API key values and Telegram bot token only
 through GoAster's local `/env` environment-file flow. Never paste keys into
-chat or include them in screenshots. For a new host, provision
-the OVH resource with explicit approval, then use the SSH skill to bootstrap
-it; for an existing host, start with SSH bootstrap.
+chat or include them in screenshots. For a new host, GoAster provisions
+the OVH resource with explicit approval and then bootstraps it over SSH; for
+an existing host, it starts with SSH bootstrap.
 After remote bootstrap and agent service setup, GoAster itself automatically
 starts the existing SSH-backed remote OpenAI login as `root` through its
 `remote_login` handoff. The remote agent and Telegram adapter intentionally
@@ -257,8 +275,9 @@ the terminal directly to the login flow, waits while the administrator
 approves the OpenAI device authorization in a browser, and completes the
 existing read-only `/healthz` check before continuing onboarding. The
 administrator must approve both the host contact and device authorization;
-GoAster cannot approve them on their behalf. The normal path does not ask the
-administrator to type `goaster remote-login`. Keep local OpenAI credentials on
+GoAster cannot approve them on their behalf. `remote_login` is an internal
+tool and `goaster remote-login` is an internal command for exceptional use;
+users do not normally type either one. Keep local OpenAI credentials on
 the local machine; remote credentials are stored separately on the host.
 
 The local package does not need Go to bootstrap the remote agent: the SSH skill
@@ -285,17 +304,13 @@ again or create another server. If the saved server cannot be reached, it says
 so and asks for the next simple action. The record never contains the private
 key, OpenAI login, Telegram token, pairing code, or environment values.
 
-After the remote agent is installed and root SSH is ready, GoAster's
-`remote_login` handoff invokes the existing local flow below, using `root` as
-the SSH target. The normal onboarding path must not create or use a separate
-unprivileged GoAster runtime account. This is the onboarder's invocation, not
-a command the administrator needs to type during normal onboarding:
+After the remote agent is installed and root SSH is ready, GoAster's internal
+`remote_login` handoff invokes the protected login flow using `root` as the
+SSH target. The normal onboarding path must not create or use a separate
+unprivileged GoAster runtime account. The underlying `goaster remote-login`
+command is for exceptional manual use, not a normal onboarding step.
 
-```text
-goaster remote-login --target root@OVH_HOST --key ~/.ssh/goaster-ovh
-```
-
-The command requires an explicit `--target` and local `--key`, invokes OpenSSH
+The protected flow requires an approved SSH target and local key, invokes OpenSSH
 directly through the local CLI's protected controlling-terminal handoff, and
 does not pass through the model's `shell_execute` tool. The explicit command
 uses only the current process's `/dev/tty` on supported Unix systems. The
@@ -310,7 +325,7 @@ failure, decline, invalid-request, or terminal-unavailable status. It requires
 strict host-key verification, uses
 only the supplied key, and never accepts a password, token, or credential-file
 argument. The host must already have a trusted entry in the user's
-`known_hosts`; use `--known-hosts PATH` when the approved file is not the
+`known_hosts`; GoAster passes the approved file's path when it is not the
 default. Do not bypass a host-key mismatch or accept an unverified fingerprint.
 
 The interactive terminal displays the URL and one-time code for the

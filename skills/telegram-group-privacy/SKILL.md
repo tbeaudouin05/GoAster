@@ -7,7 +7,9 @@ description: Explain Telegram BotFather Group Privacy Mode and guide approved Go
 
 This instruction-only skill explains how Group Privacy Mode affects Telegram
 messages received by a GoAster bot. Use it whenever configuring Telegram for
-GoAster or diagnosing missing messages in a group.
+GoAster or diagnosing missing messages in a group, including when the user
+asks in ordinary language. Do not require a skill name or slash command to
+select this workflow; `/setprivacy` remains an operational BotFather command.
 
 ## What Group Privacy Mode controls
 
