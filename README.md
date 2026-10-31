@@ -179,18 +179,22 @@ the [GoAster user journey](docs/USER-JOURNEY.md).
 
 GoAster includes two packaged OVH skills for separate stages. Use the
 [OVH provisioning skill](skills/ovh/SKILL.md) to provision new OVHcloud
-resources. It requires a user-created active project, verifies it with
-read-only project discovery, then checks quota, region, options, and pricing on
-a best-effort basis. For an ordinary new-host setup, its defaults are a GoAster
+resources. It requires a user-created active project and verifies it with
+read-only project discovery before checking quota, region, and options. Before
+creation approval, GoAster uses `web_search` and `web_fetch` to check current
+official OVH public prices for the selected region and options, then gives a
+broad approximate estimate with the source URL, region, currency, VAT
+treatment when stated, and date checked. The estimate is not an
+account-specific bill or exact quote. If official pricing cannot be verified,
+GoAster reports the cost as unknown and requires the user's acknowledgment
+before the existing explicit approval gate. For an ordinary new-host setup,
+its defaults are a GoAster
 remote agent on Ubuntu LTS, the smallest suitable machine, SSH-key-only access
 (with a dedicated local key generated automatically if needed), unrestricted
 SSH on TCP 22, and no other inbound application ports. It asks for a preferred
-deployment region only when that preference is genuinely unknown, reports its
-assumptions and any official price after read-only checks, and if pricing is
-unavailable reports that clearly while continuing to explicit approval based
-on the smallest suitable machine. The US$8/month ceiling applies when a price
-is known. It waits for explicit approval before billable creation or other
-mutations. Use the
+deployment region only when that preference is genuinely unknown. The
+US$8/month ceiling applies when a price is known. It waits for explicit
+approval before billable creation or other mutations. Use the
 [OVH remote SSH skill](skills/ovh-remote/SKILL.md) to connect to and bootstrap
 an already-existing OVH host, including a host just provisioned with the first
 skill. It starts with read-only SSH preflight, requires fresh explicit approval

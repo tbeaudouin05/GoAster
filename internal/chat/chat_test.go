@@ -217,11 +217,15 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 		"Select the smallest available machine suitable for the workload.",
 		"If no usable project key has a matching local private identity, generate a",
 		"dedicated local Ed25519 keypair automatically.",
-		"Present the exact proposed resource, applied assumptions, SSH rule, and official price if available;",
-		"if pricing is unavailable, say it is unknown and continue to the approval request rather than stopping.",
-		"Before creating or changing any billable resource, deleting or replacing",
+		"Before asking for approval to create a server or other OVH resource, complete the Public price estimate above.",
+		"Present the exact proposed resource, applied assumptions, SSH rule, and a broad approximate estimate",
+		"with its source URL, region, currency, VAT treatment when available, and date checked.",
+		"Clearly state that it is not an account-specific bill or exact quote.",
+		"If pricing is unavailable, say the current cost is unknown",
+		"continue to approval only after the user acknowledges that it could not be verified.",
+		"Before creating any server or other OVH resource, changing any billable resource, deleting or replacing",
 		"For resource creation, the confirmation must",
-		"follow the read-only assumptions and price report (including a clear statement when price is unknown) and cover that",
+		"follow the read-only assumptions and completed price report (including a clear statement when price is unknown)",
 		"configuration.",
 	}
 	previous := -1
@@ -235,6 +239,24 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 			t.Errorf("OVH project workflow step %q is out of order", step)
 		}
 		previous = position
+	}
+	for _, want := range []string{
+		"perform a fresh public-web search with GoAster's built-in `web_search`",
+		"Use `web_fetch` to read the matching official OVHcloud price page",
+		"https://www.ovhcloud.com/en/public-cloud/prices/",
+		"search snippets alone and third-party prices are not confirmation.",
+		"not an OVH billing API or account-specific pricing endpoint.",
+		"after read-only inspection has identified the deployment region, smallest suitable machine, and required options",
+		"the region and currency shown by the source (mark either as unspecified when the source does not state it)",
+		"Do not use the source's publication date as the check date.",
+		"Do not present a numeric price as applying to the selected region",
+		"Approximate public-price estimate; not an account-specific bill or exact quote.",
+		"date checked in `YYYY-MM-DD` form.",
+		"do not guess or substitute third-party prices.",
+	} {
+		if !strings.Contains(policy, want) {
+			t.Errorf("OVH provisioning price precheck missing requirement %q", want)
+		}
 	}
 	if !strings.Contains(policy, "Confirmation for one action does not authorize a different action.") {
 		t.Fatal("OVH project selection confirmation must remain distinct from resource-creation approval")

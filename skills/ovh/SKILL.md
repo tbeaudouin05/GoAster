@@ -55,11 +55,11 @@ method, or network exposure during ordinary onboarding:
   network charges when official pricing is available. This is a hard default
   ceiling when the estimate is available. If the smallest suitable
   configuration is known to exceed it, do not create it until the user
-  explicitly overrides the ceiling. Pricing retrieval is best-effort and
-  informational: if official pricing is unavailable, report that the cost is
-  unknown and continue the approval flow based on the smallest suitable
-  machine. Do not guess a price or stop solely because pricing could not be
-  retrieved.
+  explicitly overrides the ceiling. Complete the public price precheck before
+  creation approval; the estimate is informational. If official pricing is
+  unavailable, report that the cost is unknown and continue the approval flow
+  based on the smallest suitable machine only after the user's acknowledgment.
+  Do not guess a price or stop solely because pricing could not be retrieved.
 
 The user may explicitly override any default. An OVH account/API region and
 endpoint are separate from the Public Cloud deployment region. Reuse the
@@ -175,11 +175,42 @@ verification workflow above; `POST /cloud/project/*` is for later
 project-scoped provisioning operations. The user does not enter a project ID
 on the Create API Keys screen.
 
-When available, price estimates come from OVHcloud's [current Public Cloud
-price list](https://www.ovhcloud.com/en/public-cloud/prices/). Retrieve pricing
-on a best-effort basis; if it cannot be retrieved, report that the price is
-unknown and continue the approval flow based on the smallest suitable machine.
-These API key rights are the agreed set for GoAster server provisioning.
+### Public price estimate
+
+Before requesting approval to create any server or other OVH resource,
+perform a fresh public-web search with GoAster's built-in
+`web_search` for current official OVHcloud Public Cloud prices. Include the
+selected deployment region and relevant option types in the search, such as
+compute, required storage, public addressing, and predictable network charges.
+Start with OVHcloud's [Public Cloud price list](https://www.ovhcloud.com/en/public-cloud/prices/).
+Use `web_fetch` to read the matching official OVHcloud price page or another
+official OVHcloud pricing source before estimating; search snippets alone and
+third-party prices are not confirmation. Use public prices only, not an OVH
+billing API or account-specific pricing endpoint. This is a read-only check.
+
+Run this check after read-only inspection has identified the deployment
+region, smallest suitable machine, and required options, and before presenting
+the creation approval request. Give a broad, rounded estimate or range based
+on the published price units; if converting hourly rates to a monthly amount,
+state the approximate-hours-per-month assumption. Include the source name and
+direct URL, the region and currency shown by the source (mark either as
+unspecified when the source does not state it), its VAT treatment when stated
+(otherwise say it is not stated), and the current date checked in
+`YYYY-MM-DD` form. Do not use the source's publication date as the check date.
+Do not present a numeric price as applying to the selected region if the source
+does not establish that region or its currency. Include only components with
+official published prices and identify material components or charges not
+covered by the source. Say clearly: “Approximate public-price estimate; not
+an account-specific bill or exact quote.” Do not imply the public options are
+available in the user's account.
+
+If the search or official page does not provide usable prices for the selected
+region or options, do not guess or substitute third-party prices. State that
+the current official price could not be verified and is unknown, identify the
+official source and URL checked and the date, and continue only through the
+existing approval flow after the user acknowledges that the cost could not be
+verified. These API key rights are the agreed set for GoAster server
+provisioning.
 
 Use the generic `/file` command in the local terminal to inspect a file,
 including a dashboard screenshot. It accepts supported images and documents
@@ -214,25 +245,31 @@ secret values belong only in the local `/env` flow.
    key for OVH. Do not overwrite an existing key. Report the safe key label,
    fingerprint, and local key path. Generating the local key does not authorize
    an OVH change; defer registering the public key in the project and creating
-   the instance until explicit approval. Present the exact proposed resource,
-   applied assumptions, SSH rule, and official price if available; if pricing
-   is unavailable, say it is unknown and continue to the approval request
-   rather than stopping.
-3. Before creating or changing any billable resource, deleting or replacing
-   data or resources, registering the generated public SSH key, or changing
-   access or network exposure, explain the exact action, affected resources,
-   costs or consequences, and obtain explicit user confirmation. For resource
-   creation, the confirmation must follow the read-only assumptions and price
-   report (including a clear statement when price is unknown) and cover that
-   exact configuration. Do not exceed the US$8/month default ceiling when a
-   known estimate is available without an explicit budget override.
+   the instance until explicit approval.
+3. Before asking for approval to create a server or other OVH resource,
+   complete the Public price estimate above. Present the exact proposed
+   resource, applied assumptions, SSH rule, and a broad approximate estimate
+   with its source URL, region, currency, VAT treatment when available, and
+   date checked. Clearly state that it is not an account-specific bill or
+   exact quote. If pricing is unavailable, say the current cost is unknown
+   and continue to approval only after the user acknowledges that it could not
+   be verified.
+4. Before creating any server or other OVH resource, changing any billable
+   resource, deleting or replacing data or resources, registering the generated
+   public SSH key, or changing access or network exposure, explain the exact
+   action, affected resources, costs or consequences, and obtain explicit user
+   confirmation. For resource creation, the confirmation must follow the
+   read-only assumptions and completed price report (including a clear
+   statement when price is unknown) and cover that exact configuration. Do
+   not exceed the US$8/month default ceiling when a known estimate is available
+   without an explicit budget override.
    Confirmation for one action does not authorize a different action.
-4. After the relevant confirmation, run the requested OVH API or installed
+5. After the relevant confirmation, run the requested OVH API or installed
    client steps through `shell_execute`. Wait for the resource to become ready,
    then verify its ID, state, address, and requested access or setup. Do not
    retry an uncertain mutation blindly or delete a partially provisioned
    resource without confirmation.
-5. Remove temporary scripts when finished. Do not install tools or add repository dependencies as part of provisioning without the user's approval.
+6. Remove temporary scripts when finished. Do not install tools or add repository dependencies as part of provisioning without the user's approval.
 
 ## Report
 
