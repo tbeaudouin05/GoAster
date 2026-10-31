@@ -305,6 +305,24 @@ func TestConcurrentAuthChecksShareOneRefresh(t *testing.T) {
 	}
 }
 
+func TestOpenAIInstructionsGuideAccurateMultiStepProgress(t *testing.T) {
+	for _, want := range []string{
+		"For genuinely multi-step workflows, first present a concise numbered plan and a total based on the known scope",
+		"do not invent a total when discovery is still needed",
+		"After each meaningful completed business step or approval-gated stage, report actual completed, total, and remaining counts in plain text",
+		"Progress: 5/10 steps done, 5 more to go.",
+		"If remaining scope is unknown, say what is complete and that the rest is still being assessed, without a numeric total or remaining count.",
+		"If discovery changes the plan, briefly explain the finding, revise the numbered plan and total, and report subsequent progress against that revision.",
+		"Do not count individual shell commands as business steps.",
+		"Keep single-step questions and tasks concise, without a plan or progress banner.",
+		"Progress reporting does not change or replace existing plain-text, approval, safety, secret-handling, or partial-onboarding rules.",
+	} {
+		if !strings.Contains(openAIInstructions, want) {
+			t.Errorf("OpenAI instructions missing multi-step progress guidance %q", want)
+		}
+	}
+}
+
 func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 	for _, test := range []struct {
 		name    string
