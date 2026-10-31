@@ -188,29 +188,26 @@ official OVHcloud pricing source before estimating; search snippets alone and
 third-party prices are not confirmation. Use public prices only, not an OVH
 billing API or account-specific pricing endpoint. This is a read-only check.
 
-Run this check after read-only inspection has identified the deployment
-region, smallest suitable machine, and required options, and before presenting
-the creation approval request. Give a broad, rounded estimate or range based
-on the published price units; if converting hourly rates to a monthly amount,
-state the approximate-hours-per-month assumption. Include the source name and
-direct URL, the region and currency shown by the source (mark either as
-unspecified when the source does not state it), its VAT treatment when stated
-(otherwise say it is not stated), and the current date checked in
-`YYYY-MM-DD` form. Do not use the source's publication date as the check date.
-Do not present a numeric price as applying to the selected region if the source
-does not establish that region or its currency. Include only components with
-official published prices and identify material components or charges not
-covered by the source. Say clearly: “Approximate public-price estimate; not
-an account-specific bill or exact quote.” Do not imply the public options are
-available in the user's account.
+Run this check after read-only inspection identifies the deployment region,
+smallest suitable machine, and required options, and before requesting
+creation approval. Use a broad, rounded estimate or range based on official
+published prices. If converting an hourly rate to a monthly amount, state the
+approximate-hours-per-month assumption.
 
-If the search or official page does not provide usable prices for the selected
-region or options, do not guess or substitute third-party prices. State that
-the current official price could not be verified and is unknown, identify the
-official source and URL checked and the date, and continue only through the
-existing approval flow after the user acknowledges that the cost could not be
-verified. These API key rights are the agreed set for GoAster server
-provisioning.
+Keep the user-facing price explanation to a sentence or two, for example:
+“OVH’s public price for this setup is approximately [currency and amount]/month, based on
+the [official OVH price list](URL) checked [YYYY-MM-DD]. This is a broad
+estimate, not an exact quote.” Add a short note with region, currency, VAT
+treatment, or material uncovered charges only when needed to interpret the
+estimate. Do not present a numeric price as applying to the selected region
+unless the official source establishes both the region and currency, or imply
+that listed options are available in the user's account.
+
+If no usable official price covers the selected region or options, do not
+guess or use third-party prices. Say the current price is unknown, briefly
+identify the official source checked and date, and get the user's
+acknowledgment before requesting explicit creation approval. These API key
+rights are the agreed set for GoAster server provisioning.
 
 Use the generic `/file` command in the local terminal to inspect a file,
 including a dashboard screenshot. It accepts supported images and documents
@@ -248,12 +245,9 @@ secret values belong only in the local `/env` flow.
    the instance until explicit approval.
 3. Before asking for approval to create a server or other OVH resource,
    complete the Public price estimate above. Present the exact proposed
-   resource, applied assumptions, SSH rule, and a broad approximate estimate
-   with its source URL, region, currency, VAT treatment when available, and
-   date checked. Clearly state that it is not an account-specific bill or
-   exact quote. If pricing is unavailable, say the current cost is unknown
-   and continue to approval only after the user acknowledges that it could not
-   be verified.
+   resource, assumptions, SSH rule, and brief estimate. If pricing is
+   unavailable, say the current cost is unknown and get the user's
+   acknowledgment before requesting approval.
 4. Before creating any server or other OVH resource, changing any billable
    resource, deleting or replacing data or resources, registering the generated
    public SSH key, or changing access or network exposure, explain the exact

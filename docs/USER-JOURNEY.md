@@ -81,7 +81,7 @@ The two packaged OVH skills cover different starting points:
 
 | Starting point | Skill sequence | What it does |
 | --- | --- | --- |
-| There is no OVH host yet | [OVH provisioning](../skills/ovh/SKILL.md), then [OVH remote SSH](../skills/ovh-remote/SKILL.md) | The first skill expects a user-created active project, then uses defaults for a GoAster remote agent, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, automatic generation of a dedicated local SSH key when needed, unrestricted SSH on TCP 22, and no other inbound application ports. It asks for the preferred deployment region only when genuinely unknown. Before creation approval, it searches for and fetches current official OVH public prices, then presents a broad approximate estimate with source, region, currency, VAT treatment when stated, and date checked. The estimate is not an account-specific bill or exact quote. If public pricing cannot be verified, it reports the cost as unknown and requires the user's acknowledgment before the existing approval gate. The US$8/month ceiling applies when a price is known. The second connects to that host and bootstraps GoAster on it. |
+| There is no OVH host yet | [OVH provisioning](../skills/ovh/SKILL.md), then [OVH remote SSH](../skills/ovh-remote/SKILL.md) | The first skill expects a user-created active project, then uses defaults for a GoAster remote agent, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, automatic generation of a dedicated local SSH key when needed, unrestricted SSH on TCP 22, and no other inbound application ports. It asks for the preferred deployment region only when genuinely unknown. Before creation approval, it checks current official OVH prices with `web_search` and `web_fetch` and gives a brief broad estimate. If price is unknown, it says so and gets the user's acknowledgment before requesting explicit approval. The US$8/month ceiling applies when a price is known. The second connects to that host and bootstraps GoAster on it. |
 | An OVH host already exists | [OVH remote SSH](../skills/ovh-remote/SKILL.md) only | The SSH skill checks and bootstraps that host. It does not create or manage OVH resources through the OVH API. |
 
 **New resource path:** use the account/API endpoint already known from
@@ -89,15 +89,14 @@ credentials or the Create API Keys URL; that is separate from the preferred
 Public Cloud deployment region. Ask for the deployment region only when it is
 genuinely unknown. After read-only project, quota, image, flavor, network, SSH
 key, and existing-instance checks, GoAster must use `web_search` and `web_fetch`
-to check current official OVH public prices for the selected region and options.
-Before creation approval, report a broad approximate estimate with its source
-URL, region, currency, VAT treatment when stated, and date checked, and label it
-as neither an account-specific bill nor an exact quote. If official pricing
-cannot be verified, report the cost as unknown and obtain the user's
-acknowledgment before the existing explicit approval gate. Apply the US$8/month
-ceiling when a price is known. Then use the remote SSH skill to bootstrap the
-provisioned and verified resource. **Existing host path:** start with the
-remote SSH skill and skip provisioning.
+to check current official OVH prices for the selected region and options.
+Before creation approval, give a brief broad estimate with its official source
+and any region, currency, or VAT context needed to interpret it. If pricing
+cannot be verified, say the cost is unknown and get the user's acknowledgment
+before requesting explicit approval. Apply the US$8/month ceiling when a
+price is known. Then use the remote SSH skill to bootstrap the provisioned and
+verified resource. **Existing host path:** start with the remote SSH skill
+and skip provisioning.
 
 ### Create API keys for a new resource
 

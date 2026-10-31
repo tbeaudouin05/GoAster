@@ -182,12 +182,10 @@ GoAster includes two packaged OVH skills for separate stages. Use the
 resources. It requires a user-created active project and verifies it with
 read-only project discovery before checking quota, region, and options. Before
 creation approval, GoAster uses `web_search` and `web_fetch` to check current
-official OVH public prices for the selected region and options, then gives a
-broad approximate estimate with the source URL, region, currency, VAT
-treatment when stated, and date checked. The estimate is not an
-account-specific bill or exact quote. If official pricing cannot be verified,
-GoAster reports the cost as unknown and requires the user's acknowledgment
-before the existing explicit approval gate. For an ordinary new-host setup,
+official OVH prices and gives a brief, broad estimate with its source. It adds
+region, currency, or VAT context when needed. If pricing cannot be verified,
+GoAster says the cost is unknown and gets the user's acknowledgment before
+requesting explicit approval. For an ordinary new-host setup,
 its defaults are a GoAster
 remote agent on Ubuntu LTS, the smallest suitable machine, SSH-key-only access
 (with a dedicated local key generated automatically if needed), unrestricted
