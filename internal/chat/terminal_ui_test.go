@@ -94,7 +94,9 @@ func TestTerminalTextWidthUsesIndependentUnicodeCellFixtures(t *testing.T) {
 		want int
 	}{
 		{name: "ordinary ZWJ text", text: "a\u200db", want: 2},
+		{name: "non-emoji ZWJ text", text: "\u3031\u200d\u3031", want: 4},
 		{name: "supplementary wide character", text: "\U0001b001", want: 2},
+		{name: "supplementary wide character at range end", text: "\U0001b11f", want: 2},
 		{name: "emoji presentation", text: "\u2600\ufe0f", want: 2},
 		{name: "emoji ZWJ sequence", text: "👩‍💻", want: 2},
 	}
@@ -117,6 +119,50 @@ func TestWrapTerminalTextKeepsArbitraryZWJTextWithinWidth(t *testing.T) {
 	}
 	if strings.Join(lines, "|") != strings.Join(want, "|") {
 		t.Fatalf("wrapped ZWJ text = %q, want %q", lines, want)
+	}
+}
+
+func TestTerminalUIWrapsWidthSensitiveUnicodeAtNarrowWidths(t *testing.T) {
+	const prefix = "  • "
+	cases := []struct {
+		name    string
+		message string
+		want    []string
+	}{
+		{
+			name:    "non-emoji ZWJ text",
+			message: strings.Repeat("\u3031\u200d\u3031", 2),
+			want: []string{
+				prefix + "\u3031\u200d\u3031",
+				prefix + "\u3031\u200d\u3031",
+			},
+		},
+		{
+			name:    "supplementary wide text",
+			message: strings.Repeat("\U0001b11f", 3),
+			want: []string{
+				prefix + "\U0001b11f\U0001b11f",
+				prefix + "\U0001b11f",
+			},
+		},
+	}
+
+	for _, fixture := range cases {
+		t.Run(fixture.name, func(t *testing.T) {
+			var output bytes.Buffer
+			ui := terminalUI{interactive: true, color: false, width: 8}
+			ui.renderInfo(&output, fixture.message)
+
+			lines := strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n")
+			if strings.Join(lines, "|") != strings.Join(fixture.want, "|") {
+				t.Fatalf("rendered lines = %q, want %q", lines, fixture.want)
+			}
+			for _, line := range lines {
+				if terminalTextWidth(line) > ui.width {
+					t.Errorf("rendered line width = %d, want at most %d: %q", terminalTextWidth(line), ui.width, line)
+				}
+			}
+		})
 	}
 }
 

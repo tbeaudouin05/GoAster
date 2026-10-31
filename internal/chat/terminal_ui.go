@@ -790,7 +790,7 @@ func terminalEmojiRune(character rune) bool {
 		return true
 	case character >= '\u2b00' && character <= '\u2bff':
 		return true
-	case character >= '\u3030' && character <= '\u303d':
+	case character == '\u3030' || character == '\u303d':
 		return true
 	case character == '\u3297' || character == '\u3299':
 		return true
@@ -823,7 +823,7 @@ func terminalWideRune(character rune) bool {
 		character >= 0x2e80 && character <= 0xa4cf || character >= 0xac00 && character <= 0xd7a3 ||
 		character >= 0xf900 && character <= 0xfaff || character >= 0xfe10 && character <= 0xfe19 ||
 		character >= 0xfe30 && character <= 0xfe6f || character >= 0xff00 && character <= 0xff60 ||
-		character >= 0xffe0 && character <= 0xffe6 || character >= 0x1b000 && character <= 0x1b0ff ||
+		character >= 0xffe0 && character <= 0xffe6 || character >= 0x1b000 && character <= 0x1b122 ||
 		character >= 0x1f000 && character <= 0x1faff ||
 		character >= 0x20000 && character <= 0x3fffd)
 }
