@@ -87,6 +87,39 @@ func TestTerminalTextWidthUsesDisplayCellsAndCombiningMarks(t *testing.T) {
 	}
 }
 
+func TestTerminalTextWidthUsesIndependentUnicodeCellFixtures(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want int
+	}{
+		{name: "ordinary ZWJ text", text: "a\u200db", want: 2},
+		{name: "supplementary wide character", text: "\U0001b001", want: 2},
+		{name: "emoji presentation", text: "\u2600\ufe0f", want: 2},
+		{name: "emoji ZWJ sequence", text: "👩‍💻", want: 2},
+	}
+	for _, fixture := range cases {
+		t.Run(fixture.name, func(t *testing.T) {
+			if got := terminalTextWidth(fixture.text); got != fixture.want {
+				t.Fatalf("display width of %q = %d, want %d", fixture.text, got, fixture.want)
+			}
+		})
+	}
+}
+
+func TestWrapTerminalTextKeepsArbitraryZWJTextWithinWidth(t *testing.T) {
+	text := strings.Repeat("a\u200db", 18)
+	lines := wrapTerminalText(text, 12)
+	want := []string{
+		strings.Repeat("a\u200db", 6),
+		strings.Repeat("a\u200db", 6),
+		strings.Repeat("a\u200db", 6),
+	}
+	if strings.Join(lines, "|") != strings.Join(want, "|") {
+		t.Fatalf("wrapped ZWJ text = %q, want %q", lines, want)
+	}
+}
+
 func TestSanitizeTerminalTextRemovesCSIOSCAndControls(t *testing.T) {
 	fixture := "before\x1b[31mred\x1b]0;hidden title\aafter\x07\x1b[2Jdone"
 	if got, want := sanitizeTerminalText(fixture), "beforeredafterdone"; got != want {
@@ -125,6 +158,26 @@ func TestTerminalUIUsesCompactASCIIAtNarrowWidths(t *testing.T) {
 	result := asciiOutput.String()
 	if strings.Contains(result, "\x1b") || strings.ContainsAny(result, "╭╮╰╯│─●•›✓×") {
 		t.Fatalf("ASCII fallback retained ANSI or Unicode markers: %q", result)
+	}
+}
+
+func TestTerminalUIASCIIUsesASCIITruncationMarker(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	var output bytes.Buffer
+	ui := terminalUI{interactive: true, ascii: true, width: 40}
+	ui.renderAssistant(&output, strings.Repeat("model", 20), "reply")
+
+	result := output.String()
+	if strings.Contains(result, "…") {
+		t.Fatalf("ASCII output retained a Unicode truncation marker: %q", result)
+	}
+	if !strings.Contains(result, "...") {
+		t.Fatalf("ASCII output did not use an ASCII truncation marker: %q", result)
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(result, "\n"), "\n") {
+		if terminalTextWidth(line) > ui.width {
+			t.Errorf("ASCII output line width = %d, want at most %d: %q", terminalTextWidth(line), ui.width, line)
+		}
 	}
 }
 

@@ -232,7 +232,7 @@ func (ui terminalUI) renderBubble(output io.Writer, label, message string) {
 	if ui.ascii {
 		topMarker = "-"
 	}
-	topLabel := topMarker + " " + fitTerminalText(label, labelWidth-2)
+	topLabel := topMarker + " " + ui.fitTerminalText(label, labelWidth-2)
 
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, ui.paint(ansiBorder, ui.boxTop(topLabel, boxWidth)))
@@ -297,7 +297,7 @@ func (ui terminalUI) boxLine(content string, boxWidth, innerWidth int) string {
 	if ui.ascii {
 		left, right = "|", "|"
 	}
-	return "  " + left + " " + padTerminalText(content, innerWidth) + " " + right
+	return "  " + left + " " + ui.padTerminalText(content, innerWidth) + " " + right
 }
 
 func (ui terminalUI) paint(code, content string) string {
@@ -631,6 +631,10 @@ func terminalLineWidth(text string) int {
 }
 
 func fitTerminalText(text string, width int) string {
+	return fitTerminalTextWithMarker(text, width, "…")
+}
+
+func fitTerminalTextWithMarker(text string, width int, marker string) string {
 	if width < 1 {
 		return ""
 	}
@@ -638,24 +642,44 @@ func fitTerminalText(text string, width int) string {
 	if terminalTextWidth(text) <= width {
 		return text
 	}
-	ellipsis := "…"
-	if terminalTextWidth(ellipsis) > width {
+	markerWidth := terminalTextWidth(marker)
+	if markerWidth > width {
 		return "?"
 	}
-	if terminalTextWidth(ellipsis) == width {
-		return ellipsis
+	if markerWidth == width {
+		return marker
 	}
-	chunk, _ := terminalTextChunk(text, width-terminalTextWidth(ellipsis))
-	return chunk + ellipsis
+	chunk, _ := terminalTextChunk(text, width-markerWidth)
+	return chunk + marker
 }
 
 func padTerminalText(text string, width int) string {
-	text = fitTerminalText(text, width)
+	return padTerminalTextWithMarker(text, width, "…")
+}
+
+func padTerminalTextWithMarker(text string, width int, marker string) string {
+	text = fitTerminalTextWithMarker(text, width, marker)
 	padding := width - terminalTextWidth(text)
 	if padding < 0 {
 		padding = 0
 	}
 	return text + strings.Repeat(" ", padding)
+}
+
+func (ui terminalUI) fitTerminalText(text string, width int) string {
+	marker := "…"
+	if ui.ascii {
+		marker = "..."
+	}
+	return fitTerminalTextWithMarker(text, width, marker)
+}
+
+func (ui terminalUI) padTerminalText(text string, width int) string {
+	marker := "…"
+	if ui.ascii {
+		marker = "..."
+	}
+	return padTerminalTextWithMarker(text, width, marker)
 }
 
 type terminalTextUnit struct {
@@ -673,11 +697,21 @@ func terminalTextUnits(text string) []terminalTextUnit {
 			index++
 			continue
 		}
-		if terminalMarkRune(character) {
+		if character == '\u200d' {
 			if len(units) == 0 {
 				units = append(units, terminalTextUnit{text: string(character)})
 			} else {
 				units[len(units)-1].text += string(character)
+			}
+			index++
+			continue
+		}
+		if terminalMarkRune(character) {
+			if len(units) == 0 {
+				units = append(units, terminalTextUnit{text: string(character)})
+			} else {
+				last := len(units) - 1
+				units[last] = terminalTextUnitWithMark(units[last], character)
 			}
 			index++
 			continue
@@ -690,23 +724,35 @@ func terminalTextUnits(text string) []terminalTextUnit {
 			index++
 		}
 		for index < len(runes) && terminalMarkRune(runes[index]) {
-			unit.text += string(runes[index])
+			unit = terminalTextUnitWithMark(unit, runes[index])
 			index++
 		}
-		for index+1 < len(runes) && runes[index] == '\u200d' {
+		for index+1 < len(runes) && runes[index] == '\u200d' && terminalEmojiRune(character) && terminalEmojiRune(runes[index+1]) {
 			unit.text += string(runes[index]) + string(runes[index+1])
 			index += 2
-			if terminalRuneWidth(runes[index-1]) > unit.width {
-				unit.width = terminalRuneWidth(runes[index-1])
-			}
+			unit.width = 2
 			for index < len(runes) && terminalMarkRune(runes[index]) {
-				unit.text += string(runes[index])
+				unit = terminalTextUnitWithMark(unit, runes[index])
 				index++
 			}
 		}
 		units = append(units, unit)
 	}
 	return units
+}
+
+func terminalTextUnitWithMark(unit terminalTextUnit, character rune) terminalTextUnit {
+	if character == '\ufe0f' {
+		base, _ := utf8.DecodeRuneInString(unit.text)
+		if terminalEmojiRune(base) && unit.width < 2 {
+			unit.width = 2
+		}
+	}
+	if character == '\u20e3' && strings.ContainsRune(unit.text, '\ufe0f') && unit.width < 2 {
+		unit.width = 2
+	}
+	unit.text += string(character)
+	return unit
 }
 
 func terminalCombiningRune(character rune) bool {
@@ -722,6 +768,35 @@ func terminalMarkRune(character rune) bool {
 
 func terminalRegionalIndicator(character rune) bool {
 	return character >= '\U0001f1e6' && character <= '\U0001f1ff'
+}
+
+func terminalEmojiRune(character rune) bool {
+	switch {
+	case character >= '\U0001f000' && character <= '\U0001faff':
+		return true
+	case character >= '\u2600' && character <= '\u27bf':
+		return true
+	case character == '\u00a9' || character == '\u00ae' || character == '\u203c' || character == '\u2049':
+		return true
+	case character >= '\u2122' && character <= '\u2139':
+		return true
+	case character >= '\u2194' && character <= '\u21ff':
+		return true
+	case character >= '\u2300' && character <= '\u23ff':
+		return true
+	case character >= '\u25aa' && character <= '\u25ff':
+		return true
+	case character >= '\u2934' && character <= '\u2935':
+		return true
+	case character >= '\u2b00' && character <= '\u2bff':
+		return true
+	case character >= '\u3030' && character <= '\u303d':
+		return true
+	case character == '\u3297' || character == '\u3299':
+		return true
+	default:
+		return false
+	}
 }
 
 func terminalRuneWidth(character rune) int {
@@ -748,25 +823,26 @@ func terminalWideRune(character rune) bool {
 		character >= 0x2e80 && character <= 0xa4cf || character >= 0xac00 && character <= 0xd7a3 ||
 		character >= 0xf900 && character <= 0xfaff || character >= 0xfe10 && character <= 0xfe19 ||
 		character >= 0xfe30 && character <= 0xfe6f || character >= 0xff00 && character <= 0xff60 ||
-		character >= 0xffe0 && character <= 0xffe6 || character >= 0x1f000 && character <= 0x1faff ||
+		character >= 0xffe0 && character <= 0xffe6 || character >= 0x1b000 && character <= 0x1b0ff ||
+		character >= 0x1f000 && character <= 0x1faff ||
 		character >= 0x20000 && character <= 0x3fffd)
 }
 
 func expandTerminalTabs(text string) string {
 	var expanded strings.Builder
 	column := 0
-	for _, character := range text {
-		switch character {
-		case '\n', '\r':
-			expanded.WriteRune(character)
+	for _, unit := range terminalTextUnits(text) {
+		switch unit.text {
+		case "\n", "\r":
+			expanded.WriteString(unit.text)
 			column = 0
-		case '\t':
+		case "\t":
 			spaces := terminalTabStop - column%terminalTabStop
 			expanded.WriteString(strings.Repeat(" ", spaces))
 			column += spaces
 		default:
-			expanded.WriteRune(character)
-			column += terminalRuneWidth(character)
+			expanded.WriteString(unit.text)
+			column += unit.width
 		}
 	}
 	return expanded.String()
