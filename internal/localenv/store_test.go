@@ -24,7 +24,13 @@ func TestParse(t *testing.T) {
 }
 
 func TestRequiredTemplateValuesAndSavedFileState(t *testing.T) {
-	want := map[string]string{"OVH_KEY": "", "TELEGRAM_TOKEN": ""}
+	want := map[string]string{
+		"OVH_ENDPOINT":           "",
+		"OVH_APPLICATION_KEY":    "",
+		"OVH_APPLICATION_SECRET": "",
+		"OVH_CONSUMER_KEY":       "",
+		"TELEGRAM_BOT_TOKEN":     "",
+	}
 	if !reflect.DeepEqual(RequiredTemplateValues(), want) {
 		t.Fatal("required template names did not match")
 	}

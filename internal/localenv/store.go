@@ -13,12 +13,15 @@ import (
 )
 
 const (
-	directoryName = ".goaster"
-	fileName      = "env"
-	maxLineSize   = 1024 * 1024
-	maxFileSize   = 1024 * 1024
-	ovhKeyName    = "OVH_KEY"
-	telegramName  = "TELEGRAM_TOKEN"
+	directoryName            = ".goaster"
+	fileName                 = "env"
+	maxLineSize              = 1024 * 1024
+	maxFileSize              = 1024 * 1024
+	ovhEndpointName          = "OVH_ENDPOINT"
+	ovhApplicationKeyName    = "OVH_APPLICATION_KEY"
+	ovhApplicationSecretName = "OVH_APPLICATION_SECRET"
+	ovhConsumerKeyName       = "OVH_CONSUMER_KEY"
+	telegramBotTokenName     = "TELEGRAM_BOT_TOKEN"
 )
 
 // Store keeps environment settings separate from chat messages and providers.
@@ -55,10 +58,35 @@ func (s Store) HasSavedFile() bool {
 // RequiredTemplateValues returns the blank integration settings GoAster asks
 // users to configure through the local environment-file flow.
 func RequiredTemplateValues() map[string]string {
-	return map[string]string{
-		ovhKeyName:   "",
-		telegramName: "",
+	values := make(map[string]string, len(requiredTemplateNames()))
+	for _, name := range requiredTemplateNames() {
+		values[name] = ""
 	}
+	return values
+}
+
+func requiredTemplateNames() [5]string {
+	return [5]string{
+		ovhEndpointName,
+		ovhApplicationKeyName,
+		ovhApplicationSecretName,
+		ovhConsumerKeyName,
+		telegramBotTokenName,
+	}
+}
+
+func isBlankRequiredTemplate(values map[string]string) bool {
+	names := requiredTemplateNames()
+	if len(values) != len(names) {
+		return false
+	}
+	for _, name := range names {
+		value, exists := values[name]
+		if !exists || value != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // LoadFile reads and validates KEY=VALUE settings from a local regular file.
@@ -300,11 +328,17 @@ func validateValues(values map[string]string) error {
 }
 
 func encode(values map[string]string) []byte {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
+	var keys []string
+	if isBlankRequiredTemplate(values) {
+		templateNames := requiredTemplateNames()
+		keys = templateNames[:]
+	} else {
+		keys = make([]string, 0, len(values))
+		for key := range values {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
 	}
-	sort.Strings(keys)
 	var data strings.Builder
 	for _, key := range keys {
 		data.WriteString(key)

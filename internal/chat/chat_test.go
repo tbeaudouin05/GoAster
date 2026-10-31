@@ -567,8 +567,11 @@ func TestEnvUsesPickerAndCancellationPreservesSavedValues(t *testing.T) {
 
 func TestGetEnvSavesExistingEnvironmentWithoutPrintingValues(t *testing.T) {
 	secretValues := map[string]string{
-		"OVH_KEY":        "private-ovh-value",
-		"TELEGRAM_TOKEN": "private-telegram-value",
+		"OVH_ENDPOINT":           "private-ovh-endpoint",
+		"OVH_APPLICATION_KEY":    "private-ovh-application-key",
+		"OVH_APPLICATION_SECRET": "private-ovh-application-secret",
+		"OVH_CONSUMER_KEY":       "private-ovh-consumer-key",
+		"TELEGRAM_BOT_TOKEN":     "private-telegram-token",
 	}
 	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
 	if err := store.Save(secretValues); err != nil {
@@ -600,7 +603,13 @@ func TestGetEnvSavesExistingEnvironmentWithoutPrintingValues(t *testing.T) {
 	if err != nil {
 		t.Fatal("environment file was not saved")
 	}
-	if !bytes.Equal(data, []byte("OVH_KEY=private-ovh-value\nTELEGRAM_TOKEN=private-telegram-value\n")) {
+	wantFile := `OVH_APPLICATION_KEY=private-ovh-application-key
+OVH_APPLICATION_SECRET=private-ovh-application-secret
+OVH_CONSUMER_KEY=private-ovh-consumer-key
+OVH_ENDPOINT=private-ovh-endpoint
+TELEGRAM_BOT_TOKEN=private-telegram-token
+`
+	if !bytes.Equal(data, []byte(wantFile)) {
 		t.Fatal("saved environment file did not match the stored settings")
 	}
 	info, err := os.Stat(downloadPath)
@@ -610,7 +619,13 @@ func TestGetEnvSavesExistingEnvironmentWithoutPrintingValues(t *testing.T) {
 	if info.Mode().Perm() != 0600 {
 		t.Errorf("saved environment permissions = %04o, want 0600", info.Mode().Perm())
 	}
-	for _, secret := range []string{"private-ovh-value", "private-telegram-value"} {
+	for _, secret := range []string{
+		"private-ovh-endpoint",
+		"private-ovh-application-key",
+		"private-ovh-application-secret",
+		"private-ovh-consumer-key",
+		"private-telegram-token",
+	} {
 		if strings.Contains(output.String(), secret) {
 			t.Errorf("terminal output exposed a saved environment value")
 		}
@@ -651,7 +666,13 @@ func TestGetEnvCreatesExactBlankTemplateAndGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatal("blank environment template was not saved")
 	}
-	if !bytes.Equal(data, []byte("OVH_KEY=\nTELEGRAM_TOKEN=\n")) {
+	wantTemplate := `OVH_ENDPOINT=
+OVH_APPLICATION_KEY=
+OVH_APPLICATION_SECRET=
+OVH_CONSUMER_KEY=
+TELEGRAM_BOT_TOKEN=
+`
+	if !bytes.Equal(data, []byte(wantTemplate)) {
 		t.Fatal("template variable names or KEY= format did not match the required settings")
 	}
 	info, err := os.Stat(downloadPath)
