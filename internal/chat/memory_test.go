@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 func TestMemoryStoreUsesDefaultWorkspaceLayout(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	store, err := NewMemoryStoreWithError("")
 	if err != nil {
 		t.Fatal(err)
@@ -24,11 +26,11 @@ func TestMemoryStoreUsesDefaultWorkspaceLayout(t *testing.T) {
 	if store.WorkspacePath() != wantWorkspace {
 		t.Fatalf("workspace = %q, want %q", store.WorkspacePath(), wantWorkspace)
 	}
-	if store.MemoryPath() != filepath.Join(wantWorkspace, memoryDirectoryName, memoryFilename) {
+	if store.MemoryPath() != filepath.Join(wantWorkspace, artefactsDirectoryName, memoryDirectoryName, memoryFilename) {
 		t.Fatalf("memory path = %q", store.MemoryPath())
 	}
 	date := time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)
-	wantDaily := filepath.Join(wantWorkspace, memoryDirectoryName, "202610", "20261029.md")
+	wantDaily := filepath.Join(wantWorkspace, artefactsDirectoryName, memoryDirectoryName, "202610", "20261029.md")
 	if got := store.DailyNotePath(date); got != wantDaily {
 		t.Fatalf("daily path = %q, want %q", got, wantDaily)
 	}
@@ -170,6 +172,18 @@ func TestMemoryStoreAppendTodayIsAtomicAndPrivate(t *testing.T) {
 		if !strings.Contains(string(final), fmt.Sprintf("concurrent-%d", index)) {
 			t.Fatalf("concurrent append %d was lost: %q", index, final)
 		}
+	}
+
+	syncFailure := errors.New("simulated directory sync failure")
+	store.syncDirectory = func(string) error { return syncFailure }
+	if err := store.AppendToday("entry with uncertain durability"); !errors.Is(err, syncFailure) || !strings.Contains(err.Error(), "check its contents before retrying") {
+		t.Fatalf("directory sync failure = %v", err)
+	}
+	if got := readFixture(t, path); !strings.Contains(got, "entry with uncertain durability") {
+		t.Fatalf("replacement outcome was not preserved: %q", got)
+	}
+	if err := syncMemoryDirectory(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("memory directory open failure was ignored")
 	}
 }
 

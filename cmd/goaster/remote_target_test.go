@@ -279,6 +279,7 @@ func TestRemoteLoginFailureDoesNotCreateConnectionRecord(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			home, identityFile, _ := prepareRemoteTargetFiles(t)
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			oldRecord := remoteTargetRecord{Target: "root@old.example", Port: 2222, KnownHosts: "~/.ssh/known_hosts"}
 			if hasExistingRecord {
 				if err := saveRemoteTargetRecord(home, identityFile, oldRecord); err != nil {

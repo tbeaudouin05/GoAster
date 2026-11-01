@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"goaster/internal/artefacts"
 	"goaster/internal/attachment"
 	"goaster/internal/chat"
 )
@@ -65,7 +66,13 @@ func run(ctx context.Context, args []string, output io.Writer, auth *chat.OpenAI
 }
 
 func serve(store chat.CredentialStore) error {
-	memory := chat.NewMemoryStore("")
+	memory, err := chat.NewMemoryStoreWithError("")
+	if err != nil {
+		return fmt.Errorf("initialize Markdown memory store: %w", err)
+	}
+	if err := artefacts.InstallStarters(context.Background()); err != nil {
+		return fmt.Errorf("install starter skills: %w", err)
+	}
 	provider := chat.NewCodexProvider(store)
 	registry, err := chat.NewModelRegistry("")
 	if err != nil {
@@ -250,6 +257,18 @@ func handlerWithMemoryAndRegistry(provider chat.Provider, memory *chat.MemorySto
 		if err != nil {
 			if errors.Is(err, attachment.ErrUnsupportedImage) {
 				http.Error(w, "unsupported image format", http.StatusUnsupportedMediaType)
+				return
+			}
+			if message := chat.SkillRecoveryMessage(err); message != "" {
+				if streamEmitted {
+					emit(struct {
+						Type  string `json:"type"`
+						Error string `json:"error"`
+					}{"skill_recovery", message})
+					return
+				}
+				w.Header().Set("X-GoAster-Error", "skill-recovery")
+				http.Error(w, message, http.StatusServiceUnavailable)
 				return
 			}
 			if errors.Is(err, chat.ErrModelUnavailable) {

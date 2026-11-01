@@ -9,33 +9,37 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goaster/internal/filesync"
 )
 
 const (
-	memoryDirectoryName = "memory"
-	memoryFilename      = "MEMORY.md"
-	recentMemoryDays    = 3
-	memoryDirectoryMode = 0700
-	memoryFileMode      = 0600
+	artefactsDirectoryName = "artefacts"
+	memoryDirectoryName    = "memory"
+	memoryFilename         = "MEMORY.md"
+	recentMemoryDays       = 3
+	memoryDirectoryMode    = 0700
+	memoryFileMode         = 0600
 )
 
-// MemoryStore manages the Markdown memory files kept beside the GoAster
-// session. MEMORY.md is deliberately read-only to the running chat session;
+// MemoryStore manages the Markdown memory files kept under GoAster's artefacts
+// root. MEMORY.md is deliberately read-only to the running chat session;
 // durable-memory edits are an explicit, user-reviewed maintenance operation.
 // Daily notes are append-only from GoAster's perspective.
 //
 // The layout is:
 //
-//	<workspace>/memory/MEMORY.md
-//	<workspace>/memory/YYYYMM/YYYYMMDD.md
+//	<workspace>/artefacts/memory/MEMORY.md
+//	<workspace>/artefacts/memory/YYYYMM/YYYYMMDD.md
 type MemoryStore struct {
 	workspace  string
 	memoryDir  string
 	memoryFile string
 	now        func() time.Time
 
-	mu      sync.Mutex
-	initErr error
+	mu            sync.Mutex
+	initErr       error
+	syncDirectory func(string) error
 }
 
 // NewMemoryStore creates a Markdown memory store. An empty workspace uses
@@ -66,11 +70,15 @@ func newMemoryStore(workspace string) (*MemoryStore, error) {
 	workspace = filepath.Clean(workspace)
 	store := &MemoryStore{
 		workspace:  workspace,
-		memoryDir:  filepath.Join(workspace, memoryDirectoryName),
-		memoryFile: filepath.Join(workspace, memoryDirectoryName, memoryFilename),
+		memoryDir:  filepath.Join(workspace, artefactsDirectoryName, memoryDirectoryName),
+		memoryFile: filepath.Join(workspace, artefactsDirectoryName, memoryDirectoryName, memoryFilename),
 		now:        time.Now,
 	}
 	if err := ensureMemoryWorkspace(store.workspace); err != nil {
+		store.initErr = err
+		return store, err
+	}
+	if err := ensurePrivateDirectory(filepath.Join(store.workspace, artefactsDirectoryName), "artefacts directory"); err != nil {
 		store.initErr = err
 		return store, err
 	}
@@ -205,7 +213,13 @@ func (ms *MemoryStore) AppendToday(content string) error {
 	if err := os.Chmod(todayFile, memoryFileMode); err != nil {
 		return fmt.Errorf("restrict daily memory note: %w", err)
 	}
-	syncMemoryDirectory(monthDir)
+	syncDirectory := ms.syncDirectory
+	if syncDirectory == nil {
+		syncDirectory = syncMemoryDirectory
+	}
+	if err := syncDirectory(monthDir); err != nil {
+		return fmt.Errorf("sync daily memory directory: %w; the note was replaced, so check its contents before retrying", err)
+	}
 	return nil
 }
 
@@ -335,11 +349,6 @@ func readMemoryFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-func syncMemoryDirectory(directory string) {
-	directoryFile, err := os.Open(directory)
-	if err != nil {
-		return
-	}
-	defer directoryFile.Close()
-	_ = directoryFile.Sync()
+func syncMemoryDirectory(directory string) error {
+	return filesync.DirectoryPath(directory)
 }

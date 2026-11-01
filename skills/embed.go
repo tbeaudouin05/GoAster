@@ -1,37 +1,39 @@
 package skills
 
-import _ "embed"
+import (
+	"embed"
+	"strings"
+)
 
-// OVHProvisioning contains the read-only-first OVH onboarding instructions
-// that are packaged into the GoAster executable.
+// Bootstrap is the small, always-available skill discovery and safety policy.
 //
-//go:embed ovh/SKILL.md
-var OVHProvisioning string
+//go:embed bootstrap.md
+var Bootstrap string
 
-// OVHRemote contains the existing-host SSH onboarding instructions that are
-// packaged into the GoAster executable.
+// Starters are the files shipped with this build and installed on first use.
 //
-//go:embed ovh-remote/SKILL.md
-var OVHRemote string
+//go:embed */META.md */AUTH.md */SKILL.md
+var Starters embed.FS
 
-// InternetFetch contains reusable guidance for reliable public internet
-// content retrieval that is packaged into the GoAster executable.
-//
-//go:embed internet-fetch/SKILL.md
-var InternetFetch string
-
-// TelegramGroupPrivacy contains guidance for Telegram group setup.
-//
-//go:embed telegram-group-privacy/SKILL.md
-var TelegramGroupPrivacy string
-
-// MemoryConsolidation contains the optional user-managed memory workflow.
-//
-//go:embed self-improvement-memory-consolidation/SKILL.md
-var MemoryConsolidation string
-
-// ModelAdministration contains the owner/operator-only model configuration
-// workflow packaged into the GoAster executable.
-//
-//go:embed model-administration/SKILL.md
-var ModelAdministration string
+// MandatoryGuidance keeps the shipped safety and workflow rules in every
+// tool-enabled request, including when the model does not select a skill.
+var MandatoryGuidance = func() string {
+	var guidance strings.Builder
+	entries, err := Starters.ReadDir(".")
+	if err != nil {
+		panic(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		guidance.WriteString("\n\nShipped " + name + " rules (apply when relevant):\n")
+		for _, file := range []string{"AUTH.md", "SKILL.md"} {
+			data, err := Starters.ReadFile(name + "/" + file)
+			if err != nil {
+				panic(err) // Every named file is a build-time embed requirement.
+			}
+			guidance.Write(data)
+			guidance.WriteString("\n")
+		}
+	}
+	return guidance.String()
+}()

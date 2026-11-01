@@ -22,7 +22,6 @@ import (
 
 	"goaster/internal/attachment"
 	"goaster/internal/localenv"
-	"goaster/skills"
 )
 
 func TestConfig(t *testing.T) {
@@ -310,7 +309,7 @@ func TestInteractiveRequestLifecycleShowsWorkingAndRetries(t *testing.T) {
 	if calls != 3 || strings.Count(result, "Working...") != 3 {
 		t.Fatalf("request lifecycle calls/output = %d/%q", calls, result)
 	}
-	if !strings.Contains(result, "Request failed. Please try again.") || !strings.Contains(result, "retried reply") {
+	if !strings.Contains(result, "Check whether any actions completed") || !strings.Contains(result, "retried reply") {
 		t.Fatalf("missing recoverable error or retry reply: %q", result)
 	}
 	if strings.Contains(result, "temporary provider failure") {
@@ -408,7 +407,7 @@ func TestInteractiveToolFailureShowsSafeRequestError(t *testing.T) {
 	}
 	result := output.String()
 	if !strings.Contains(result, "Tool web_fetch: fetching a public page") ||
-		!strings.Contains(result, "Request failed. Please try again.") || !strings.Contains(result, "Retry complete.") {
+		!strings.Contains(result, "Check whether any actions completed") || !strings.Contains(result, "Retry complete.") {
 		t.Fatalf("tool failure and retry lifecycle was not displayed: %q", result)
 	}
 	if strings.Contains(result, "PRIVATE_TOKEN") || strings.Contains(result, "private tool failure details") {
@@ -534,7 +533,7 @@ func TestInteractiveAttachmentFailureCleansUpBeforeRetry(t *testing.T) {
 		t.Errorf("temporary attachment remained after a failed inspection: %v", err)
 	}
 	result := output.String()
-	if !strings.Contains(result, "Request failed. Please try again.") || !strings.Contains(result, "retry succeeded") {
+	if !strings.Contains(result, "Check whether any actions completed") || !strings.Contains(result, "retry succeeded") {
 		t.Fatalf("failed attachment did not return to a successful retry: %q", result)
 	}
 	if strings.Contains(result, temporaryPath) || strings.Contains(result, "inspection provider failed") {
@@ -624,7 +623,8 @@ func TestLoopStartsOVHOnboardingWithBoundedRoutineApprovalGuidance(t *testing.T)
 }
 
 func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) {
-	policy := strings.Join(strings.Fields(skills.OVHRemote), " ")
+	remoteSkill := readRepositorySkill(t, "ovh-remote")
+	policy := strings.Join(strings.Fields(remoteSkill), " ")
 	for _, want := range []string{
 		"## Consolidated routine approval for onboarding",
 		"Show one checklist for that exact target before the first remote connection or mutation.",
@@ -662,11 +662,11 @@ func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) 
 		}
 	}
 
-	checklistStart := strings.Index(skills.OVHRemote, "Target: [exact existing OVH host name or address]")
+	checklistStart := strings.Index(remoteSkill, "Target: [exact existing OVH host name or address]")
 	if checklistStart < 0 {
 		t.Fatal("OVH remote approval policy is missing the target-specific checklist")
 	}
-	checklistTail := skills.OVHRemote[checklistStart:]
+	checklistTail := remoteSkill[checklistStart:]
 	checklistEnd := strings.Index(checklistTail, "\n\nAsk the user to approve")
 	if checklistEnd < 0 {
 		t.Fatal("OVH remote approval checklist has no clear end")
@@ -679,7 +679,8 @@ func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) 
 }
 
 func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testing.T) {
-	policy := strings.Join(strings.Fields(skills.OVHProvisioning), " ")
+	provisioningSkill := readRepositorySkill(t, "ovh")
+	policy := strings.Join(strings.Fields(provisioningSkill), " ")
 	if !strings.Contains(policy, "an active project named `Production` remains usable even though its name differs from `GoAster`") {
 		t.Fatal("OVH project discovery policy does not cover a non-GoAster project name")
 	}
@@ -775,7 +776,8 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 }
 
 func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
-	policy := strings.Join(strings.Fields(skills.OVHRemote), " ")
+	remoteSkill := readRepositorySkill(t, "ovh-remote")
+	policy := strings.Join(strings.Fields(remoteSkill), " ")
 	for _, want := range []string{
 		"Existing hosts and saved targets must have an already trusted `known_hosts` entry.",
 		"Never use trust-on-first-use for an existing target, an unrelated target, or a target whose provenance is unclear.",
@@ -813,13 +815,14 @@ func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
 }
 
 func TestOVHRemoteUserFacingOnboardingWording(t *testing.T) {
+	remoteSkill := readRepositorySkill(t, "ovh-remote")
 	const heading = "#### User-facing status and next action"
 	const endHeading = "#### Operator readiness and completion gates"
-	start := strings.Index(skills.OVHRemote, heading)
+	start := strings.Index(remoteSkill, heading)
 	if start < 0 {
 		t.Fatalf("OVH remote skill is missing %q", heading)
 	}
-	content := skills.OVHRemote[start+len(heading):]
+	content := remoteSkill[start+len(heading):]
 	end := strings.Index(content, endHeading)
 	if end < 0 {
 		t.Fatalf("OVH remote skill is missing %q", endHeading)
@@ -1600,4 +1603,13 @@ func runWithTestEnvStoreAndPicker(t *testing.T, ctx context.Context, input io.Re
 		return err
 	}
 	return RunWithEnvStoreAndPicker(ctx, input, output, session, store, picker)
+}
+
+func readRepositorySkill(t testing.TB, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "skills", name, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

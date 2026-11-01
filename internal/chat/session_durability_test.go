@@ -178,7 +178,7 @@ func TestSessionsSharingStoreRejectStaleHistory(t *testing.T) {
 func TestSessionStoreLockPreventsLoadAndSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.json")
 	store := NewSessionStoreAt(path)
-	unlock, err := store.lock()
+	unlock, err := store.lock(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestSessionStoreProcessLockHolder(t *testing.T) {
 	if path == "" {
 		return
 	}
-	unlock, err := NewSessionStoreAt(path).lock()
+	unlock, err := NewSessionStoreAt(path).lock(false)
 	if err != nil {
 		os.Exit(4)
 	}
@@ -287,7 +287,7 @@ func TestSessionStoreHoldsLockThroughSave(t *testing.T) {
 	if !called {
 		t.Fatal("save did not sync directory")
 	}
-	unlock, err := store.lock()
+	unlock, err := store.lock(false)
 	if err != nil {
 		t.Fatalf("lock held after save: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 			if compact {
 				session.history = numberedHistory(maxSessionMessages)
 			}
-			version, err := session.store.saveStateWithVersion(session.summary, session.history, session.storeVersion, true)
+			version, err := session.store.saveStateWithVersion(session.summary, session.history, session.selectedSkills, session.storeVersion, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -364,7 +364,7 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 			var unlock func()
 			provider.beforeReply = func() {
 				var err error
-				unlock, err = session.store.lock()
+				unlock, err = session.store.lock(false)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -446,7 +446,7 @@ func TestSessionSaveReportsDirectorySyncFailure(t *testing.T) {
 	if err := session.store.Save(nil); err == nil {
 		t.Fatal("uncertain replacement allowed another write without reload")
 	}
-	unlock, err := session.store.lock()
+	unlock, err := session.store.lock(false)
 	if err != nil {
 		t.Fatalf("lock leaked: %v", err)
 	}

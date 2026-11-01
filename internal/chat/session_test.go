@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,6 +23,20 @@ func TestFixedContextBudgetMatchesPicoClawDefaults(t *testing.T) {
 	}
 	if maxContextTokens != contextWindowTokens {
 		t.Fatalf("trimming budget = %d, want full context window %d", maxContextTokens, contextWindowTokens)
+	}
+}
+
+func TestNewSessionStoreUsesFreshArtefactStatePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	store, err := NewSessionStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".goaster", "artefacts", "state", "sessions", "session.json")
+	if store.Path != want {
+		t.Fatalf("default conversation path = %q, want %q", store.Path, want)
 	}
 }
 
@@ -140,6 +155,140 @@ func TestSessionStoreQuarantinesMalformedConversationSafely(t *testing.T) {
 	}
 	if got := backupInfo.Mode().Perm(); got != 0600 {
 		t.Fatalf("quarantine permissions = %04o, want 0600", got)
+	}
+	checkScheduledTurnWaitsForRecoveredConversation(t)
+	checkSchedulerRecoveryRequiresAcknowledgement(t)
+}
+
+func checkSchedulerRecoveryRequiresAcknowledgement(t interface {
+	TempDir() string
+	Fatal(...any)
+	Fatalf(string, ...any)
+}) {
+	for _, situation := range []string{"scheduler-quarantines", "already-quarantined", "file-removed"} {
+		path := filepath.Join(t.TempDir(), "session.json")
+		calls := 0
+		provider := providerFunc(func(context.Context, string, string) (string, error) {
+			calls++
+			return "completed", nil
+		})
+		session, err := NewPersistentSessionAt(Config{Model: "test"}, provider, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := session.Reply(context.Background(), "keep this conversation"); err != nil {
+			t.Fatal(err)
+		}
+		previous := cloneChatMessages(session.history)
+		if situation == "file-removed" {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.WriteFile(path, []byte("broken conversation"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if situation == "already-quarantined" {
+			if _, err := NewPersistentSessionAt(Config{Model: "test"}, provider, path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := session.ReplyScheduled(context.Background(), "scheduled"); !errors.Is(err, ErrSessionBusy) || calls != 1 {
+			t.Fatalf("recovery did not defer scheduled work: calls=%d error=%v", calls, err)
+		}
+		if !reflect.DeepEqual(session.history, previous) {
+			t.Fatalf("scheduled recovery discarded in-memory history: %+v", session.history)
+		}
+		if _, err := session.Reply(context.Background(), "continue"); !errors.Is(err, ErrConversationRecovery) || calls != 1 {
+			t.Fatalf("interactive recovery was not reported: calls=%d error=%v", calls, err)
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unacknowledged conversation was replaced: %v", err)
+		}
+		if situation != "file-removed" {
+			if _, err := os.Stat(path + ".corrupt"); err != nil {
+				t.Fatalf("quarantined conversation missing: %v", err)
+			}
+		}
+		restarted, err := NewPersistentSessionAt(Config{Model: "test"}, provider, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := restarted.Reply(context.Background(), "continue"); !errors.Is(err, ErrConversationRecovery) || calls != 1 {
+			t.Fatalf("restart lost recovery barrier: calls=%d error=%v", calls, err)
+		}
+		if _, err := session.Reply(context.Background(), "/clear"); err != nil {
+			t.Fatal(err)
+		}
+		fresh, err := NewPersistentSessionAt(Config{Model: "test"}, provider, path)
+		if err != nil || fresh.recoveryPending {
+			t.Fatalf("acknowledged recovery persisted after restart: %v", err)
+		}
+		if _, err := session.ReplyScheduled(context.Background(), "scheduled"); err != nil || calls != 2 {
+			t.Fatalf("acknowledged recovery did not resume: calls=%d error=%v", calls, err)
+		}
+	}
+}
+
+func checkScheduledTurnWaitsForRecoveredConversation(t interface {
+	TempDir() string
+	Fatal(...any)
+	Fatalf(string, ...any)
+}) {
+	for _, initialState := range []string{"empty", "saved"} {
+		path := filepath.Join(t.TempDir(), "session.json")
+		calls := 0
+		provider := providerFunc(func(context.Context, string, string) (string, error) {
+			calls++
+			return "ok", nil
+		})
+		observer, err := NewPersistentSessionAt(Config{Model: "test"}, provider, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if initialState == "saved" {
+			if _, err := observer.Reply(context.Background(), "earlier turn"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(path, []byte("invalid conversation"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		// Another instance may quarantine the file before the scheduler
+		// checks it, even when the previous state was also absent.
+		recovered, err := NewPersistentSessionAt(Config{Model: "test"}, provider, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := calls
+		if _, err := observer.ReplyScheduled(context.Background(), "scheduled"); !errors.Is(err, ErrSessionBusy) || calls != before {
+			t.Fatalf("recovered scheduled turn ran: calls=%d error=%v", calls-before, err)
+		}
+		restarted, err := NewPersistentSessionAt(Config{Model: "test"}, provider, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := restarted.ReplyScheduled(context.Background(), "scheduled"); !errors.Is(err, ErrSessionBusy) || calls != before {
+			t.Fatalf("restart lost recovery barrier: calls=%d error=%v", calls-before, err)
+		}
+		if _, err := recovered.Reply(context.Background(), "/clear"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := observer.ReplyScheduled(context.Background(), "scheduled"); err != nil || calls != before+1 {
+			t.Fatalf("acknowledged recovery did not resume: calls=%d error=%v", calls-before, err)
+		}
+	}
+	calls := 0
+	provider := providerFunc(func(context.Context, string, string) (string, error) {
+		calls++
+		return "ok", nil
+	})
+	checkpoint, err := NewPersistentSessionAt(Config{Model: "test"}, provider, filepath.Join(t.TempDir(), "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint.skillCheckpointFailed = true
+	if _, err := checkpoint.ReplyScheduled(context.Background(), "scheduled"); !errors.Is(err, ErrSessionBusy) || calls != 0 || !checkpoint.skillCheckpointFailed {
+		t.Fatalf("absent session forgot failed checkpoint: calls=%d error=%v", calls, err)
 	}
 }
 

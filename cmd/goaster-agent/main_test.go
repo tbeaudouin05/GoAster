@@ -1013,3 +1013,35 @@ func TestAgentAuthErrorsAreRedactedAndGateChat(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentReportsSafeSkillRecoveryInDirectAndStreamResponses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	skillDir := filepath.Join(home, ".goaster", "artefacts", "skills", "bad")
+	if err := os.MkdirAll(skillDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "META.md"), []byte("private-fixture-content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	provider := chat.NewCodexProvider(chat.CredentialStore{Path: filepath.Join(t.TempDir(), "unused")})
+	_, skillErr := chat.NewSession(chat.Config{Model: "test"}, provider).Reply(context.Background(), "run")
+	message := chat.SkillRecoveryMessage(skillErr)
+	if message == "" {
+		t.Fatalf("missing skill recovery error: %v", skillErr)
+	}
+	result := postChat(t, handler(fakeProvider{err: skillErr}, readyAuth), 42, "run")
+	if result.Code != http.StatusServiceUnavailable || result.Header().Get("X-GoAster-Error") != "skill-recovery" || !strings.Contains(result.Body.String(), message) || strings.Contains(result.Body.String(), "private-fixture") {
+		t.Fatalf("direct recovery = %d %q", result.Code, result.Body.String())
+	}
+	modelPath := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(modelPath, []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h := handlerWithMemoryAndRegistry(fakeProvider{err: skillErr}, nil, readyAuth, chat.NewModelRegistryAt(modelPath))
+	result = postChat(t, h, 42, "run")
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"type":"skill_recovery"`) || !strings.Contains(result.Body.String(), message) || strings.Contains(result.Body.String(), "private-fixture") {
+		t.Fatalf("stream recovery = %d %q", result.Code, result.Body.String())
+	}
+}

@@ -1,6 +1,6 @@
 //go:build !windows
 
-package chat
+package filesync
 
 import (
 	"errors"
@@ -9,11 +9,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func lockSessionFile(file *os.File) error {
+func LockFile(file *os.File) error {
 	for {
 		err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 		if !errors.Is(err, unix.EINTR) {
 			return err
 		}
 	}
+}
+
+func IsLockBusy(err error) bool {
+	return errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN)
 }

@@ -77,14 +77,17 @@ func TestStorePersistsPrivateJobsAtomically(t *testing.T) {
 func TestNewStoreUsesGoAsterCronPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	store, err := NewStore("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".goaster", "cron", "jobs.json")
+	want := filepath.Join(home, ".goaster", "artefacts", "state", "cron", "jobs.json")
 	if store.Path != want {
 		t.Fatalf("default path = %q, want %q", store.Path, want)
 	}
+	checkCronLoadRejectsSymlinkedDefaultParents(t)
+	checkCronRejectsSymlinkedExplicitAncestor(t)
 }
 
 func TestNextRunComputesAtEveryAndCronSchedules(t *testing.T) {
@@ -187,6 +190,7 @@ func TestSchedulerAtAddAndUpdateUseSecondsFromNow(t *testing.T) {
 	if len(storedJobs) != 1 || storedJobs[0].AtSeconds != updatedSeconds || storedJobs[0].NextRun == nil || !storedJobs[0].NextRun.Equal(clock.Add(5*time.Second)) {
 		t.Fatalf("persisted at job = %+v, want relative seconds and absolute next_run", storedJobs)
 	}
+	checkRetrySaveFailureDoesNotSpinOrRepeat(t)
 }
 
 func TestSchedulerManagementAndPartialUpdate(t *testing.T) {
@@ -230,6 +234,8 @@ func TestSchedulerManagementAndPartialUpdate(t *testing.T) {
 	if err := scheduler.Remove(job.ID); !errors.Is(err, ErrJobNotFound) {
 		t.Fatalf("second remove error = %v, want ErrJobNotFound", err)
 	}
+	checkInterruptedClaimNeedsExplicitReenable(t)
+	checkStaleSchedulersPreserveConcurrentChanges(t)
 }
 
 func TestSchedulerDeletesOneTimeJobAfterExecution(t *testing.T) {
@@ -272,6 +278,7 @@ func TestSchedulerDeletesOneTimeJobAfterExecution(t *testing.T) {
 	if len(jobs) != 0 {
 		t.Fatalf("persisted jobs after one-time execution = %#v", jobs)
 	}
+	checkSchedulerCrossProcessRetry(t)
 }
 
 func TestSchedulerHonorsMaxRunsAndPersistsFailure(t *testing.T) {

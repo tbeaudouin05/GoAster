@@ -199,6 +199,8 @@ func terminalToolCallStatus(name string) string {
 
 	activity := "running"
 	switch name {
+	case "load_skill":
+		activity = "loading skill guidance"
 	case "web_search":
 		activity = "searching the web"
 	case "web_fetch":
@@ -231,7 +233,7 @@ func (ui terminalUI) renderRequestError(output io.Writer) {
 	if !ui.interactive {
 		return
 	}
-	ui.renderError(output, "Request failed. Please try again.")
+	ui.renderError(output, "Request failed. Check whether any actions completed before continuing or repeating them.")
 }
 
 func (ui terminalUI) renderAssistant(output io.Writer, model, reply string) {

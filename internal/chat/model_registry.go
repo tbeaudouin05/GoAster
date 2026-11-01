@@ -15,12 +15,12 @@ import (
 	"unicode/utf8"
 
 	appconfig "goaster/config"
+	"goaster/internal/artefacts"
 )
 
 const (
 	DefaultModel           = "gpt-6.1-sol"
 	EmergencyModel         = "gpt-6.1-terra"
-	modelConfigDirectory   = ".goaster"
 	modelConfigFilename    = "openai-models.json"
 	maxModelConfigBytes    = 64 << 10
 	maxModelErrorBytes     = 256
@@ -78,15 +78,15 @@ var (
 )
 
 // NewModelRegistry locates the real runtime configuration at
-// ~/.goaster/openai-models.json when path is empty.
+// ~/.goaster/artefacts/config/openai-models.json when path is empty.
 func NewModelRegistry(path string) (ModelRegistry, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		home, err := os.UserHomeDir()
+		root, err := artefacts.Root()
 		if err != nil {
-			return ModelRegistry{}, fmt.Errorf("find home directory: %w", err)
+			return ModelRegistry{}, err
 		}
-		path = filepath.Join(home, modelConfigDirectory, modelConfigFilename)
+		path = filepath.Join(root, "config", modelConfigFilename)
 	}
 	return ModelRegistry{Path: filepath.Clean(path)}, nil
 }
@@ -180,6 +180,12 @@ func (r ModelRegistry) loadLocked() (ModelConfig, string, bool, error) {
 	}
 
 	pathName := filepath.Clean(r.Path)
+	// Validate the directory before even inspecting the file or quarantining
+	// it. In particular, a symlinked runtime config directory must never
+	// redirect reads or recovery writes outside the artefacts tree.
+	if err := prepareModelConfigDirectory(filepath.Dir(pathName)); err != nil {
+		return r.recoverModelLocked(pathName, fmt.Errorf("prepare model configuration directory: %w", err), false)
+	}
 	if recovery := modelRecovery[pathName]; recovery.broken {
 		if _, err := os.Lstat(pathName); errors.Is(err, os.ErrNotExist) {
 			return emergencyConfig(), "", true, nil
@@ -236,14 +242,20 @@ func (r ModelRegistry) loadLocked() (ModelConfig, string, bool, error) {
 }
 
 func (r ModelRegistry) recoverLocked(pathName string, cause error) (ModelConfig, string, bool, error) {
+	return r.recoverModelLocked(pathName, cause, true)
+}
+
+func (r ModelRegistry) recoverModelLocked(pathName string, cause error, quarantine bool) (ModelConfig, string, bool, error) {
 	recovery := modelRecovery[pathName]
 	if recovery.broken {
 		return emergencyConfig(), "", true, nil
 	}
 	var quarantinedPath string
 	var quarantineErr error
-	if _, err := os.Lstat(pathName); err == nil {
-		quarantinedPath, quarantineErr = quarantineModelConfig(pathName)
+	if quarantine {
+		if _, err := os.Lstat(pathName); err == nil {
+			quarantinedPath, quarantineErr = quarantineModelConfig(pathName)
+		}
 	}
 	detail := boundedModelError(cause)
 	if quarantineErr != nil {
@@ -400,8 +412,8 @@ func writeModelConfigLocked(pathName string, config ModelConfig) error {
 		return fmt.Errorf("model configuration exceeds %d bytes", maxModelConfigBytes)
 	}
 	directory := filepath.Dir(pathName)
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		return fmt.Errorf("create model configuration directory: %w", err)
+	if err := prepareModelConfigDirectory(directory); err != nil {
+		return fmt.Errorf("prepare model configuration directory: %w", err)
 	}
 	temporary, err := os.CreateTemp(directory, ".openai-models-*.tmp")
 	if err != nil {
@@ -435,6 +447,30 @@ func writeModelConfigLocked(pathName string, config ModelConfig) error {
 	}
 	if err := syncSessionDirectory(directory); err != nil {
 		return fmt.Errorf("sync model configuration directory: %w", err)
+	}
+	return nil
+}
+
+func prepareModelConfigDirectory(directory string) error {
+	root, rootErr := artefacts.Root()
+	if rootErr == nil && filepath.Clean(directory) == filepath.Join(root, "config") {
+		if _, err := artefacts.EnsureRuntimeDirectory("config"); err != nil {
+			return fmt.Errorf("prepare model configuration directory: %w", err)
+		}
+	} else {
+		info, err := os.Lstat(directory)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				return fmt.Errorf("create model configuration directory: %w", err)
+			}
+			info, err = os.Lstat(directory)
+		}
+		if err != nil {
+			return fmt.Errorf("inspect model configuration directory: %w", err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("model configuration directory must be a real directory")
+		}
 	}
 	return nil
 }

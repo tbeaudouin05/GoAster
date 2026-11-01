@@ -16,7 +16,7 @@ configured OpenAI model:
    model ID. Catalog lookup is discovery, never verification; do not describe
    the candidate as verified because it appears in the catalog.
 2. Locate the real current configuration used by the running instance,
-   normally `~/.goaster/openai-models.json`. Save its complete bytes and keep
+   normally `~/.goaster/artefacts/config/openai-models.json`. Save its complete bytes and keep
    the previous valid configuration available for restoration. Add the
    candidate to its `models` array with an explicit alias when wanted, and
    select its exact ID for the test. For the terminal, put the candidate first

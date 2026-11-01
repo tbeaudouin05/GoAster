@@ -508,6 +508,9 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		message := strings.TrimSpace(string(body))
+		if resp.Header.Get("X-GoAster-Error") == "skill-recovery" && chat.IsSkillRecoveryMessage(message) {
+			return "", agentModelError{message: message}
+		}
 		if strings.HasPrefix(message, "model ") {
 			return "", agentModelError{message: truncateRunes(message, 512)}
 		}
@@ -538,6 +541,10 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 		case "error":
 			if strings.HasPrefix(event.Error, "model ") {
 				modelError = truncateRunes(strings.TrimSpace(event.Error), 512)
+			}
+		case "skill_recovery":
+			if chat.IsSkillRecoveryMessage(event.Error) {
+				modelError = event.Error
 			}
 		}
 	}

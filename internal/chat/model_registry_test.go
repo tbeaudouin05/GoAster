@@ -15,11 +15,12 @@ import (
 func TestShippedModelConfigIsInstalledAndUsed(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	registry, err := NewModelRegistry("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(home, ".goaster", "openai-models.json"); registry.Path != want {
+	if want := filepath.Join(home, ".goaster", "artefacts", "config", "openai-models.json"); registry.Path != want {
 		t.Fatalf("runtime path = %q, want %q", registry.Path, want)
 	}
 	state, err := registry.Current(42)
@@ -282,5 +283,64 @@ func TestSessionSuppliesModelRecoveryNoticeOnceAndUsesTerra(t *testing.T) {
 		if strings.Contains(message.Content, "model configuration recovery notice") {
 			t.Fatalf("recovery notice was injected a second time: %#v", provider.histories[1])
 		}
+	}
+}
+
+func TestModelRegistryRejectsSymlinkedConfigParentBeforeReadOrRecovery(t *testing.T) {
+	for _, contents := range []string{string(appconfig.OpenAIModels), "invalid configuration"} {
+		t.Run(map[bool]string{true: "valid target", false: "invalid target"}[contents != "invalid configuration"], func(t *testing.T) {
+			home, outside := t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			runtimeRoot := filepath.Join(home, ".goaster", "artefacts")
+			if err := os.MkdirAll(runtimeRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(outside, modelConfigFilename)
+			if err := os.WriteFile(target, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(runtimeRoot, "config")); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			registry, err := NewModelRegistry("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := registry.Current(42)
+			if err != nil || !state.Recovered || state.Selection.ID != EmergencyModel {
+				t.Fatalf("state = %+v, error=%v", state, err)
+			}
+			if _, err := registry.Select(42, "terra"); err == nil {
+				t.Fatal("selection wrote through symlinked parent")
+			}
+			got, err := os.ReadFile(target)
+			if err != nil || string(got) != contents {
+				t.Fatalf("outside file changed: %v", err)
+			}
+			entries, err := os.ReadDir(outside)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("outside directory modified: %v, %v", entries, err)
+			}
+		})
+	}
+}
+
+func TestModelRegistryDoesNotChangeExistingExplicitParentPermissions(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewModelRegistryAt(filepath.Join(directory, modelConfigFilename))
+	if _, err := registry.Current(42); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(directory)
+	if err != nil || after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("existing parent permissions changed: %v, %v", after, err)
 	}
 }

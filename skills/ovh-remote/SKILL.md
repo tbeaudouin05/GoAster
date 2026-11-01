@@ -745,7 +745,7 @@ that same chat. Keep onboarding `partial` until that real round trip succeeds;
 do not infer it from the adapter's ready notification or the pairing reply.
 
 Whenever configuring GoAster's Telegram adapter on an OVH remote, explicitly
-mention the packaged [Telegram BotFather Group Privacy Mode skill](../telegram-group-privacy/SKILL.md).
+mention the installed [Telegram BotFather Group Privacy Mode skill](../telegram-group-privacy/SKILL.md).
 If they want GoAster to receive ordinary text messages they send in a group,
 explain that this requires turning Group Privacy Mode off and ask for explicit
 approval before changing the setting. After approval, guide them to use

@@ -9,17 +9,20 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"unicode/utf8"
+
+	"goaster/internal/artefacts"
+	"goaster/internal/filesync"
 )
 
 const (
-	sessionDirectoryName = ".goaster"
-	sessionFilename      = "session.json"
-	sessionFormatVersion = 1
+	sessionDirectoryName  = ".goaster"
+	sessionFilename       = "session.json"
+	sessionFormatVersion  = 2
+	sessionStateDirectory = "state"
+	sessionDirectory      = "sessions"
 
 	// The file limit leaves room for a full context window after JSON escaping
 	// while keeping reads and writes bounded.
@@ -45,36 +48,39 @@ const (
 type SessionStore struct {
 	Path string
 
-	mu            sync.Mutex
-	version       [sha256.Size]byte  // Zero means the file was absent at the last load.
-	syncDirectory func(string) error // Optional per-store seam for filesystem failures.
+	mu             sync.Mutex
+	version        [sha256.Size]byte // Zero means the file was absent at the last load.
+	selectedSkills []selectedSkill
+	syncDirectory  func(string) error // Optional per-store seam for filesystem failures.
 }
 
 // SessionLoadResult describes a safely loaded conversation. Recovered means
 // an invalid file was moved aside without exposing its contents.
 type SessionLoadResult struct {
-	Messages  []ChatMessage
-	Summary   string
-	Recovered bool
-	Trimmed   bool
+	Messages       []ChatMessage
+	Summary        string
+	Recovered      bool
+	Trimmed        bool
+	selectedSkills []selectedSkill
 }
 
 type sessionFile struct {
-	Version  int           `json:"version"`
-	Summary  string        `json:"summary,omitempty"`
-	Messages []ChatMessage `json:"messages"`
+	Version        int             `json:"version"`
+	Summary        string          `json:"summary,omitempty"`
+	Messages       []ChatMessage   `json:"messages"`
+	SelectedSkills []selectedSkill `json:"selected_skills"`
 }
 
 // NewSessionStore locates the default conversation file at
-// ~/.goaster/session.json when path is empty.
+// ~/.goaster/artefacts/state/sessions/session.json when path is empty.
 func NewSessionStore(path string) (*SessionStore, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		home, err := os.UserHomeDir()
+		root, err := artefacts.Root()
 		if err != nil {
-			return nil, fmt.Errorf("find home directory: %w", err)
+			return nil, err
 		}
-		path = filepath.Join(home, sessionDirectoryName, sessionFilename)
+		path = filepath.Join(root, sessionStateDirectory, sessionDirectory, sessionFilename)
 	}
 	return &SessionStore{Path: path}, nil
 }
@@ -125,8 +131,10 @@ func NewSessionWithStoreAndMemory(config Config, provider Provider, store *Sessi
 	session.store = store
 	session.history = cloneChatMessages(loaded.Messages)
 	session.summary = loaded.Summary
+	session.selectedSkills = append([]selectedSkill(nil), loaded.selectedSkills...)
+	session.recoveryPending = loaded.Recovered
 	if loaded.Recovered {
-		session.startupNotice = appendSessionNotice(session.startupNotice, "The saved conversation was invalid, so it was moved aside and a new conversation was started.")
+		session.startupNotice = appendSessionNotice(session.startupNotice, ErrConversationRecovery.Error())
 	} else if loaded.Trimmed {
 		session.startupNotice = appendSessionNotice(session.startupNotice, "The saved conversation was shortened to fit GoAster's automatic context budget.")
 	}
@@ -145,7 +153,16 @@ func (s *SessionStore) loadState(version *[sha256.Size]byte) (loaded SessionLoad
 	if err := s.validatePath(); err != nil {
 		return SessionLoadResult{}, err
 	}
-	unlock, err := s.lock()
+	unlockTurn, err := s.lock(true)
+	if err != nil {
+		return SessionLoadResult{}, fmt.Errorf("lock conversation turn: %w", err)
+	}
+	defer unlockTurn()
+	return s.loadStateUnderTurnLock(version)
+}
+
+func (s *SessionStore) loadStateUnderTurnLock(version *[sha256.Size]byte) (loaded SessionLoadResult, err error) {
+	unlock, err := s.lock(false)
 	if err != nil {
 		return SessionLoadResult{}, err
 	}
@@ -160,6 +177,19 @@ func (s *SessionStore) loadState(version *[sha256.Size]byte) (loaded SessionLoad
 	info, err := os.Lstat(s.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		s.version = [sha256.Size]byte{}
+		s.selectedSkills = nil
+		// A quarantine or missing-file marker without a replacement means no
+		// interactive turn has acknowledged the loss, even after a restart.
+		entries, readErr := os.ReadDir(filepath.Dir(s.Path))
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return SessionLoadResult{}, fmt.Errorf("inspect conversation recovery: %w", readErr)
+		}
+		prefix := filepath.Base(s.Path) + ".corrupt"
+		for _, entry := range entries {
+			if entry.Name() == prefix || strings.HasPrefix(entry.Name(), prefix+"-") || entry.Name() == filepath.Base(s.Path)+".missing" {
+				return SessionLoadResult{Recovered: true}, nil
+			}
+		}
 		return SessionLoadResult{}, nil
 	}
 	if err != nil {
@@ -213,10 +243,12 @@ func (s *SessionStore) loadState(version *[sha256.Size]byte) (loaded SessionLoad
 	summary, summaryTrimmed := normalizeSummary(disk.Summary)
 	bounded, budgetTrimmed := boundSessionMessages(summary, messages, false, maxContextTokens, maxSessionMessages)
 	s.version = sha256.Sum256(data)
+	s.selectedSkills = append([]selectedSkill(nil), disk.SelectedSkills...)
 	return SessionLoadResult{
-		Messages: bounded,
-		Summary:  summary,
-		Trimmed:  normalized || summaryTrimmed || budgetTrimmed,
+		Messages:       bounded,
+		Summary:        summary,
+		Trimmed:        normalized || summaryTrimmed || budgetTrimmed,
+		selectedSkills: append([]selectedSkill(nil), s.selectedSkills...),
 	}, nil
 }
 
@@ -225,17 +257,25 @@ func (s *SessionStore) loadState(version *[sha256.Size]byte) (loaded SessionLoad
 // Existing state must be loaded first; stale stores fail rather than overwrite
 // changes saved by another instance.
 func (s *SessionStore) Save(messages []ChatMessage) error {
+	if err := s.validatePath(); err != nil {
+		return err
+	}
+	unlockTurn, err := s.lock(true)
+	if err != nil {
+		return fmt.Errorf("lock conversation turn: %w", err)
+	}
+	defer unlockTurn()
 	return s.saveState("", messages)
 }
 
 func (s *SessionStore) saveState(summary string, messages []ChatMessage) error {
-	_, err := s.saveStateWithVersion(summary, messages, [sha256.Size]byte{}, false)
+	_, err := s.saveStateWithVersion(summary, messages, nil, [sha256.Size]byte{}, false)
 	return err
 }
 
 // Sessions pass their expected token by value so another user of the same
 // store cannot advance their expected version.
-func (s *SessionStore) saveStateWithVersion(summary string, messages []ChatMessage, expectedVersion [sha256.Size]byte, hasExpectedVersion bool) ([sha256.Size]byte, error) {
+func (s *SessionStore) saveStateWithVersion(summary string, messages []ChatMessage, selected []selectedSkill, expectedVersion [sha256.Size]byte, hasExpectedVersion bool) ([sha256.Size]byte, error) {
 	if err := s.validatePath(); err != nil {
 		return [sha256.Size]byte{}, err
 	}
@@ -245,16 +285,8 @@ func (s *SessionStore) saveStateWithVersion(summary string, messages []ChatMessa
 	}
 	summary, _ = normalizeSummary(summary)
 	bounded, _ := boundSessionMessages(summary, normalized, false, maxContextTokens, maxSessionMessages)
-	data, err := encodeSessionFile(summary, bounded)
-	if err != nil {
-		return [sha256.Size]byte{}, fmt.Errorf("encode conversation state: %w", err)
-	}
-	if len(data) > maxSessionFileBytes {
-		return [sha256.Size]byte{}, fmt.Errorf("conversation state exceeds the %d-byte limit", maxSessionFileBytes)
-	}
-
 	directory := filepath.Dir(s.Path)
-	unlock, err := s.lock()
+	unlock, err := s.lock(false)
 	if err != nil {
 		return [sha256.Size]byte{}, err
 	}
@@ -271,6 +303,19 @@ func (s *SessionStore) saveStateWithVersion(summary string, messages []ChatMessa
 	}
 	if current != expected {
 		return [sha256.Size]byte{}, errors.New("conversation state changed in another instance; restart to load the latest history")
+	}
+	if !hasExpectedVersion {
+		selected = s.selectedSkills
+	}
+	if !validSelectedSkills(selected) {
+		return [sha256.Size]byte{}, fmt.Errorf("conversation contains invalid skill selections")
+	}
+	data, err := encodeSessionFile(summary, bounded, selected)
+	if err != nil {
+		return [sha256.Size]byte{}, fmt.Errorf("encode conversation state: %w", err)
+	}
+	if len(data) > maxSessionFileBytes {
+		return [sha256.Size]byte{}, fmt.Errorf("conversation state exceeds the %d-byte limit", maxSessionFileBytes)
 	}
 	temporary, err := os.CreateTemp(directory, ".session-*.tmp")
 	if err != nil {
@@ -312,6 +357,7 @@ func (s *SessionStore) saveStateWithVersion(summary string, messages []ChatMessa
 		return [sha256.Size]byte{}, fmt.Errorf("sync conversation directory: %w", err)
 	}
 	s.version = sha256.Sum256(data)
+	s.selectedSkills = append([]selectedSkill(nil), selected...)
 	return s.version, nil
 }
 
@@ -337,7 +383,24 @@ func (s *SessionStore) recoverInvalid() (SessionLoadResult, error) {
 		return SessionLoadResult{}, fmt.Errorf("saved conversation is invalid and could not be recovered safely")
 	}
 	s.version = [sha256.Size]byte{}
+	s.selectedSkills = nil
 	return SessionLoadResult{Recovered: true}, nil
+}
+
+// markMissing preserves the recovery barrier across restarts when a saved
+// conversation disappeared without a file to quarantine. The turn lock is held.
+func (s *SessionStore) markMissing() error {
+	file, err := os.OpenFile(s.Path+".missing", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := errors.Join(file.Sync(), file.Close()); err != nil {
+		return err
+	}
+	return syncSessionDirectory(filepath.Dir(s.Path))
 }
 
 func decodeSessionFile(data []byte) (sessionFile, error) {
@@ -354,11 +417,15 @@ func decodeSessionFile(data []byte) (sessionFile, error) {
 	if disk.Version != sessionFormatVersion {
 		return sessionFile{}, errors.New("unsupported conversation file version")
 	}
+	if disk.SelectedSkills == nil || !validSelectedSkills(disk.SelectedSkills) {
+		return sessionFile{}, errors.New("invalid conversation skill selections")
+	}
 	return disk, nil
 }
 
-func encodeSessionFile(summary string, messages []ChatMessage) ([]byte, error) {
-	data, err := json.MarshalIndent(sessionFile{Version: sessionFormatVersion, Summary: summary, Messages: messages}, "", "  ")
+func encodeSessionFile(summary string, messages []ChatMessage, selected []selectedSkill) ([]byte, error) {
+	selections := append(make([]selectedSkill, 0, len(selected)), selected...)
+	data, err := json.MarshalIndent(sessionFile{Version: sessionFormatVersion, Summary: summary, Messages: messages, SelectedSkills: selections}, "", "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -564,6 +631,15 @@ func validateSessionDirectory(directory string, create bool) error {
 	if directory == "." {
 		return nil
 	}
+	if create {
+		root, rootErr := artefacts.Root()
+		if rootErr == nil && filepath.Clean(directory) == filepath.Join(root, sessionStateDirectory, sessionDirectory) {
+			if _, err := artefacts.EnsureRuntimeDirectory(sessionStateDirectory, sessionDirectory); err != nil {
+				return fmt.Errorf("prepare conversation directory: %w", err)
+			}
+			return nil
+		}
+	}
 	info, err := os.Lstat(directory)
 	if errors.Is(err, os.ErrNotExist) {
 		if !create {
@@ -618,19 +694,24 @@ func quarantineSessionFile(path string) error {
 	return errors.New("could not select a quarantine path")
 }
 
-// lock coordinates all loads (including quarantine) and saves across processes.
-// Keep the file in place so every opener locks the same inode. The OS releases
-// the lock when the descriptor is closed, including when the process exits.
-func (s *SessionStore) lock() (func(), error) {
+// The state lock coordinates loads and saves; the separate turn lock prevents
+// another conversation writer from changing the state while tools are running.
+// Keep both files in place so every opener locks the same inode. The OS releases
+// each lock when the descriptor is closed, including when the process exits.
+func (s *SessionStore) lock(turn bool) (func(), error) {
 	if err := validateSessionDirectory(filepath.Dir(s.Path), true); err != nil {
 		return nil, err
 	}
-	path := s.Path + ".lock"
+	path := s.Path
+	if turn {
+		path += ".turn"
+	}
+	path += ".lock"
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("open conversation lock: %w", err)
 	}
-	if err := lockSessionFile(file); err != nil {
+	if err := filesync.LockFile(file); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("lock conversation state (another instance may be using it): %w", err)
 	}
@@ -667,26 +748,9 @@ func sessionVersion(path string) ([sha256.Size]byte, error) {
 }
 
 func syncSessionDirectory(directory string) error {
-	directoryFile, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	return syncSessionDirectoryFile(directoryFile)
+	return filesync.DirectoryPath(directory)
 }
 
-type sessionDirectoryFile interface {
-	Sync() error
-	Close() error
-}
-
-func syncSessionDirectoryFile(file sessionDirectoryFile) error {
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	// Some filesystems do not implement directory fsync. Windows opens
-	// directories without the write access required by FlushFileBuffers.
-	if errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP) || errors.Is(syncErr, syscall.ENOSYS) ||
-		(runtime.GOOS == "windows" && errors.Is(syncErr, os.ErrPermission)) {
-		syncErr = nil
-	}
-	return errors.Join(syncErr, closeErr)
+func syncSessionDirectoryFile(file filesync.Directory) error {
+	return filesync.DirectoryFile(file)
 }

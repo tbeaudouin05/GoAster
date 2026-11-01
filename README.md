@@ -12,13 +12,10 @@ shell and returns stdout, stderr, and the exit code; it accepts an optional
 working directory and bounded timeout in milliseconds. GoAster has no provider,
 API-key, or web-search flag configuration.
 
-GoAster packages the [internet-fetch skill](skills/internet-fetch/SKILL.md)
-with the executable and includes it in tool-enabled model instructions. It
-guides normal retrieval first, bounded retries, and a one-request IPv4 check
-for suspicious endpoint-specific failures, with safe redirect and timeout
-handling and careful diagnosis of apparent missing resources. This is
-instruction guidance; the built-in `web_fetch` networking behavior is
-unchanged.
+The [internet-fetch skill](skills/internet-fetch/SKILL.md) guides normal
+retrieval first, bounded retries, and a one-request IPv4 check for suspicious
+endpoint-specific failures. It is loaded from the local skills directory when
+needed. The built-in `web_fetch` networking behavior is unchanged.
 
 ## Install and launch
 
@@ -37,6 +34,18 @@ directly. The terminal interface is intentional: it preserves the normal
 interactive onboarding and chat experience on every supported operating
 system.
 
+On the first launch, GoAster installs the starter skills bundled with that
+build into `~/.goaster/artefacts/skills/`. The remote agent does the same in
+its own home. Installation does not require a network connection. An existing
+skills directory is validated and left untouched, including user edits;
+GoAster never automatically updates skills.
+
+Each starter contains `META.md`, `SKILL.md`, and `AUTH.md`. If installation is
+interrupted, GoAster reports the `.skills-installing` marker and stops; inspect
+the partial files, preserve any edits, and remove or move them and the marker
+aside before retrying. File and directory sync failures are reported where
+supported; unsupported directory syncing is best effort.
+
 Authentication is part of this normal startup journey and does not require a
 separate command. On the first launch, or whenever no valid subscription
 credential is available, GoAster starts the device-code OAuth flow in the same
@@ -52,7 +61,7 @@ The OAuth tokens and ChatGPT account ID are saved locally in
 At GoAster's chat prompt, describe your goal in ordinary language. In an
 interactive terminal, GoAster shows a compact header and readable message
 bubbles; redirected or scripted input keeps the line-oriented `you>` prompt.
-GoAster follows the relevant packaged skill; you do not need to name a skill or
+GoAster follows the relevant installed skill; you do not need to name a skill or
 enter a slash command to select one. For example:
 
 - “Create a new OVH server and install GoAster on it.”
@@ -110,10 +119,13 @@ images are sent as images; other files are attached as documents for the
 agent's local tools to inspect. Do not select files containing secrets; enter
 secret values only through `/env`.
 
-The terminal conversation is saved automatically in `~/.goaster/session.json`
-with `0600` permissions. It contains bounded user/assistant conversation text
-and any generated summary; OAuth credentials and tool-call internals are not
-copied into it. At 75% of the fixed 300,000-token context window, or when the
+The terminal conversation is saved automatically in
+`~/.goaster/artefacts/state/sessions/session.json`
+with `0600` permissions. It contains bounded user/assistant conversation text,
+any generated summary, and the names and fingerprints of selected skills;
+OAuth credentials, skill text, and tool-call internals are not automatically
+copied into it.
+At 75% of the fixed 300,000-token context window, or when the
 256-message limit is reached, the active subscription-backed model summarizes
 older messages while recent messages remain available. The summary is saved
 and included in future requests. If summarization fails, GoAster trims older
@@ -121,6 +133,10 @@ messages to keep context bounded and reports the trimming in the terminal and
 to the model. Session storage remains bounded to 8 MiB and 32 KiB per message.
 If the saved conversation is malformed, GoAster moves it aside safely and
 starts a new conversation.
+
+Only one process can run a turn against a saved conversation at a time. If
+another process changes it, restart to load the current conversation before
+continuing.
 
 Type `/clear` in the terminal to clear the persistent terminal conversation.
 In Telegram, send `/clear` in a chat to clear only that chat's conversation.
@@ -130,27 +146,79 @@ and does not change protected Markdown memory.
 
 ## Markdown memory
 
-GoAster keeps durable Markdown memory separate from `session.json` under the
-default workspace `~/.goaster`:
+GoAster keeps durable Markdown memory, mutable OpenAI configuration, and local
+runtime state under `~/.goaster/artefacts`:
 
 ```text
 ~/.goaster/
-├── session.json
-└── memory/
-    ├── MEMORY.md
-    └── YYYYMM/
-        └── YYYYMMDD.md
+├── auth.json
+├── agent-auth.json       # only when this home runs the remote agent
+├── env                   # secret integration settings
+└── artefacts/
+    ├── skills/<skill-name>/
+    │   ├── META.md
+    │   ├── SKILL.md
+    │   └── AUTH.md
+    ├── memory/
+    │   ├── MEMORY.md
+    │   └── YYYYMM/
+    │       └── YYYYMMDD.md
+    ├── config/
+    │   └── openai-models.json
+    └── state/
+        ├── sessions/
+        │   └── session.json
+        └── cron/
+            └── jobs.json
 ```
 
-`memory/MEMORY.md` is protected long-term knowledge. Daily notes are appended
-to the date-based file, with private directories and restrictive file
+`artefacts/memory/MEMORY.md` is protected long-term knowledge. Daily notes are
+appended to the date-based file, with private directories and restrictive file
 permissions; appends are written through an atomic replacement. Normal model
 requests receive `MEMORY.md` and the three most recent daily notes as clearly
 marked Markdown context, newest note first. If the memory files are empty or
 missing, the existing request behavior is unchanged.
 
+GoAster uses this fresh artefact layout directly. It does not import, export,
+migrate, or read artefact data from outside it. Credentials and secret
+integration settings remain separate in the private files at the top level of
+`~/.goaster`; they are never copied into skills, memory, configuration, or
+session state.
+
+Each skill directory contains a small `META.md` with only `name:` and
+`description:` lines, a workflow in `SKILL.md`, and its authorization rules
+in `AUTH.md`.
+Skill directory names use lowercase letters, digits, and hyphens. GoAster
+reads metadata to discover skills and includes every installed workflow and
+authorization in each tool-enabled request, including when a tool is requested
+directly. The build also supplies its shipped workflows and authorization rules,
+so their mandatory rules apply even before a runtime skill is selected.
+User edits can add requirements without weakening the
+shipped rules and apply without a rebuild. Invalid,
+missing, oversized, or symlinked skill files produce an error rather than a
+partial workflow. Skills must still follow the app's safety, approval, and
+secret-handling rules. Once selected, skills remain associated with that
+conversation until `/clear`; their workflow and authorization are reloaded on
+later turns, including after a terminal restart. Telegram sessions retain them
+for the lifetime of the remote agent's conversation, separately for each chat.
+Selection does not grant approval. If a selected skill changes or becomes
+unavailable, the workflow stops; restore its original files, or use `/clear`
+to discard the selection. Installed guidance is checked again before each tool
+action; changes since the model's request stop the action. If loading fails or
+is interrupted, check whether earlier actions already completed before
+continuing or repeating them. A conversation may select up to 10 skills. A request
+includes each selected skill's loaded workflow once and limits combined loaded
+skill text to 512 KiB. The combined installed guidance included in every
+tool-enabled request is limited to 640 KiB; if it exceeds that limit, review
+and shorten the files while retaining their safety and authorization rules,
+or move unneeded skills out of `artefacts/skills`. No guidance is silently
+omitted. If the complete text cannot fit within
+the estimated conversation context, the request stops instead of truncating
+the skill or its authorization rules.
+
 Conversation summarization continues to update only the conversation summary
-in `session.json`; it never rewrites `MEMORY.md`. Ask GoAster to review and
+in `artefacts/state/sessions/session.json`; it never rewrites
+`artefacts/memory/MEMORY.md`. Ask GoAster to review and
 consolidate memory when you want the optional, user-managed workflow in the
 [self-improvement-memory-consolidation skill](skills/self-improvement-memory-consolidation/SKILL.md)
 to review daily notes and promote only verified durable facts into protected
@@ -162,7 +230,7 @@ user-managed and is not automatically scheduled by GoAster.
 
 GoAster includes a small local scheduler for model-requested reminders and
 recurring chat turns. Jobs are saved atomically in
-`~/.goaster/cron/jobs.json` with private `0700` directory and `0600` file
+`~/.goaster/artefacts/state/cron/jobs.json` with private `0700` directory and `0600` file
 permissions, so they survive a normal restart. The model uses the built-in
 `cron` tool with `add`, `list`, `get`, `update`, `remove`, `enable`, and
 `disable` actions. Add a job with exactly one of:
@@ -180,7 +248,13 @@ omitted message, schedule, and `max_runs` fields are preserved.
 
 Due jobs send their saved message through the same terminal chat session as
 interactive input; the session serializes turns so scheduled execution cannot
-corrupt conversation state. This feature deliberately does not schedule shell
+corrupt conversation state. Scheduler instances coordinate across processes;
+if a run is interrupted after it may have started, it is disabled for review.
+Skill preflight failures and conversation recovery defer jobs that have not
+started. If a saved conversation is missing or invalid, inspect the saved or
+quarantined file and any actions that may already have completed; use `/clear`
+to explicitly start a new conversation before chat or scheduled work resumes.
+This feature deliberately does not schedule shell
 commands, send to Telegram or other channels, install operating-system cron
 entries, or add user-facing scheduler configuration or flags. It only runs
 while the terminal GoAster process is active.
@@ -468,7 +542,7 @@ BotFather privacy setting, see the
 [OVH remote SSH skill](skills/ovh-remote/SKILL.md).
 
 When configuring Telegram on that remote, the SSH skill directs the agent to
-the packaged
+the installed
 [Telegram BotFather Group Privacy Mode skill](skills/telegram-group-privacy/SKILL.md),
 which explains the `/setprivacy` → **Turn off** option for users who want
 ordinary group messages.
@@ -477,7 +551,7 @@ ordinary group messages.
 
 The shipped OpenAI-only model template is `config/openai-models.json`. On first
 run GoAster materializes the real runtime configuration at
-`~/.goaster/openai-models.json`; it reloads that file during normal requests,
+`~/.goaster/artefacts/config/openai-models.json`; it reloads that file during normal requests,
 so an owner/operator can add a model without restarting the process. Telegram
 users can send `/m` to see the current exact model ID and
 `/m MODEL_OR_ALIAS` to select a configured model for that chat. The
@@ -487,7 +561,7 @@ directly; GoAster does not automatically retry another configured model.
 If the JSON configuration is unreadable or invalid, GoAster preserves the bad
 file, reports a bounded recovery notice once to the agent, and uses the
 compiled-in emergency model `gpt-6.1-terra` until a valid configuration is
-available. See the packaged [model administration skill](skills/model-administration/SKILL.md)
+available. See the installed [model administration skill](skills/model-administration/SKILL.md)
 for the owner/operator workflow; catalog membership is discovery only and is
 never model verification.
 

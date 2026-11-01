@@ -277,6 +277,26 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 			if flushErr := w.Flush(); flushErr != nil {
 				return flushErr
 			}
+			if errors.Is(err, ErrConversationRecovery) {
+				if !ui.interactive {
+					return ErrConversationRecovery
+				}
+				ui.renderError(w, ErrConversationRecovery.Error())
+				if flushErr := w.Flush(); flushErr != nil {
+					return flushErr
+				}
+				continue
+			}
+			if message := SkillRecoveryMessage(err); message != "" {
+				if !ui.interactive {
+					return errors.New(message)
+				}
+				ui.renderError(w, message)
+				if flushErr := w.Flush(); flushErr != nil {
+					return flushErr
+				}
+				continue
+			}
 			if ui.interactive && errors.Is(err, ErrModelUnavailable) {
 				ui.renderError(w, boundText(err.Error(), 512))
 				if flushErr := w.Flush(); flushErr != nil {

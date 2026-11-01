@@ -18,6 +18,12 @@ The entrypoint opens a terminal and starts the embedded app. Use the package
 launcher rather than running its internal payload directly. No local Go
 installation is needed.
 
+On first launch, the app installs its bundled starter skills into
+`~/.goaster/artefacts/skills/` without a network download. The remote agent does
+the same in its own home. Existing skills are validated and left untouched;
+GoAster does not update them automatically. Each starter includes `META.md`,
+`SKILL.md`, and `AUTH.md`.
+
 On first launch, or when no valid subscription credential is available,
 GoAster displays an OpenAI device-login URL and one-time code in that terminal.
 Open the URL in a browser, sign in with the ChatGPT account that has the
@@ -36,7 +42,7 @@ The local chat includes its built-in web search, web fetch, and
 Use EOF (Ctrl-D on Unix) or close the terminal to exit.
 
 Describe what you want in ordinary language. GoAster follows the relevant
-packaged skill without requiring a skill name or slash command. For example,
+installed skill without requiring a skill name or slash command. For example,
 ask “Create a new OVH server and install GoAster on it,” “Install GoAster on
 my existing OVH server,” “Help my Telegram bot receive group messages,” or
 “Review my daily memory notes and propose durable facts to keep.” You can also
@@ -49,13 +55,26 @@ for visual inspection and documents for its local tools. Do not select files
 containing secrets. This works for any task, including OVHcloud dashboard
 screens; the OVH skill gives domain guidance for the Create API Keys screen.
 
-The conversation is saved in `~/.goaster/session.json`; durable Markdown
-memory is kept under `~/.goaster/memory/`. Scheduled chat turns are saved
-locally and run only while the packaged terminal process is active.
+The conversation is saved in
+`~/.goaster/artefacts/state/sessions/session.json`; durable Markdown memory is
+kept under `~/.goaster/artefacts/memory/`. Scheduled chat turns are saved in
+`~/.goaster/artefacts/state/cron/jobs.json` and run only while the packaged
+terminal process is active. GoAster uses this fresh artefact layout directly;
+it does not import, export, or migrate artefact data. Credentials and secret
+integration settings remain separate in the private top-level files under
+`~/.goaster`.
 Use `/clear` in the terminal to clear that persistent conversation. The command
 takes no arguments; extra text displays `Usage: /clear` and leaves history as
 it was. Clearing does not change Markdown memory and does not require model
 authentication.
+Selected skills stay with their conversation, so approval follow-ups reload
+the relevant workflow and authorization. If a selected skill changes or
+cannot be loaded, GoAster stops the workflow. Restore the original files when
+possible, or use `/clear` to discard the selection. Before continuing or
+repeating any action after a failure, check whether it already completed.
+If the combined installed skill guidance exceeds 640 KiB, review the files in
+`~/.goaster/artefacts/skills/` and shorten them while retaining safety and
+authorization rules, or move unneeded skills out of that directory.
 
 ## 3. Import setup values with `/env`
 
@@ -101,7 +120,7 @@ project, GoAster stops and directs the user to finish creating the project or
 completing payment-method activation in OVHcloud Manager; GoAster does not
 create projects through the API.
 
-The packaged OVH workflows cover different starting points:
+The installed OVH workflows cover different starting points:
 
 | Example request | What GoAster does |
 | --- | --- |

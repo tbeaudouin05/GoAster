@@ -743,3 +743,52 @@ func TestTelegramSendAndEditFallbackToPlainTextAfterFormattingRejection(t *testi
 		}
 	}
 }
+
+func TestTelegramDisplaysSafeSkillRecoveryForDirectAndStreamErrors(t *testing.T) {
+	const guidance = "Some actions may already have completed. Check their results before continuing or repeating any action. Skill guidance could not be loaded or restored. Check the installed skill files; use /clear if the selection cannot be restored."
+	const sizeGuidance = "Some actions may already have completed. Check their results before continuing or repeating any action. Combined installed skill guidance exceeds 640 KiB. Review ~/.goaster/artefacts/skills and shorten the guidance while retaining safety and authorization requirements, or move unneeded skills out of that directory."
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		header bool
+		want   string
+	}{
+		{"direct", http.StatusServiceUnavailable, guidance, true, guidance},
+		{"stream", http.StatusOK, `{"type":"skill_recovery","error":"` + guidance + `"}` + "\n", false, guidance},
+		{"size-direct", http.StatusServiceUnavailable, sizeGuidance, true, sizeGuidance},
+		{"size-stream", http.StatusOK, `{"type":"skill_recovery","error":"` + sizeGuidance + `"}` + "\n", false, sizeGuidance},
+		{"forged", http.StatusOK, `{"type":"skill_recovery","error":"private fake-secret"}` + "\n", false, "The remote agent could not answer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sent string
+			a := &adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid",
+				client: doerFunc(func(r *http.Request) (*http.Response, error) {
+					if strings.HasSuffix(r.URL.Path, "/sendChatAction") {
+						return response(200, `{"ok":true,"result":true}`), nil
+					}
+					var payload struct {
+						Text string `json:"text"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Fatal(err)
+					}
+					sent = payload.Text
+					return response(200, `{"ok":true,"result":{"message_id":1}}`), nil
+				}),
+				agent: doerFunc(func(*http.Request) (*http.Response, error) {
+					resp := response(tc.status, tc.body)
+					resp.Header = make(http.Header)
+					if tc.header {
+						resp.Header.Set("X-GoAster-Error", "skill-recovery")
+					}
+					return resp, nil
+				}),
+			}
+			a.handle(context.Background(), privateMessage(42, "run"))
+			if !strings.Contains(sent, tc.want) || strings.Contains(sent, "fake-secret") || len(sent) > 512 {
+				t.Fatalf("Telegram recovery message = %q", sent)
+			}
+		})
+	}
+}

@@ -13,6 +13,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"goaster/internal/artefacts"
+	"goaster/internal/filesync"
 )
 
 const (
@@ -27,19 +30,20 @@ const (
 	StatusCompleted = "completed"
 	StatusDisabled  = "disabled"
 
-	storeVersion      = 1
-	maxJobsFileBytes  = 4 << 20
-	maxJobErrorBytes  = 4 << 10
-	maxEverySeconds   = int64((1<<63 - 1) / int64(time.Second))
-	cronDirectoryName = ".goaster"
-	cronSubdirectory  = "cron"
-	cronFilename      = "jobs.json"
+	storeVersion     = 1
+	maxJobsFileBytes = 4 << 20
+	maxJobErrorBytes = 4 << 10
+	maxEverySeconds  = int64((1<<63 - 1) / int64(time.Second))
+	cronSubdirectory = "cron"
+	cronFilename     = "jobs.json"
 )
 
 var (
 	ErrJobNotFound    = errors.New("cron job not found")
 	ErrAlreadyStarted = errors.New("cron scheduler is already running")
-	jobIDCounter      atomic.Uint64
+	// ErrRetry means execution did not start and can be retried safely.
+	ErrRetry     = errors.New("cron job should retry")
+	jobIDCounter atomic.Uint64
 )
 
 // Executor is called with the saved message when a job becomes due. The
@@ -99,7 +103,8 @@ type Patch struct {
 	DeleteAfterRun *bool
 }
 
-// Options configures a scheduler. An empty Path selects ~/.goaster/cron/jobs.json.
+// Options configures a scheduler. An empty Path selects
+// ~/.goaster/artefacts/state/cron/jobs.json.
 type Options struct {
 	Path     string
 	Executor Executor
@@ -120,11 +125,11 @@ type diskState struct {
 func NewStore(path string) (*Store, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		home, err := os.UserHomeDir()
+		root, err := artefacts.Root()
 		if err != nil {
-			return nil, fmt.Errorf("find home directory: %w", err)
+			return nil, err
 		}
-		path = filepath.Join(home, cronDirectoryName, cronSubdirectory, cronFilename)
+		path = filepath.Join(root, "state", cronSubdirectory, cronFilename)
 	}
 	return &Store{Path: path}, nil
 }
@@ -132,6 +137,9 @@ func NewStore(path string) (*Store, error) {
 func (s *Store) Load() ([]Job, error) {
 	if s == nil || strings.TrimSpace(s.Path) == "" {
 		return nil, fmt.Errorf("cron store path is empty")
+	}
+	if err := validateCronDirectory(filepath.Dir(s.Path), false); err != nil {
+		return nil, err
 	}
 	info, err := os.Lstat(s.Path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -202,13 +210,8 @@ func (s *Store) Save(jobs []Job) error {
 		}
 	}
 	directory := filepath.Dir(s.Path)
-	if directory != "." {
-		if err := os.MkdirAll(directory, 0700); err != nil {
-			return fmt.Errorf("create cron directory: %w", err)
-		}
-		if err := os.Chmod(directory, 0700); err != nil {
-			return fmt.Errorf("restrict cron directory: %w", err)
-		}
+	if err := validateCronDirectory(directory, true); err != nil {
+		return err
 	}
 	data, err := json.MarshalIndent(diskState{Version: storeVersion, Jobs: jobs}, "", "  ")
 	if err != nil {
@@ -254,6 +257,101 @@ func (s *Store) Save(jobs []Job) error {
 	}
 	syncDirectory(directory)
 	return nil
+}
+
+// Validate directory components before looking for or writing jobs.json.
+func validateCronDirectory(directory string, create bool) error {
+	if directory == "." {
+		return nil
+	}
+	root, rootErr := artefacts.Root()
+	if rootErr == nil && filepath.Clean(directory) == filepath.Join(root, "state", cronSubdirectory) {
+		if create {
+			_, err := artefacts.EnsureRuntimeDirectory("state", cronSubdirectory)
+			return err
+		}
+		for _, dir := range []string{filepath.Dir(root), root, filepath.Join(root, "state"), directory} {
+			info, err := os.Lstat(dir)
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("cron directory must be a real directory: %s", dir)
+			}
+		}
+		return nil
+	}
+	checkParents := func() error {
+		for current := filepath.Clean(directory); ; current = filepath.Dir(current) {
+			info, err := os.Lstat(current)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("inspect cron directory %s: %w", current, err)
+			}
+			if err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+				return fmt.Errorf("cron directory must be a real directory: %s", current)
+			}
+			if parent := filepath.Dir(current); parent == current {
+				break
+			}
+		}
+		return nil
+	}
+	if err := checkParents(); err != nil {
+		return err
+	}
+	if create {
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			return fmt.Errorf("create cron directory: %w", err)
+		}
+		if err := checkParents(); err != nil {
+			return err
+		}
+		return os.Chmod(directory, 0700)
+	}
+	return nil
+}
+
+// The state lock serializes read-modify-write transactions. The run lock is
+// separate so a job may manage cron jobs while its executor is running.
+func (s *Store) lock(run bool) (func(), error) {
+	if err := validateCronDirectory(filepath.Dir(s.Path), true); err != nil {
+		return nil, err
+	}
+	path := s.Path
+	if run {
+		path += ".run"
+	}
+	path += ".lock"
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("cron lock must be a regular file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, err
+	}
+	opened, statErr := file.Stat()
+	current, pathErr := os.Lstat(path)
+	if statErr != nil || pathErr != nil || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+		_ = file.Close()
+		return nil, errors.New("cron lock changed while it was opened")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := filesync.LockFile(file)
+		if err == nil {
+			break
+		}
+		if run || !filesync.IsLockBusy(err) || time.Now().After(deadline) {
+			_ = file.Close()
+			return nil, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return func() { _ = file.Close() }, nil
 }
 
 func validateJobsFileInfo(info os.FileInfo) error {
@@ -347,6 +445,7 @@ type Scheduler struct {
 	executor Executor
 	now      func() time.Time
 	jobs     map[string]Job
+	saveJobs func([]Job) error // Optional seam for persistence failures.
 	wake     chan struct{}
 	started  bool
 	cancel   context.CancelFunc
@@ -359,6 +458,20 @@ func New(options Options) (*Scheduler, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A live executor owns the run lock. Only its absence makes a persisted
+	// running status evidence of an interrupted run.
+	unlockRun, runErr := store.lock(true)
+	if runErr != nil && !filesync.IsLockBusy(runErr) {
+		return nil, fmt.Errorf("lock cron execution: %w", runErr)
+	}
+	if runErr == nil {
+		defer unlockRun()
+	}
+	unlockState, err := store.lock(false)
+	if err != nil {
+		return nil, fmt.Errorf("lock cron state: %w", err)
+	}
+	defer unlockState()
 	jobs, err := store.Load()
 	if err != nil {
 		return nil, err
@@ -387,9 +500,11 @@ func New(options Options) (*Scheduler, error) {
 			}
 			changed = true
 		}
-		if job.Status == StatusRunning {
+		if job.Status == StatusRunning && runErr == nil {
 			job.Status = StatusFailed
 			job.Error = "previous run was interrupted"
+			job.Enabled = false
+			job.NextRun = nil
 			changed = true
 		}
 		if job.Kind == ScheduleAt && !job.DeleteAfterRun {
@@ -419,6 +534,11 @@ func (s *Scheduler) Add(job Job) (Job, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.reloadLocked()
+	if err != nil {
+		return Job{}, err
+	}
+	defer unlock()
 	job.Message = strings.TrimSpace(job.Message)
 	if job.Message == "" {
 		return Job{}, fmt.Errorf("job message is required")
@@ -468,6 +588,9 @@ func (s *Scheduler) List() []Job {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if unlock, err := s.reloadLocked(); err == nil {
+		unlock()
+	}
 	jobs := make([]Job, 0, len(s.jobs))
 	for _, job := range s.jobs {
 		jobs = append(jobs, cloneJob(job))
@@ -493,6 +616,9 @@ func (s *Scheduler) Get(id string) (Job, bool) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if unlock, err := s.reloadLocked(); err == nil {
+		unlock()
+	}
 	job, ok := s.jobs[strings.TrimSpace(id)]
 	if !ok {
 		return Job{}, false
@@ -507,6 +633,11 @@ func (s *Scheduler) Update(id string, patch Patch) (Job, error) {
 	id = strings.TrimSpace(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.reloadLocked()
+	if err != nil {
+		return Job{}, err
+	}
+	defer unlock()
 	current, ok := s.jobs[id]
 	if !ok {
 		return Job{}, fmt.Errorf("%w: %s", ErrJobNotFound, id)
@@ -608,6 +739,11 @@ func (s *Scheduler) Remove(id string) error {
 	id = strings.TrimSpace(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.reloadLocked()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	job, ok := s.jobs[id]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrJobNotFound, id)
@@ -628,6 +764,11 @@ func (s *Scheduler) SetEnabled(id string, enabled bool) (Job, error) {
 	id = strings.TrimSpace(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.reloadLocked()
+	if err != nil {
+		return Job{}, err
+	}
+	defer unlock()
 	job, ok := s.jobs[id]
 	if !ok {
 		return Job{}, fmt.Errorf("%w: %s", ErrJobNotFound, id)
@@ -707,6 +848,38 @@ func (s *Scheduler) RunDue(ctx context.Context) int {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	unlockRun, err := s.store.lock(true)
+	if err != nil {
+		return 0
+	}
+	defer unlockRun()
+	// An earlier owner may have died after an action started. Do not repeat
+	// that action automatically; require an explicit re-enable.
+	s.mu.Lock()
+	unlockState, err := s.reloadLocked()
+	if err != nil {
+		s.mu.Unlock()
+		return 0
+	}
+	changed := false
+	for id, job := range s.jobs {
+		if job.Status == StatusRunning {
+			job.Status = StatusFailed
+			job.Error = "previous run was interrupted"
+			job.Enabled = false
+			job.NextRun = nil
+			s.jobs[id] = job
+			changed = true
+		}
+	}
+	if changed {
+		err = s.saveLocked()
+	}
+	unlockState()
+	s.mu.Unlock()
+	if err != nil {
+		return 0
+	}
 	runs := 0
 	for ctx.Err() == nil {
 		job, ok := s.claimDue()
@@ -736,15 +909,12 @@ func (s *Scheduler) loop(ctx context.Context, done chan struct{}) {
 		}
 		wait, ok := s.nextWait()
 		if !ok {
-			select {
-			case <-ctx.Done():
-				return
-			case <-s.wake:
-			}
-			continue
+			wait = 5 * time.Second
 		}
-		if wait <= 0 {
-			continue
+		if wait <= 0 || wait > 5*time.Second {
+			// A different process or a failed state write may prevent a claim.
+			// Poll for its changes and back off if a claim cannot be saved.
+			wait = 5 * time.Second
 		}
 		timer := time.NewTimer(wait)
 		select {
@@ -774,7 +944,7 @@ func (s *Scheduler) nextWait() (time.Duration, bool) {
 	defer s.mu.Unlock()
 	var earliest *time.Time
 	for _, job := range s.jobs {
-		if !job.Enabled || job.NextRun == nil {
+		if !job.Enabled || job.Status == StatusRunning || job.NextRun == nil {
 			continue
 		}
 		if earliest == nil || job.NextRun.Before(*earliest) {
@@ -792,6 +962,11 @@ func (s *Scheduler) claimDue() (Job, bool) {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.reloadLocked()
+	if err != nil {
+		return Job{}, false
+	}
+	defer unlock()
 	var selected Job
 	found := false
 	for _, job := range s.jobs {
@@ -809,7 +984,6 @@ func (s *Scheduler) claimDue() (Job, bool) {
 	previous := selected
 	selected.Status = StatusRunning
 	selected.Error = ""
-	selected.LastRun = timePointer(now)
 	s.jobs[selected.ID] = selected
 	if err := s.saveLocked(); err != nil {
 		s.jobs[selected.ID] = previous
@@ -819,6 +993,7 @@ func (s *Scheduler) claimDue() (Job, bool) {
 }
 
 func (s *Scheduler) executeClaim(ctx context.Context, claimed Job) {
+	started := s.now()
 	var executionErr error
 	if s.executor == nil {
 		executionErr = errors.New("cron scheduler executor is nil")
@@ -827,13 +1002,34 @@ func (s *Scheduler) executeClaim(ctx context.Context, claimed Job) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.reloadLocked()
+	if err != nil {
+		return
+	}
+	defer unlock()
 	current, ok := s.jobs[claimed.ID]
 	if !ok {
 		return
 	}
 	previous := current
+	if errors.Is(executionErr, ErrRetry) {
+		if current.Enabled {
+			current.Status = StatusScheduled
+			if sameSchedule(current, claimed) {
+				current.NextRun = timePointer(s.now().Add(5 * time.Second))
+			}
+		} else {
+			current.Status = StatusDisabled
+		}
+		current.Error = ""
+		s.jobs[current.ID] = current
+		if err := s.saveLocked(); err != nil {
+			s.jobs[current.ID] = previous
+		}
+		return
+	}
 	current.RunCount++
-	current.LastRun = claimed.LastRun
+	current.LastRun = timePointer(started)
 	if current.DeleteAfterRun {
 		delete(s.jobs, current.ID)
 		if err := s.saveLocked(); err != nil {
@@ -888,12 +1084,34 @@ func (s *Scheduler) executeClaim(ctx context.Context, claimed Job) {
 	}
 }
 
+// reloadLocked returns with the cross-process state lock held. Callers must
+// release it after completing their transaction and while still holding mu.
+func (s *Scheduler) reloadLocked() (func(), error) {
+	unlock, err := s.store.lock(false)
+	if err != nil {
+		return nil, fmt.Errorf("lock cron state: %w", err)
+	}
+	jobs, err := s.store.Load()
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	s.jobs = make(map[string]Job, len(jobs))
+	for _, job := range jobs {
+		s.jobs[job.ID] = job
+	}
+	return unlock, nil
+}
+
 func (s *Scheduler) saveLocked() error {
 	jobs := make([]Job, 0, len(s.jobs))
 	for _, job := range s.jobs {
 		jobs = append(jobs, job)
 	}
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].ID < jobs[j].ID })
+	if s.saveJobs != nil {
+		return s.saveJobs(jobs)
+	}
 	return s.store.Save(jobs)
 }
 

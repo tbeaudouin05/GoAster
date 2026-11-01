@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"goaster/internal/artefacts"
 	"goaster/internal/chat"
 	"goaster/internal/localenv"
 	"goaster/internal/scheduler"
@@ -34,6 +35,13 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 	}
 	if err != nil {
 		return err
+	}
+
+	if _, err := chat.NewMemoryStoreWithError(""); err != nil {
+		return fmt.Errorf("initialize Markdown memory store: %w", err)
+	}
+	if err := artefacts.InstallStarters(ctx); err != nil {
+		return fmt.Errorf("install starter skills: %w", err)
 	}
 
 	environmentStore, err := localenv.NewStore()
@@ -76,10 +84,7 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 		return fmt.Errorf("initialize conversation session: %w", err)
 	}
 	cronScheduler, err := scheduler.New(scheduler.Options{
-		Executor: func(ctx context.Context, message string) error {
-			_, err := session.Reply(ctx, message)
-			return err
-		},
+		Executor: scheduledExecutor(session),
 	})
 	if err != nil {
 		return fmt.Errorf("initialize cron scheduler: %w", err)
@@ -92,4 +97,14 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 	}
 	defer cronScheduler.Stop()
 	return chat.RunWithEnvStore(ctx, terminalInput, output, session, environmentStore)
+}
+
+func scheduledExecutor(session *chat.Session) scheduler.Executor {
+	return func(ctx context.Context, message string) error {
+		_, err := session.ReplyScheduled(ctx, message)
+		if errors.Is(err, chat.ErrSessionBusy) {
+			return scheduler.ErrRetry
+		}
+		return err
+	}
 }
