@@ -27,14 +27,10 @@ import (
 
 func TestConfig(t *testing.T) {
 	config, err := ParseConfig(nil, io.Discard)
-	if err != nil || config.PrimaryModel != "gpt-6.1-sol" || config.FallbackModel != "gpt-5.6-luna" {
+	if err != nil || config.Model != DefaultModel {
 		t.Fatalf("defaults: %+v, %v", config, err)
 	}
-	config, err = ParseConfig([]string{"-primary-model", " custom-primary ", "-fallback-model", "custom-fallback"}, io.Discard)
-	if err != nil || config != (Config{"custom-primary", "custom-fallback"}) {
-		t.Fatalf("overrides: %+v, %v", config, err)
-	}
-	for _, args := range [][]string{{"-primary-model", " "}, {"-fallback-model", ""}, {"unexpected"}, {"-unknown"}, {"-primary-model"}, {"-offline"}, {"-echo-unavailable-model", "gpt-6.1-sol"}} {
+	for _, args := range [][]string{{"unexpected"}, {"-unknown"}, {"-auth-file"}, {"-offline"}, {"-echo-unavailable-model", "gpt-6.1-sol"}} {
 		if _, err := ParseConfig(args, io.Discard); err == nil {
 			t.Errorf("expected invalid configuration: %q", args)
 		}
@@ -59,62 +55,25 @@ func defaultConfig(t *testing.T) Config {
 	return config
 }
 
-func TestSessionSelection(t *testing.T) {
-	ordinaryError := errors.New("provider failed")
+func TestSessionReportsUnavailableModelWithoutRetryingAnotherModel(t *testing.T) {
+	var models []string
 	unavailable := fmt.Errorf("temporarily unavailable: %w", ErrModelUnavailable)
-	for _, tc := range []struct {
-		name        string
-		primaryErr  error
-		fallbackErr error
-		sameModel   bool
-		wantModels  []string
-		wantErr     error
-	}{
-		{"primary", nil, nil, false, []string{DefaultPrimaryModel, DefaultPrimaryModel}, nil},
-		{"fallback stays active", unavailable, nil, false, []string{DefaultPrimaryModel, DefaultFallbackModel, DefaultFallbackModel}, nil},
-		{"ordinary error does not switch", ordinaryError, nil, false, []string{DefaultPrimaryModel}, ordinaryError},
-		{"failed fallback stops", unavailable, ordinaryError, false, []string{DefaultPrimaryModel, DefaultFallbackModel}, ordinaryError},
-		{"same model is not retried", unavailable, nil, true, []string{DefaultPrimaryModel}, ErrModelUnavailable},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			config := defaultConfig(t)
-			if tc.sameModel {
-				config.FallbackModel = config.PrimaryModel
-			}
-			var models []string
-			provider := providerFunc(func(ctx context.Context, model, message string) (string, error) {
-				models = append(models, model)
-				if message != "hello" {
-					t.Errorf("message = %q", message)
-				}
-				if model == config.PrimaryModel && tc.primaryErr != nil {
-					return "", tc.primaryErr
-				}
-				if model == config.FallbackModel && tc.fallbackErr != nil {
-					return "", tc.fallbackErr
-				}
-				return "response", nil
-			})
-			session := NewSession(config, provider)
-			reply, err := session.Reply(context.Background(), "hello")
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("error = %v, want %v", err, tc.wantErr)
-			}
-			if err == nil {
-				if reply != "response" {
-					t.Fatalf("reply = %q", reply)
-				}
-				if _, err := session.Reply(context.Background(), "hello"); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if !reflect.DeepEqual(models, tc.wantModels) {
-				t.Errorf("models = %v, want %v", models, tc.wantModels)
-			}
-			if len(models) > 1 && models[1] == DefaultFallbackModel && !strings.Contains(session.reason, unavailable.Error()) {
-				t.Errorf("missing failure reason: %q", session.reason)
-			}
-		})
+	provider := providerFunc(func(_ context.Context, model, message string) (string, error) {
+		models = append(models, model)
+		if message != "hello" {
+			t.Errorf("message = %q", message)
+		}
+		return "", unavailable
+	})
+	registry := NewModelRegistryAt(filepath.Join(t.TempDir(), "openai-models.json"))
+	session := NewSession(Config{Registry: registry}, provider)
+	_, err := session.Reply(context.Background(), "hello")
+	if !errors.Is(err, unavailable) || !strings.Contains(err.Error(), DefaultModel) {
+		t.Fatalf("error = %v, want direct error for %s", err, DefaultModel)
+	}
+	_, err = session.Reply(context.Background(), "hello")
+	if !errors.Is(err, unavailable) || !reflect.DeepEqual(models, []string{DefaultModel, DefaultModel}) {
+		t.Fatalf("models = %v, error = %v; want the configured model on both requests", models, err)
 	}
 }
 
@@ -285,23 +244,20 @@ func TestLoop(t *testing.T) {
 	}
 }
 
-func TestLoopShowsFallback(t *testing.T) {
+func TestLoopReportsUnavailableModelDirectly(t *testing.T) {
 	var output bytes.Buffer
 	provider := providerFunc(func(_ context.Context, model, message string) (string, error) {
-		if model == DefaultPrimaryModel {
+		if model == DefaultModel {
 			return "", ErrModelUnavailable
 		}
 		return "reply to " + message, nil
 	})
-	err := runWithTestEnvStore(t, context.Background(), strings.NewReader("hello\nagain"), &output,
-		NewSession(defaultConfig(t), provider))
-	if err != nil {
-		t.Fatal(err)
+	err := runWithTestEnvStore(t, context.Background(), strings.NewReader("hello"), &output, NewSession(defaultConfig(t), provider))
+	if !errors.Is(err, ErrModelUnavailable) || !strings.Contains(err.Error(), DefaultModel) {
+		t.Fatalf("loop error = %v, want direct model error", err)
 	}
-	for _, want := range []string{"Active model: gpt-5.6-luna", "Fallback reason: gpt-6.1-sol failed: model unavailable", "assistant [gpt-5.6-luna]> reply to hello", "assistant [gpt-5.6-luna]> reply to again"} {
-		if !strings.Contains(output.String(), want) {
-			t.Errorf("output missing %q: %s", want, &output)
-		}
+	if strings.Contains(output.String(), "gpt-5.6-luna") || strings.Contains(output.String(), "Fallback") {
+		t.Fatalf("loop reported a fallback: %s", output.String())
 	}
 }
 

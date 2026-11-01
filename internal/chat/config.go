@@ -7,14 +7,10 @@ import (
 	"strings"
 )
 
-const (
-	DefaultPrimaryModel  = "gpt-6.1-sol"
-	DefaultFallbackModel = "gpt-5.6-luna"
-)
-
 type Config struct {
-	PrimaryModel  string
-	FallbackModel string
+	Model    string
+	Registry ModelRegistry
+	ChatID   int64
 }
 
 type RuntimeConfig struct {
@@ -40,8 +36,6 @@ func ParseRuntimeConfig(args []string, output io.Writer) (RuntimeConfig, error) 
 		fmt.Fprintln(output, "  /file: inspect non-secret files.")
 		flags.PrintDefaults()
 	}
-	flags.StringVar(&config.PrimaryModel, "primary-model", DefaultPrimaryModel, "primary model name")
-	flags.StringVar(&config.FallbackModel, "fallback-model", DefaultFallbackModel, "fallback model name")
 	flags.StringVar(&config.AuthFile, "auth-file", "", "path for the local OpenAI subscription credentials")
 	if err := flags.Parse(args); err != nil {
 		return RuntimeConfig{}, err
@@ -49,11 +43,7 @@ func ParseRuntimeConfig(args []string, output io.Writer) (RuntimeConfig, error) 
 	if flags.NArg() != 0 {
 		return RuntimeConfig{}, fmt.Errorf("unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	config.PrimaryModel = strings.TrimSpace(config.PrimaryModel)
-	config.FallbackModel = strings.TrimSpace(config.FallbackModel)
+	config.Model = DefaultModel
 	config.AuthFile = strings.TrimSpace(config.AuthFile)
-	if config.PrimaryModel == "" || config.FallbackModel == "" {
-		return RuntimeConfig{}, fmt.Errorf("primary and fallback model names must be non-empty")
-	}
 	return config, nil
 }

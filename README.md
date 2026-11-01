@@ -473,13 +473,23 @@ the packaged
 which explains the `/setprivacy` → **Turn off** option for users who want
 ordinary group messages.
 
-## Models and fallback
+## Models
 
-Primary and fallback models default to `gpt-6.1-sol` and `gpt-5.6-luna`.
+The shipped OpenAI-only model template is `config/openai-models.json`. On first
+run GoAster materializes the real runtime configuration at
+`~/.goaster/openai-models.json`; it reloads that file during normal requests,
+so an owner/operator can add a model without restarting the process. Telegram
+users can send `/m` to see the current exact model ID and
+`/m MODEL_OR_ALIAS` to select a configured model for that chat. The
+resolved exact ID is persisted per chat. A provider/model error is reported
+directly; GoAster does not automatically retry another configured model.
 
-Provider errors wrapping `ErrModelUnavailable` trigger one retry on the
-fallback model. The fallback remains active for the session and its reason is
-displayed. Other provider errors terminate the loop with a nonzero exit status.
+If the JSON configuration is unreadable or invalid, GoAster preserves the bad
+file, reports a bounded recovery notice once to the agent, and uses the
+compiled-in emergency model `gpt-6.1-terra` until a valid configuration is
+available. See the packaged [model administration skill](skills/model-administration/SKILL.md)
+for the owner/operator workflow; catalog membership is discovery only and is
+never model verification.
 
 Input lines are limited to roughly 1 MiB.
 

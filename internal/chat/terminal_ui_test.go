@@ -10,7 +10,7 @@ func TestTerminalUIKeepsLineProtocolOutsideInteractiveTerminals(t *testing.T) {
 	var output bytes.Buffer
 	ui := terminalUI{}
 	ui.renderIntro(&output, "chat provider")
-	ui.renderStatus(&output, "gpt-test", "")
+	ui.renderStatus(&output, "gpt-test")
 	ui.renderPrompt(&output)
 	ui.renderAssistant(&output, "gpt-test", "hello")
 
@@ -320,7 +320,7 @@ func TestTerminalUIUsesCompactASCIIAtNarrowWidths(t *testing.T) {
 		var output bytes.Buffer
 		ui := terminalUI{interactive: true, color: false, width: width}
 		ui.renderIntro(&output, "description with a long name")
-		ui.renderStatus(&output, strings.Repeat("model-", 5), strings.Repeat("fallback reason ", 4))
+		ui.renderStatus(&output, strings.Repeat("model-", 5))
 		ui.renderNotice(&output, "Notice", fixture)
 		ui.renderAssistant(&output, "gpt-test", fixture)
 		for _, line := range strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n") {
@@ -333,7 +333,7 @@ func TestTerminalUIUsesCompactASCIIAtNarrowWidths(t *testing.T) {
 	var asciiOutput bytes.Buffer
 	asciiUI := terminalUI{interactive: true, color: true, ascii: true, width: 31}
 	asciiUI.renderIntro(&asciiOutput, "plain")
-	asciiUI.renderStatus(&asciiOutput, "model", "reason")
+	asciiUI.renderStatus(&asciiOutput, "model")
 	asciiUI.renderAssistant(&asciiOutput, "model", "reply")
 	result := asciiOutput.String()
 	if strings.Contains(result, "\x1b") || strings.ContainsAny(result, "╭╮╰╯│─●•›✓×") {

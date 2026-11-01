@@ -85,6 +85,12 @@ type telegramFormattingError struct{}
 
 func (telegramFormattingError) Error() string { return "Telegram request failed" }
 
+type agentModelError struct {
+	message string
+}
+
+func (err agentModelError) Error() string { return err.message }
+
 const (
 	telegramToolFeedbackMaxChars  = 600
 	telegramTypingRefreshInterval = 4 * time.Second
@@ -93,8 +99,8 @@ const (
 
 // Run starts polling only after the token and pairing state are protected.
 // ready is called after the agent process is available and Telegram accepts
-// an initial getUpdates request; chat commands check model authentication
-// separately so /clear remains usable while it is unavailable.
+// an initial getUpdates request; /clear and /m remain usable while model
+// authentication is unavailable.
 func Run(ctx context.Context, paths Paths, ready func() error) error {
 	token, err := readPrivate(paths.Token)
 	if err != nil || ValidateToken(string(token)) != nil {
@@ -269,9 +275,9 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		}
 		if paired {
 			if a.agentEndpointAvailable(ctx, "/healthz") {
-				a.send(ctx, m.Chat.ID, "Paired. Send text, an image, or a document to chat. Send /clear to clear this chat's history.")
+				a.send(ctx, m.Chat.ID, "Paired. Send text, an image, or a document to chat. Use /m to view the model, /m MODEL_OR_ALIAS to select one, and /clear to clear this chat's history.")
 			} else {
-				a.send(ctx, m.Chat.ID, "Paired. The remote agent is not ready; check its remote authentication. You can still send /clear to clear this chat's history.")
+				a.send(ctx, m.Chat.ID, "Paired. The remote agent is not ready; check its remote authentication. You can still use /m to view or select a model and /clear to clear this chat's history.")
 			}
 		}
 		return
@@ -281,9 +287,9 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	}
 	if text == "/start" || strings.HasPrefix(text, "/start ") {
 		if a.agentEndpointAvailable(ctx, "/healthz") {
-			a.send(ctx, m.Chat.ID, "GoAster is ready for text messages, images, and documents. Send /clear to clear this chat's history.")
+			a.send(ctx, m.Chat.ID, "GoAster is ready for text messages, images, and documents. Use /m to view the model, /m MODEL_OR_ALIAS to select one, and /clear to clear this chat's history.")
 		} else {
-			a.send(ctx, m.Chat.ID, "The remote agent is not ready; check its remote authentication. You can still send /clear to clear this chat's history.")
+			a.send(ctx, m.Chat.ID, "The remote agent is not ready; check its remote authentication. You can still use /m to view or select a model and /clear to clear this chat's history.")
 		}
 		return
 	}
@@ -295,6 +301,19 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		reply, err := a.askAgent(ctx, text, m.Chat.ID, nil, nil)
 		if err != nil {
 			a.send(ctx, m.Chat.ID, "Conversation history could not be cleared.")
+			return
+		}
+		a.send(ctx, m.Chat.ID, reply)
+		return
+	}
+	if chat.IsModelCommand(text) {
+		if hasAttachment {
+			a.send(ctx, m.Chat.ID, "Usage: /m [MODEL_OR_ALIAS]")
+			return
+		}
+		reply, err := a.askAgent(ctx, text, m.Chat.ID, nil, nil)
+		if err != nil {
+			a.send(ctx, m.Chat.ID, "Model selection could not be completed.")
 			return
 		}
 		a.send(ctx, m.Chat.ID, reply)
@@ -348,6 +367,11 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if err != nil {
 		if errors.Is(err, attachment.ErrUnsupportedImage) {
 			sendFinal("That image format is unsupported. Supported image formats are JPEG, PNG, GIF, and WebP.")
+			return
+		}
+		var modelErr agentModelError
+		if errors.As(err, &modelErr) {
+			sendFinal(modelErr.message)
 			return
 		}
 		sendFinal("The remote agent could not answer. Check its remote authentication.")
@@ -482,17 +506,24 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 		return "", attachment.ErrUnsupportedImage
 	}
 	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		message := strings.TrimSpace(string(body))
+		if strings.HasPrefix(message, "model ") {
+			return "", agentModelError{message: truncateRunes(message, 512)}
+		}
 		return "", fmt.Errorf("agent request failed")
 	}
 	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 4*1024*1024))
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	var reply string
+	var modelError string
 	for scanner.Scan() {
 		var event struct {
 			Type      string `json:"type"`
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
 			Reply     string `json:"reply"`
+			Error     string `json:"error"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
 			return "", fmt.Errorf("agent request failed: %w", err)
@@ -504,12 +535,19 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 			}
 		case "final":
 			reply = event.Reply
+		case "error":
+			if strings.HasPrefix(event.Error, "model ") {
+				modelError = truncateRunes(strings.TrimSpace(event.Error), 512)
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return "", fmt.Errorf("agent request failed: %w", err)
 	}
 	if strings.TrimSpace(reply) == "" {
+		if modelError != "" {
+			return "", agentModelError{message: modelError}
+		}
 		return "", fmt.Errorf("agent request failed")
 	}
 	return reply, nil

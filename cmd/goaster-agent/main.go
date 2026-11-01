@@ -67,7 +67,11 @@ func run(ctx context.Context, args []string, output io.Writer, auth *chat.OpenAI
 func serve(store chat.CredentialStore) error {
 	memory := chat.NewMemoryStore("")
 	provider := chat.NewCodexProvider(store)
-	server := &http.Server{Addr: "127.0.0.1:8765", Handler: handlerWithMemory(provider, memory, provider.CheckAuth), ReadHeaderTimeout: 10 * time.Second}
+	registry, err := chat.NewModelRegistry("")
+	if err != nil {
+		return fmt.Errorf("initialize model registry: %w", err)
+	}
+	server := &http.Server{Addr: "127.0.0.1:8765", Handler: handlerWithMemoryAndRegistry(provider, memory, provider.CheckAuth, registry), ReadHeaderTimeout: 10 * time.Second}
 	if err := server.ListenAndServe(); err != nil {
 		return fmt.Errorf("server stopped")
 	}
@@ -79,6 +83,10 @@ func handler(provider chat.Provider, checkAuth func(context.Context) error) http
 }
 
 func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error) http.Handler {
+	return handlerWithMemoryAndRegistry(provider, memory, checkAuth, chat.ModelRegistry{})
+}
+
+func handlerWithMemoryAndRegistry(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error, registry chat.ModelRegistry) http.Handler {
 	var sessionsMu sync.Mutex
 	sessions := make(map[int64]*chat.Session)
 	sessionFor := func(chatID int64) *chat.Session {
@@ -87,7 +95,7 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 		if session := sessions[chatID]; session != nil {
 			return session
 		}
-		session := chat.NewSessionWithMemory(chat.Config{PrimaryModel: chat.DefaultPrimaryModel, FallbackModel: chat.DefaultFallbackModel}, provider, memory)
+		session := chat.NewSessionWithMemory(chat.Config{Registry: registry, ChatID: chatID}, provider, memory)
 		sessions[chatID] = session
 		return session
 	}
@@ -162,7 +170,7 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 			}
 			metadata = append(metadata, validated)
 		}
-		if !chat.IsClearCommand(request.Message) && (checkAuth == nil || checkAuth(r.Context()) != nil) {
+		if !chat.IsClearCommand(request.Message) && !chat.IsModelCommand(request.Message) && (checkAuth == nil || checkAuth(r.Context()) != nil) {
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
 			return
 		}
@@ -203,11 +211,24 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 		w.Header().Set("Cache-Control", "no-cache")
 		encoder := json.NewEncoder(w)
 		flusher, canFlush := w.(http.Flusher)
+		streamEmitted := false
 		emit := func(event any) {
+			streamEmitted = true
 			_ = encoder.Encode(event)
 			if canFlush {
 				flusher.Flush()
 			}
+		}
+		if chat.IsModelCommand(request.Message) {
+			if len(metadata) != 0 {
+				http.Error(w, "model command does not accept attachments", http.StatusBadRequest)
+				return
+			}
+			emit(struct {
+				Type  string `json:"type"`
+				Reply string `json:"reply"`
+			}{"final", modelCommandReply(registry, request.ChatID, request.Message)})
+			return
 		}
 		observer := func(name, arguments string) {
 			emit(struct {
@@ -217,10 +238,35 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 			}{"tool_call", name, arguments})
 		}
 		session := sessionFor(request.ChatID)
+		if !chat.IsClearCommand(request.Message) {
+			if notice := session.PendingModelRecoveryNotice(); notice != "" {
+				emit(struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				}{"model_recovery", notice})
+			}
+		}
 		reply, err := session.ReplyWithAttachments(chat.WithToolCallObserver(r.Context(), observer), request.Message, metadata)
 		if err != nil {
 			if errors.Is(err, attachment.ErrUnsupportedImage) {
 				http.Error(w, "unsupported image format", http.StatusUnsupportedMediaType)
+				return
+			}
+			if errors.Is(err, chat.ErrModelUnavailable) {
+				if streamEmitted {
+					emit(struct {
+						Type  string `json:"type"`
+						Error string `json:"error"`
+					}{"error", boundedAgentModelError(err)})
+					return
+				}
+				http.Error(w, boundedAgentModelError(err), http.StatusServiceUnavailable)
+				return
+			}
+			if streamEmitted {
+				emit(struct {
+					Type string `json:"type"`
+				}{"error"})
 				return
 			}
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
@@ -238,4 +284,49 @@ func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAu
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func modelCommandReply(registry chat.ModelRegistry, chatID int64, message string) string {
+	reference, ok := chat.ModelCommandArgument(message)
+	if !ok {
+		return "Usage: /m [MODEL_OR_ALIAS]"
+	}
+	if strings.TrimSpace(reference) == "" {
+		state, _ := registry.Current(chatID)
+		return formatModelSelection("Current model", state.Selection)
+	}
+	if strings.ContainsAny(reference, " \t\r\n") {
+		return "Usage: /m [MODEL_OR_ALIAS]"
+	}
+	selection, err := registry.Select(chatID, reference)
+	if err != nil {
+		if errors.Is(err, chat.ErrModelConfigBroken) {
+			return "Model configuration is recovering; using emergency model " + chat.EmergencyModel + "."
+		}
+		if errors.Is(err, chat.ErrModelNotConfigured) {
+			return "Model is not configured: " + boundedAgentText(reference, 128)
+		}
+		return "Model selection could not be saved."
+	}
+	return formatModelSelection("Selected model", selection)
+}
+
+func formatModelSelection(prefix string, selection chat.ModelSelection) string {
+	if selection.Alias == "" {
+		return prefix + ": " + selection.ID
+	}
+	return prefix + ": " + selection.ID + " (" + selection.Alias + ")"
+}
+
+func boundedAgentModelError(err error) string {
+	return boundedAgentText(err.Error(), 512)
+}
+
+func boundedAgentText(value string, max int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	return string(runes[:max-1]) + "…"
 }

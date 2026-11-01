@@ -139,7 +139,7 @@ func TestSessionsSharingStoreRejectStaleHistory(t *testing.T) {
 			if err := store.Save(numberedHistory(count)); err != nil {
 				t.Fatal(err)
 			}
-			config := Config{PrimaryModel: "primary"}
+			config := Config{Model: "primary"}
 			first, err := NewSessionWithStore(config, &summaryTestProvider{}, store)
 			if err != nil {
 				t.Fatal(err)
@@ -342,7 +342,7 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 		t.Run(fmt.Sprintf("compaction=%t", compact), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "session.json")
 			provider := &failingSaveProvider{}
-			session, err := NewPersistentSessionAt(Config{PrimaryModel: "primary"}, provider, path)
+			session, err := NewPersistentSessionAt(Config{Model: "primary"}, provider, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -428,7 +428,7 @@ func TestSessionDirectorySyncErrors(t *testing.T) {
 func TestSessionSaveReportsDirectorySyncFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.json")
 	provider := &historyTestProvider{}
-	session, err := NewPersistentSessionAt(Config{PrimaryModel: "primary"}, provider, path)
+	session, err := NewPersistentSessionAt(Config{Model: "primary"}, provider, path)
 	if err != nil {
 		t.Fatal(err)
 	}

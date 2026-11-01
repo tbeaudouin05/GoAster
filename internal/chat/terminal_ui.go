@@ -141,27 +141,14 @@ func (ui terminalUI) renderIntroHelp(output io.Writer, width int) {
 	}
 }
 
-func (ui terminalUI) renderStatus(output io.Writer, model, reason string) {
+func (ui terminalUI) renderStatus(output io.Writer, model string) {
 	if !ui.interactive {
 		fmt.Fprintf(output, "Active model: %s\n", model)
-		if reason != "" {
-			fmt.Fprintf(output, "Fallback reason: %s\n", reason)
-		}
 		return
 	}
 
 	status := ui.statusMarker() + " Active model: " + model
-	if reason != "" {
-		separator := "  ·  "
-		if ui.ascii {
-			separator = "  -  "
-		}
-		status += separator + "fallback active"
-	}
 	ui.renderWrapped(output, "  ", status, ui.renderWidth(output), ansiStatus)
-	if reason != "" {
-		ui.renderWrapped(output, "  ", "Fallback reason: "+reason, ui.renderWidth(output), ansiYellow)
-	}
 	fmt.Fprintln(output)
 }
 

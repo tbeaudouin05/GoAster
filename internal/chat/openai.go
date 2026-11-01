@@ -1140,6 +1140,7 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 		instructions += "\n\nThe following packaged GoAster skill is available for reliable internet content retrieval:\n\n" + skills.InternetFetch
 		instructions += "\n\nThe following packaged GoAster skill is available for Telegram group privacy guidance:\n\n" + skills.TelegramGroupPrivacy
 		instructions += "\n\nThe following optional packaged GoAster skill applies only when the user requests memory consolidation; its restrictions apply to that workflow, not unrelated tasks:\n\n" + skills.MemoryConsolidation
+		instructions += "\n\nThe following owner/operator-only packaged GoAster skill applies to model administration; never turn it into a public chat command:\n\n" + skills.ModelAdministration
 	}
 	// Memory is injected into normal model instructions, but intentionally not
 	// into the no-tools summarization request. This keeps conversation-summary

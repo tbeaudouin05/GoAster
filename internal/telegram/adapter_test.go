@@ -194,6 +194,55 @@ func TestClearCommandUsesOnlyItsTelegramChatWithoutProviderReadiness(t *testing.
 	}
 }
 
+func TestModelCommandsReachAgentAndReturnSelectionReply(t *testing.T) {
+	var sent []string
+	var forwarded []string
+	a := adapter{
+		token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+			}
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			sent = append(sent, payload.Text)
+			return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var request struct {
+				Message string `json:"message"`
+				ChatID  int64  `json:"chat_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.ChatID != 42 {
+				t.Fatalf("model command chat ID = %d", request.ChatID)
+			}
+			forwarded = append(forwarded, request.Message)
+			reply := "Current model: gpt-6.1-sol (sol)"
+			if request.Message == "/m terra" {
+				reply = "Selected model: gpt-6.1-terra (terra)"
+			}
+			return response(http.StatusOK, `{"type":"final","reply":"`+reply+`"}`+"\n"), nil
+		}),
+	}
+
+	a.handle(context.Background(), privateMessage(42, "/m"))
+	a.handle(context.Background(), privateMessage(42, "/m terra"))
+	a.handle(context.Background(), privateMessage(42, "/model terra"))
+	if len(forwarded) != 2 || forwarded[0] != "/m" || forwarded[1] != "/m terra" {
+		t.Fatalf("forwarded model commands = %#v", forwarded)
+	}
+	if len(sent) != 2 || sent[0] != "Current model: gpt-6.1-sol (sol)" || sent[1] != "Selected model: gpt-6.1-terra (terra)" {
+		t.Fatalf("model command replies = %#v", sent)
+	}
+}
+
 func TestPairedGroupMessagesForwardChatIDAndReplyToOriginatingChat(t *testing.T) {
 	var sent []struct {
 		ChatID int64  `json:"chat_id"`

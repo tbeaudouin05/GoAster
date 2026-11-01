@@ -66,6 +66,11 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 	if err := registerRemoteLoginTool(codexProvider, newProtectedLoginHandoffWithFallback(openControllingTerminal, toolTerminalFallback, sshRun)); err != nil {
 		return fmt.Errorf("register remote login tool: %w", err)
 	}
+	registry, err := chat.NewModelRegistry("")
+	if err != nil {
+		return fmt.Errorf("initialize model registry: %w", err)
+	}
+	runtimeConfig.Config.Registry = registry
 	session, err := chat.NewPersistentSession(runtimeConfig.Config, codexProvider)
 	if err != nil {
 		return fmt.Errorf("initialize conversation session: %w", err)

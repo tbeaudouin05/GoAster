@@ -76,7 +76,7 @@ func TestSessionStorePersistsAndLoadsConversation(t *testing.T) {
 
 func TestPersistentSessionLoadsAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.json")
-	config := Config{PrimaryModel: DefaultPrimaryModel, FallbackModel: DefaultFallbackModel}
+	config := Config{Model: DefaultModel}
 	firstProvider := &historyTestProvider{}
 	first, err := NewPersistentSessionAt(config, firstProvider, path)
 	if err != nil {
@@ -114,7 +114,7 @@ func TestSessionStoreQuarantinesMalformedConversationSafely(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := NewPersistentSessionAt(Config{PrimaryModel: "primary", FallbackModel: "fallback"}, &historyTestProvider{}, path)
+	session, err := NewPersistentSessionAt(Config{Model: "primary"}, &historyTestProvider{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestSessionStorePersistsFullContextBudget(t *testing.T) {
 
 func TestSessionTrimsOutboundContextAndExplainsIt(t *testing.T) {
 	provider := &historyTestProvider{}
-	session := NewSession(Config{PrimaryModel: "primary", FallbackModel: "fallback"}, provider)
+	session := NewSession(Config{Model: "primary"}, provider)
 	session.history = make([]ChatMessage, 0, 38)
 	for index := 0; index < 37; index++ {
 		role := "user"

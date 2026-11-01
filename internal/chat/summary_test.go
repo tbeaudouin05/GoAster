@@ -100,7 +100,7 @@ func TestSessionSummaryTriggerBoundaries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := &summaryTestProvider{}
-			session := NewSession(Config{PrimaryModel: "configured-model", FallbackModel: "fallback"}, provider)
+			session := NewSession(Config{Model: "configured-model"}, provider)
 			session.history = tc.history
 			if _, err := session.Reply(context.Background(), "q"); err != nil {
 				t.Fatal(err)
@@ -118,7 +118,7 @@ func TestSessionSummaryTriggerBoundaries(t *testing.T) {
 
 func TestSessionSummaryPersistsAndReplacesOlderMessages(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.json")
-	config := Config{PrimaryModel: "primary", FallbackModel: "fallback"}
+	config := Config{Model: "primary"}
 	provider := &summaryTestProvider{}
 	session, err := NewPersistentSessionAt(config, provider, path)
 	if err != nil {
@@ -178,7 +178,7 @@ func TestSessionSummaryPersistsAndReplacesOlderMessages(t *testing.T) {
 
 func TestSummaryTriggerCountsPreviousSummary(t *testing.T) {
 	provider := &summaryTestProvider{}
-	session := NewSession(Config{PrimaryModel: "primary"}, provider)
+	session := NewSession(Config{Model: "primary"}, provider)
 	session.summary = "prior context"
 	priorTokens := estimateMessageTokens(summaryMessage(session.summary))
 	session.history = historyWithTokens(summarizeTokens - priorTokens - 1)
@@ -203,7 +203,7 @@ func TestSessionSummaryFailureFallsBackToBoundedTrimming(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := &summaryTestProvider{summarize: tc.summarize}
-			session := NewSession(Config{PrimaryModel: "primary"}, provider)
+			session := NewSession(Config{Model: "primary"}, provider)
 			session.summary = "previous summary"
 			session.history = numberedHistory(maxSessionMessages)
 			if _, err := session.Reply(context.Background(), "current question"); err != nil {
@@ -232,7 +232,7 @@ func TestSessionSummaryFailureFallsBackToBoundedTrimming(t *testing.T) {
 
 func TestSummaryFailureTrimsTokenBudget(t *testing.T) {
 	provider := &summaryTestProvider{summarize: func() (string, error) { return "", errors.New("unavailable") }}
-	session := NewSession(Config{PrimaryModel: "primary"}, provider)
+	session := NewSession(Config{Model: "primary"}, provider)
 	session.history = historyWithTokens(summarizeTokens - 1)
 	if _, err := session.Reply(context.Background(), "q"); err != nil {
 		t.Fatal(err)
@@ -246,7 +246,7 @@ func TestSummaryFailureTrimsTokenBudget(t *testing.T) {
 func TestCompactionIsCheckpointedBeforeReplyFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.json")
 	provider := &summaryTestProvider{replyError: errors.New("chat failed")}
-	session, err := NewPersistentSessionAt(Config{PrimaryModel: "primary"}, provider, path)
+	session, err := NewPersistentSessionAt(Config{Model: "primary"}, provider, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestConcurrentRepliesSummarizeOnlyOnce(t *testing.T) {
 		<-release
 		return "important earlier facts", nil
 	}}
-	session := NewSession(Config{PrimaryModel: "primary"}, provider)
+	session := NewSession(Config{Model: "primary"}, provider)
 	session.history = numberedHistory(maxSessionMessages - 1)
 	errorsCh := make(chan error, 2)
 	go func() { _, err := session.Reply(context.Background(), "first"); errorsCh <- err }()
@@ -317,7 +317,7 @@ func TestCanceledSummaryLeavesConversationUnchanged(t *testing.T) {
 		<-release
 		return "ignored summary", nil
 	}}
-	session := NewSession(Config{PrimaryModel: "primary"}, provider)
+	session := NewSession(Config{Model: "primary"}, provider)
 	original := numberedHistory(maxSessionMessages)
 	session.history = cloneChatMessages(original)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -368,7 +368,7 @@ func TestCodexSessionSummarizesWithSubscriptionAndNoTools(t *testing.T) {
 	provider := NewCodexProvider(store)
 	provider.backendURL = server.URL
 	provider.httpClient = server.Client()
-	session := NewSession(Config{PrimaryModel: "configured-model"}, provider)
+	session := NewSession(Config{Model: "configured-model"}, provider)
 	session.summary = "prior summary"
 	session.history = numberedHistory(maxSessionMessages)
 	if reply, err := session.Reply(context.Background(), "latest question"); err != nil || reply != "normal reply" {

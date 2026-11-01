@@ -74,7 +74,7 @@ func RunWithEnvStoreAndPicker(ctx context.Context, input io.Reader, output io.Wr
 }
 
 type chatLoopSession interface {
-	modelStatus() (string, string)
+	modelStatus() string
 	description() string
 	consumeStartupNotice() string
 	consumeContextNotice() string
@@ -94,8 +94,7 @@ type terminalOutput interface {
 func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output io.Writer, session chatLoopSession, store environmentValueStore, picker EnvironmentFilePicker, ui terminalUI) error {
 	w := bufio.NewWriter(output)
 	status := func() {
-		model, reason := session.modelStatus()
-		ui.renderStatus(w, model, reason)
+		ui.renderStatus(w, session.modelStatus())
 	}
 	ui.renderIntro(w, session.description())
 	status()
@@ -249,7 +248,7 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 				return err
 			}
 		}
-		previousModel, _ := session.modelStatus()
+		previousModel := session.modelStatus()
 		var reply string
 		var err error
 		requestContext := ctx
@@ -270,13 +269,20 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 		if notice := session.consumeContextNotice(); notice != "" {
 			ui.renderNotice(w, "Context notice", notice)
 		}
-		model, _ := session.modelStatus()
+		model := session.modelStatus()
 		if model != previousModel {
 			status()
 		}
 		if err != nil {
 			if flushErr := w.Flush(); flushErr != nil {
 				return flushErr
+			}
+			if ui.interactive && errors.Is(err, ErrModelUnavailable) {
+				ui.renderError(w, boundText(err.Error(), 512))
+				if flushErr := w.Flush(); flushErr != nil {
+					return flushErr
+				}
+				continue
 			}
 			if ui.interactive && classifyRequestError(err) == requestErrorRecoverable {
 				ui.renderRequestError(w)
@@ -346,10 +352,10 @@ func prepareSelectedFile(pathName string) (attachment.Metadata, string, error) {
 	return metadata, directory, nil
 }
 
-func (s *Session) modelStatus() (string, string) {
+func (s *Session) modelStatus() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active, s.reason
+	return s.active
 }
 
 func (s *Session) consumeStartupNotice() string {

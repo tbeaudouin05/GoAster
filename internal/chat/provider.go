@@ -14,8 +14,21 @@ import (
 	"goaster/internal/attachment"
 )
 
-// Providers wrap ErrModelUnavailable when switching models may help.
+// Providers wrap ErrModelUnavailable when the selected model is unavailable.
 var ErrModelUnavailable = errors.New("model unavailable")
+
+// ModelRequestError reports the exact model that returned a provider error.
+// The caller must not retry the request with another model.
+type ModelRequestError struct {
+	Model string
+	Err   error
+}
+
+func (err ModelRequestError) Error() string {
+	return fmt.Sprintf("model %s: %v", err.Model, err.Err)
+}
+
+func (err ModelRequestError) Unwrap() error { return err.Err }
 
 type requestErrorClass uint8
 
@@ -118,9 +131,9 @@ type conversationSummarizer interface {
 type Session struct {
 	mu            sync.Mutex
 	provider      Provider
-	config        Config
+	registry      ModelRegistry
+	chatID        int64
 	active        string
-	reason        string
 	history       []ChatMessage
 	summary       string
 	store         *SessionStore
@@ -152,7 +165,19 @@ func NewSession(config Config, provider Provider) *Session {
 // NewSessionWithMemory adds Markdown memory to normal provider requests while
 // keeping it out of conversation history and persisted summaries.
 func NewSessionWithMemory(config Config, provider Provider, memory *MemoryStore) *Session {
-	return &Session{provider: provider, config: config, active: config.PrimaryModel, memory: memory}
+	active := strings.TrimSpace(config.Model)
+	if active == "" {
+		active = DefaultModel
+	}
+	session := &Session{
+		provider: provider,
+		registry: config.Registry,
+		chatID:   config.ChatID,
+		active:   active,
+		memory:   memory,
+	}
+	session.refreshModel()
+	return session
 }
 
 func withCurrentTurnAttachments(ctx context.Context, attachments []attachment.Metadata) context.Context {
@@ -212,6 +237,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		s.contextNotice = ""
 		return "Conversation history cleared.", nil
 	}
+	s.refreshModel()
 
 	historyMessage := attachment.HistoryPlaceholder(message, attachments)
 	candidate := append(cloneChatMessages(s.history), ChatMessage{Role: "user", Content: historyMessage})
@@ -258,10 +284,17 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		}
 	}
 
-	bounded, budgetTrimmed := boundSessionMessages(summary, candidate, trimmed, maxContextTokens, maxSessionMessages)
+	recoveryNotice := s.registry.takeRecoveryNotice()
+	modelNotice := ChatMessage{Role: "system", Content: "Pending GoAster model configuration recovery notice: " + recoveryNotice}
+	budget, maxMessages := maxContextTokens, maxSessionMessages
+	if recoveryNotice != "" {
+		budget -= estimateMessageTokens(modelNotice)
+		maxMessages--
+	}
+	bounded, budgetTrimmed := boundSessionMessages(summary, candidate, trimmed, budget, maxMessages)
 	trimmed = trimmed || budgetTrimmed
 	if trimmed {
-		bounded, _ = boundSessionMessages(summary, candidate, true, maxContextTokens, maxSessionMessages)
+		bounded, _ = boundSessionMessages(summary, candidate, true, budget, maxMessages)
 		s.contextNotice = contextTrimNotice
 	}
 	requestHistory := make([]ChatMessage, 0, len(bounded)+2)
@@ -272,6 +305,9 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		requestHistory = append(requestHistory, ChatMessage{Role: "system", Content: contextTrimNotice})
 	}
 	requestHistory = append(requestHistory, bounded...)
+	if recoveryNotice != "" {
+		requestHistory = append([]ChatMessage{modelNotice}, requestHistory...)
+	}
 	requestMessage := message
 	if len(bounded) > 0 {
 		requestMessage = bounded[len(bounded)-1].Content
@@ -360,20 +396,7 @@ func (s *Session) replyWithHistory(ctx context.Context, message string, history 
 	if err == nil {
 		return reply, nil
 	}
-	if !errors.Is(err, ErrModelUnavailable) || s.active == s.config.FallbackModel {
-		return "", fmt.Errorf("model %s: %w", s.active, err)
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", ctxErr
-	}
-	// Keep the fallback active for the remainder of this terminal session.
-	s.reason = fmt.Sprintf("%s failed: %v", s.active, err)
-	s.active = s.config.FallbackModel
-	reply, err = s.providerReply(ctx, s.active, message, history)
-	if err != nil {
-		return "", fmt.Errorf("fallback model %s failed (%s): %w", s.active, s.reason, err)
-	}
-	return reply, nil
+	return "", ModelRequestError{Model: s.active, Err: err}
 }
 
 func (s *Session) providerReply(ctx context.Context, model, message string, history []ChatMessage) (string, error) {

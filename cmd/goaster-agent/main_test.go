@@ -53,6 +53,12 @@ type historyProvider struct {
 
 type recordingHistoryProvider func([]chat.ChatMessage) string
 
+type recordingModelProvider func(string) (string, error)
+
+func (p recordingModelProvider) Reply(_ context.Context, model, _ string) (string, error) {
+	return p(model)
+}
+
 func (p recordingHistoryProvider) Reply(_ context.Context, _, message string) (string, error) {
 	return p([]chat.ChatMessage{{Role: "user", Content: message}}), nil
 }
@@ -172,6 +178,7 @@ func TestAgentLoopbackHandler(t *testing.T) {
 		{name: "reject missing chat ID", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello"}`, status: 400},
 		{name: "reject unknown fields", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","extra":true}`, status: 400},
 		{name: "credential error redacted", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","chat_id":42}`, provider: fakeProvider{err: errors.New("fake-secret")}, status: 503},
+		{name: "selected model error is direct", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","chat_id":42}`, provider: fakeProvider{err: chat.ErrModelUnavailable}, status: 503, want: "model gpt-6.1-sol"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(tc.method, "http://"+tc.host+tc.path, strings.NewReader(tc.body))
@@ -625,6 +632,138 @@ func TestAgentSessionsSerializeSameChatAndRunDifferentChatsConcurrently(t *testi
 			}
 		}
 	})
+}
+
+func TestAgentModelCommandResolvesAliasPersistsChatSelectionAndSkipsAuth(t *testing.T) {
+	registry := chat.NewModelRegistryAt(filepath.Join(t.TempDir(), "openai-models.json"))
+	checkAuth := func(context.Context) error { return errors.New("authentication unavailable") }
+	h := handlerWithMemoryAndRegistry(fakeProvider{}, nil, checkAuth, registry)
+
+	current := postChat(t, h, 101, "/m")
+	if current.Code != http.StatusOK || !strings.Contains(current.Body.String(), `"reply":"Current model: gpt-6.1-sol (sol)"`) {
+		t.Fatalf("current model response = %d %q", current.Code, current.Body.String())
+	}
+	selected := postChat(t, h, 101, "/m terra")
+	if selected.Code != http.StatusOK || !strings.Contains(selected.Body.String(), `"reply":"Selected model: gpt-6.1-terra (terra)"`) {
+		t.Fatalf("alias selection response = %d %q", selected.Code, selected.Body.String())
+	}
+	other := postChat(t, h, 202, "/m")
+	if other.Code != http.StatusOK || !strings.Contains(other.Body.String(), `"reply":"Current model: gpt-6.1-sol (sol)"`) {
+		t.Fatalf("other chat response = %d %q", other.Code, other.Body.String())
+	}
+
+	data, err := os.ReadFile(registry.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config chat.ModelConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Chats["101"] != chat.EmergencyModel {
+		t.Fatalf("persisted model = %q, want %q", config.Chats["101"], chat.EmergencyModel)
+	}
+	for message, want := range map[string]string{
+		"/m gpt-5.6-luna": "Selected model: gpt-5.6-luna (luna)",
+		"/m missing":      "Model is not configured: missing",
+		"/m sol terra":    "Usage: /m [MODEL_OR_ALIAS]",
+	} {
+		response := postChat(t, h, 101, message)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), want) {
+			t.Errorf("response to %q = %d %q", message, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestAgentReportsModelRecoveryEventOnceAndUsesEmergencyModel(t *testing.T) {
+	pathName := filepath.Join(t.TempDir(), "openai-models.json")
+	if err := os.WriteFile(pathName, []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := chat.NewModelRegistryAt(pathName)
+	provider := &historyProvider{}
+	h := handlerWithMemoryAndRegistry(provider, nil, readyAuth, registry)
+	command := postChat(t, h, 303, "/m")
+	if command.Code != http.StatusOK || !strings.Contains(command.Body.String(), "gpt-6.1-terra") {
+		t.Fatalf("model command during recovery = %d %q", command.Code, command.Body.String())
+	}
+	clear := postChat(t, h, 303, "/clear")
+	if clear.Code != http.StatusOK {
+		t.Fatalf("clear during recovery = %d %q", clear.Code, clear.Body.String())
+	}
+	first := postChat(t, h, 303, "hello")
+	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), `"type":"model_recovery"`) || !strings.Contains(first.Body.String(), "parse model configuration") {
+		t.Fatalf("recovery event = %d %q", first.Code, first.Body.String())
+	}
+	if len(provider.histories) != 1 || provider.histories[0][0].Role != "system" || !strings.Contains(provider.histories[0][0].Content, "parse model configuration") {
+		t.Fatalf("recovery message was not supplied to the model: %#v", provider.histories)
+	}
+	second := postChat(t, h, 303, "again")
+	if second.Code != http.StatusOK || strings.Contains(second.Body.String(), `"type":"model_recovery"`) {
+		t.Fatalf("recovery event repeated = %d %q", second.Code, second.Body.String())
+	}
+	for _, message := range provider.histories[1] {
+		if strings.Contains(message.Content, "model configuration recovery notice") {
+			t.Fatalf("recovery notice repeated in provider input: %#v", provider.histories[1])
+		}
+	}
+}
+
+func TestAgentReloadsUpdatedModelForExistingChat(t *testing.T) {
+	pathName := filepath.Join(t.TempDir(), "openai-models.json")
+	registry := chat.NewModelRegistryAt(pathName)
+	provider := recordingModelProvider(func(model string) (string, error) { return model, nil })
+	h := handlerWithMemoryAndRegistry(provider, nil, readyAuth, registry)
+	before := postChat(t, h, 101, "before")
+	if before.Code != http.StatusOK || !strings.Contains(before.Body.String(), `"reply":"gpt-6.1-sol"`) {
+		t.Fatalf("before update = %d %q", before.Code, before.Body.String())
+	}
+	temporary := filepath.Join(filepath.Dir(pathName), "updated.json")
+	updated := `{"provider":"openai","models":[{"id":"gpt-6.1-sol","alias":"sol"},{"id":"gpt-new","alias":"new"}],"chats":{"101":"gpt-new"}}`
+	if err := os.WriteFile(temporary, []byte(updated), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temporary, pathName); err != nil {
+		t.Fatal(err)
+	}
+	after := postChat(t, h, 101, "after")
+	if after.Code != http.StatusOK || !strings.Contains(after.Body.String(), `"reply":"gpt-new"`) {
+		t.Fatalf("after update = %d %q", after.Code, after.Body.String())
+	}
+}
+
+func TestAgentKeepsRecoveryNoticeAfterConfigRepair(t *testing.T) {
+	pathName := filepath.Join(t.TempDir(), "openai-models.json")
+	if err := os.WriteFile(pathName, []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var histories [][]chat.ChatMessage
+	provider := recordingHistoryProvider(func(history []chat.ChatMessage) string {
+		histories = append(histories, history)
+		return "ok"
+	})
+	h := handlerWithMemoryAndRegistry(provider, nil, readyAuth, chat.NewModelRegistryAt(pathName))
+	if response := postChat(t, h, 101, "/m"); response.Code != http.StatusOK {
+		t.Fatalf("model command = %d %q", response.Code, response.Body.String())
+	}
+	valid := `{"provider":"openai","models":[{"id":"gpt-6.1-sol","alias":"sol"}],"chats":{}}`
+	if err := os.WriteFile(pathName, []byte(valid), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if response := postChat(t, h, 202, "hello"); response.Code != http.StatusOK {
+		t.Fatalf("first normal request = %d %q", response.Code, response.Body.String())
+	}
+	if response := postChat(t, h, 101, "hello"); response.Code != http.StatusOK {
+		t.Fatalf("second normal request = %d %q", response.Code, response.Body.String())
+	}
+	if len(histories) != 2 || len(histories[0]) == 0 || !strings.Contains(histories[0][0].Content, "parse model configuration") {
+		t.Fatalf("repair lost recovery notice: %#v", histories)
+	}
+	for _, message := range histories[1] {
+		if strings.Contains(message.Content, "model configuration recovery notice") {
+			t.Fatalf("recovery notice repeated after repair: %#v", histories[1])
+		}
+	}
 }
 
 var _ http.Handler = handler(fakeProvider{}, readyAuth)

@@ -126,9 +126,9 @@ func NewSessionWithStoreAndMemory(config Config, provider Provider, store *Sessi
 	session.history = cloneChatMessages(loaded.Messages)
 	session.summary = loaded.Summary
 	if loaded.Recovered {
-		session.startupNotice = "The saved conversation was invalid, so it was moved aside and a new conversation was started."
+		session.startupNotice = appendSessionNotice(session.startupNotice, "The saved conversation was invalid, so it was moved aside and a new conversation was started.")
 	} else if loaded.Trimmed {
-		session.startupNotice = "The saved conversation was shortened to fit GoAster's automatic context budget."
+		session.startupNotice = appendSessionNotice(session.startupNotice, "The saved conversation was shortened to fit GoAster's automatic context budget.")
 	}
 	return session, nil
 }
@@ -320,6 +320,16 @@ func (s *SessionStore) validatePath() error {
 		return fmt.Errorf("conversation path is empty")
 	}
 	return nil
+}
+
+func appendSessionNotice(existing, next string) string {
+	if existing == "" {
+		return next
+	}
+	if next == "" || strings.Contains(existing, next) {
+		return existing
+	}
+	return existing + " " + next
 }
 
 func (s *SessionStore) recoverInvalid() (SessionLoadResult, error) {

@@ -29,3 +29,9 @@ var TelegramGroupPrivacy string
 //
 //go:embed self-improvement-memory-consolidation/SKILL.md
 var MemoryConsolidation string
+
+// ModelAdministration contains the owner/operator-only model configuration
+// workflow packaged into the GoAster executable.
+//
+//go:embed model-administration/SKILL.md
+var ModelAdministration string

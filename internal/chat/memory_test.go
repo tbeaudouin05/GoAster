@@ -203,7 +203,7 @@ func TestSessionInjectsMemoryContextWithoutChangingHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := &memoryContextProvider{}
-	session := NewSessionWithMemory(Config{PrimaryModel: "primary"}, provider, store)
+	session := NewSessionWithMemory(Config{Model: "primary"}, provider, store)
 	if _, err := session.Reply(context.Background(), "hello"); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestConversationSummarizationDoesNotWriteProtectedMemory(t *testing.T) {
 	sessionPath := filepath.Join(t.TempDir(), "session.json")
 	provider := &memorySummaryProvider{}
 	session, err := NewSessionWithStoreAndMemory(
-		Config{PrimaryModel: "primary"},
+		Config{Model: "primary"},
 		provider,
 		NewSessionStoreAt(sessionPath),
 		memory,

@@ -168,8 +168,7 @@ func TestCodexProviderEnsureAuthStartsDeviceLoginBeforeChat(t *testing.T) {
 	}
 
 	if err := Run(context.Background(), strings.NewReader(""), &output, NewSession(Config{
-		PrimaryModel:  DefaultPrimaryModel,
-		FallbackModel: DefaultFallbackModel,
+		Model: DefaultModel,
 	}, provider)); err != nil {
 		t.Fatal(err)
 	}
@@ -566,12 +565,31 @@ func TestCodexProviderSendsConversationHistory(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var recoveryRequests, unavailableRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request codexRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode Codex request: %v", err)
 		}
-		if len(request.Input) != 3 {
+		if request.Model == DefaultModel {
+			unavailableRequests.Add(1)
+			http.Error(w, "model unavailable", http.StatusNotFound)
+			return
+		}
+		if request.Model == EmergencyModel {
+			count := recoveryRequests.Add(1)
+			found := false
+			for _, item := range request.Input {
+				for _, content := range item.Content {
+					if item.Role == "system" && strings.Contains(content.Text, "parse model configuration") {
+						found = true
+					}
+				}
+			}
+			if found != (count == 1) {
+				t.Errorf("recovery notice present on request %d = %v", count, found)
+			}
+		} else if len(request.Input) != 3 {
 			t.Errorf("history input length = %d, want 3: %+v", len(request.Input), request.Input)
 		} else {
 			if request.Input[0].Role != "user" || request.Input[0].Content[0].Type != "input_text" || request.Input[0].Content[0].Text != "first" {
@@ -603,6 +621,31 @@ func TestCodexProviderSendsConversationHistory(t *testing.T) {
 	}
 	if reply != "ok" {
 		t.Fatalf("reply = %q, want ok", reply)
+	}
+
+	brokenPath := filepath.Join(t.TempDir(), "openai-models.json")
+	if err := os.WriteFile(brokenPath, []byte("not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	session := NewSession(Config{Registry: NewModelRegistryAt(brokenPath)}, provider)
+	for _, message := range []string{"first request", "second request"} {
+		if _, err := session.Reply(context.Background(), message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count := recoveryRequests.Load(); count != 2 {
+		t.Fatalf("emergency model requests = %d, want 2", count)
+	}
+
+	validPath := filepath.Join(t.TempDir(), "openai-models.json")
+	validSession := NewSession(Config{Registry: NewModelRegistryAt(validPath)}, provider)
+	for _, message := range []string{"first request", "second request"} {
+		if _, err := validSession.Reply(context.Background(), message); !errors.Is(err, ErrModelUnavailable) {
+			t.Fatalf("unavailable model error = %v", err)
+		}
+	}
+	if count := unavailableRequests.Load(); count != 2 || recoveryRequests.Load() != 2 {
+		t.Fatalf("valid config requests: unavailable = %d, emergency = %d", count, recoveryRequests.Load())
 	}
 }
 
@@ -677,7 +720,7 @@ func TestCodexProviderSendsCurrentTurnImageAndNotLaterTextTurns(t *testing.T) {
 	provider := NewCodexProvider(store)
 	provider.backendURL = backend.URL
 	provider.httpClient = backend.Client()
-	session := NewSession(Config{PrimaryModel: "gpt-test", FallbackModel: "gpt-test"}, provider)
+	session := NewSession(Config{Model: "gpt-test"}, provider)
 	if reply, err := session.ReplyWithAttachments(context.Background(), "inspect this image", []attachment.Metadata{metadata}); err != nil || reply != "image received" {
 		t.Fatalf("image reply = %q, error = %v", reply, err)
 	}
@@ -738,7 +781,7 @@ func TestCodexProviderShellReadsCurrentTurnDocumentBytes(t *testing.T) {
 	provider := NewCodexProvider(store)
 	provider.backendURL = backend.URL
 	provider.httpClient = backend.Client()
-	session := NewSession(Config{PrimaryModel: "gpt-test", FallbackModel: "gpt-test"}, provider)
+	session := NewSession(Config{Model: "gpt-test"}, provider)
 	reply, err := session.ReplyWithAttachments(context.Background(), "read this document", []attachment.Metadata{metadata})
 	if err != nil || reply != "document read" {
 		t.Fatalf("document reply = %q, error = %v", reply, err)
@@ -798,7 +841,7 @@ func TestCodexChatSendsExitTextToProviderAndRequiresAuth(t *testing.T) {
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "missing-auth.json")}
 	provider := NewCodexProvider(store)
 	var output bytes.Buffer
-	config := Config{PrimaryModel: DefaultPrimaryModel, FallbackModel: DefaultFallbackModel}
+	config := Config{Model: DefaultModel}
 	err := Run(context.Background(), strings.NewReader("/exit\n"), &output, NewSession(config, provider))
 	if !errors.Is(err, ErrLoginRequired) {
 		t.Fatalf("chat error = %v, want missing authentication", err)

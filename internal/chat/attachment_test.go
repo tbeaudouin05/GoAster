@@ -29,7 +29,7 @@ func (p *attachmentHistoryProvider) ReplyWithHistory(_ context.Context, _ string
 
 func TestSessionAttachmentReferencesAreCurrentTurnOnly(t *testing.T) {
 	provider := &attachmentHistoryProvider{}
-	session := NewSession(Config{PrimaryModel: DefaultPrimaryModel, FallbackModel: DefaultFallbackModel}, provider)
+	session := NewSession(Config{Model: DefaultModel}, provider)
 	metadata := attachment.Metadata{
 		Type:     "document",
 		Filename: "notes.txt",
@@ -63,7 +63,7 @@ func TestSessionAttachmentReferencesAreCurrentTurnOnly(t *testing.T) {
 }
 
 func TestSessionRejectsTooManyOrUnsafeAttachmentReferences(t *testing.T) {
-	session := NewSession(Config{PrimaryModel: DefaultPrimaryModel, FallbackModel: DefaultFallbackModel}, providerFunc(func(context.Context, string, string) (string, error) {
+	session := NewSession(Config{Model: DefaultModel}, providerFunc(func(context.Context, string, string) (string, error) {
 		return "unused", nil
 	}))
 	metadata := attachment.Metadata{Type: "image", Filename: "photo.jpg", Path: "/tmp/photo.jpg", Size: 1}
@@ -77,7 +77,7 @@ func TestSessionRejectsTooManyOrUnsafeAttachmentReferences(t *testing.T) {
 }
 
 func TestSessionStoresUsefulAttachmentOnlyHistoryPlaceholder(t *testing.T) {
-	session := NewSession(Config{PrimaryModel: DefaultPrimaryModel, FallbackModel: DefaultFallbackModel}, providerFunc(func(context.Context, string, string) (string, error) {
+	session := NewSession(Config{Model: DefaultModel}, providerFunc(func(context.Context, string, string) (string, error) {
 		return "received", nil
 	}))
 	metadata := attachment.Metadata{
@@ -116,7 +116,7 @@ func TestSessionDoesNotPersistEchoedAttachmentPathOrImageData(t *testing.T) {
 		return "seen at " + pathName + " data:image/png;base64," + encoded + " and " + encoded, nil
 	})
 	storePath := filepath.Join(t.TempDir(), "session.json")
-	session, err := NewSessionWithStore(Config{PrimaryModel: "primary"}, provider, NewSessionStoreAt(storePath))
+	session, err := NewSessionWithStore(Config{Model: "primary"}, provider, NewSessionStoreAt(storePath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestSessionRedactsEchoedAgentAttachmentDirectory(t *testing.T) {
 	provider := providerFunc(func(context.Context, string, string) (string, error) {
 		return "directory: " + directory + "; file: " + metadata.Path, nil
 	})
-	session := NewSession(Config{PrimaryModel: "primary"}, provider)
+	session := NewSession(Config{Model: "primary"}, provider)
 	reply, err := session.ReplyWithAttachments(context.Background(), "read", []attachment.Metadata{metadata})
 	if err != nil {
 		t.Fatal(err)
