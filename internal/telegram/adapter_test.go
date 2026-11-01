@@ -42,8 +42,9 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sent []struct {
-		ChatID int64  `json:"chat_id"`
-		Text   string `json:"text"`
+		ChatID    int64  `json:"chat_id"`
+		Text      string `json:"text"`
+		ParseMode string `json:"parse_mode"`
 	}
 	var forwarded []struct {
 		Message string `json:"message"`
@@ -54,8 +55,9 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 			return response(200, `{"ok":true,"result":true}`), nil
 		}
 		var payload struct {
-			ChatID int64  `json:"chat_id"`
-			Text   string `json:"text"`
+			ChatID    int64  `json:"chat_id"`
+			Text      string `json:"text"`
+			ParseMode string `json:"parse_mode"`
 		}
 		if !strings.HasSuffix(r.URL.Path, "/sendMessage") || json.NewDecoder(r.Body).Decode(&payload) != nil {
 			t.Fatal("unexpected Telegram request")
@@ -92,11 +94,11 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 		t.Fatal("unpaired or non-private users gained access")
 	}
 	a.handle(context.Background(), privateMessage(20, "/start"))
-	if len(sent) != 1 || !strings.Contains(sent[0].Text, "pairing code") || p.userID != 0 {
+	if len(sent) != 1 || !strings.Contains(sent[0].Text, "pairing code") || sent[0].ParseMode != "HTML" || p.userID != 0 {
 		t.Fatal("/start did not explain pairing without authorizing anyone")
 	}
 	a.handle(context.Background(), privateMessage(42, "/start "+testCode))
-	if p.userID != 42 || len(sent) != 2 || !strings.Contains(sent[1].Text, "Paired") {
+	if p.userID != 42 || len(sent) != 2 || !strings.Contains(sent[1].Text, "Paired") || sent[1].ParseMode != "HTML" {
 		t.Fatal("valid private pairing failed")
 	}
 	for _, m := range []*message{privateMessage(99, "hello"), privateMessage(99, "/start "+testCode), group, privateMessage(42, "")} {
@@ -106,11 +108,11 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 		t.Fatal("unauthorized, unsupported or non-text message reached the agent")
 	}
 	a.handle(context.Background(), privateMessage(42, "my token is "+testToken))
-	if len(forwarded) != 0 || len(sent) != 3 || strings.Contains(sent[2].Text, testToken) {
+	if len(forwarded) != 0 || len(sent) != 3 || sent[2].ParseMode != "HTML" || strings.Contains(sent[2].Text, testToken) {
 		t.Fatal("a pasted bot token reached the agent or was echoed")
 	}
 	a.handle(context.Background(), privateMessage(42, "Hello"))
-	if len(forwarded) != 1 || forwarded[0].Message != "Hello" || forwarded[0].ChatID != 42 || len(sent) != 4 || sent[3].ChatID != 42 || sent[3].Text != "hello back" {
+	if len(forwarded) != 1 || forwarded[0].Message != "Hello" || forwarded[0].ChatID != 42 || len(sent) != 4 || sent[3].ChatID != 42 || sent[3].Text != "hello back" || sent[3].ParseMode != "HTML" {
 		t.Fatal("paired user's private message was not answered")
 	}
 	reloaded, err := loadPairing(paths)
@@ -550,10 +552,10 @@ func TestPairingDoesNotAnnounceChatWhenAgentIsUnavailable(t *testing.T) {
 func TestToolFeedbackTruncatesArgumentsByRune(t *testing.T) {
 	arguments := strings.Repeat("界", telegramToolFeedbackMaxChars+5)
 	text := toolFeedbackText("shell_execute", arguments)
-	if !strings.HasPrefix(text, "🔧 `shell_execute`\n") {
+	if !strings.HasPrefix(text, "🔧 `shell_execute`\n```json\n") {
 		t.Fatalf("tool feedback prefix = %q", text)
 	}
-	preview := strings.TrimPrefix(text, "🔧 `shell_execute`\n")
+	preview := strings.TrimSuffix(strings.TrimPrefix(text, "🔧 `shell_execute`\n```json\n"), "\n```")
 	if len([]rune(preview)) != telegramToolFeedbackMaxChars+1 || !strings.HasSuffix(preview, "…") {
 		t.Fatalf("preview length/suffix = %d/%q", len([]rune(preview)), preview[len(preview)-3:])
 	}
@@ -571,7 +573,11 @@ func TestAgentRejectsUntypedLegacyResponse(t *testing.T) {
 }
 
 func TestTelegramToolProgressUsesOneMessageAndEditsFinal(t *testing.T) {
-	var calls []string
+	var calls []struct {
+		method    string
+		text      string
+		parseMode string
+	}
 	a := &adapter{
 		token:   testToken,
 		pairing: &pairing{userID: 42},
@@ -582,22 +588,32 @@ func TestTelegramToolProgressUsesOneMessageAndEditsFinal(t *testing.T) {
 				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
 			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
 				var payload struct {
-					Text string `json:"text"`
+					Text      string `json:"text"`
+					ParseMode string `json:"parse_mode"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 					t.Fatal(err)
 				}
-				calls = append(calls, "send:"+payload.Text)
+				calls = append(calls, struct {
+					method    string
+					text      string
+					parseMode string
+				}{"send", payload.Text, payload.ParseMode})
 				return response(http.StatusOK, `{"ok":true,"result":{"message_id":7}}`), nil
 			case strings.HasSuffix(r.URL.Path, "/editMessageText"):
 				var payload struct {
 					MessageID int64  `json:"message_id"`
 					Text      string `json:"text"`
+					ParseMode string `json:"parse_mode"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 					t.Fatal(err)
 				}
-				calls = append(calls, fmt.Sprintf("edit:%d:%s", payload.MessageID, payload.Text))
+				calls = append(calls, struct {
+					method    string
+					text      string
+					parseMode string
+				}{"edit", fmt.Sprintf("%d:%s", payload.MessageID, payload.Text), payload.ParseMode})
 				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
 			default:
 				t.Fatalf("unexpected Telegram request: %s", r.URL.Path)
@@ -616,17 +632,65 @@ func TestTelegramToolProgressUsesOneMessageAndEditsFinal(t *testing.T) {
 	}
 
 	a.handle(context.Background(), privateMessage(42, "inspect the repo"))
-	want := []string{
-		"send:🔧 `shell_execute`\n{\"command\":\"git status\"}",
-		"edit:7:🔧 `web_search`\n{\"query\":\"go\"}",
-		"edit:7:Done.",
+	want := []struct {
+		method    string
+		text      string
+		parseMode string
+	}{
+		{"send", "🔧 <code>shell_execute</code>\n<pre><code>{\"command\":\"git status\"}\n</code></pre>", "HTML"},
+		{"edit", "7:🔧 <code>web_search</code>\n<pre><code>{\"query\":\"go\"}\n</code></pre>", "HTML"},
+		{"edit", "7:Done.", "HTML"},
 	}
 	if len(calls) != len(want) {
 		t.Fatalf("Telegram calls = %#v, want %#v", calls, want)
 	}
 	for index := range want {
 		if calls[index] != want[index] {
-			t.Fatalf("Telegram call %d = %q, want %q", index, calls[index], want[index])
+			t.Fatalf("Telegram call %d = %+v, want %+v", index, calls[index], want[index])
+		}
+	}
+}
+
+func TestTelegramSendAndEditFallbackToPlainTextAfterFormattingRejection(t *testing.T) {
+	type payload struct {
+		ChatID    int64   `json:"chat_id"`
+		MessageID int64   `json:"message_id"`
+		Text      string  `json:"text"`
+		ParseMode *string `json:"parse_mode"`
+	}
+	var requests []payload
+	a := &adapter{client: doerFunc(func(r *http.Request) (*http.Response, error) {
+		var got payload
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, got)
+		if got.ParseMode != nil && *got.ParseMode == "HTML" {
+			return response(http.StatusBadRequest, `{"ok":false,"description":"Bad Request: can't parse entities"}`), nil
+		}
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			return response(http.StatusOK, `{"ok":true,"result":{"message_id":9}}`), nil
+		}
+		return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+	})}
+
+	message := "Run `echo <ok>`"
+	if id, err := a.sendMessage(context.Background(), 42, message); err != nil || id != 9 {
+		t.Fatalf("sendMessage = %d, %v", id, err)
+	}
+	if err := a.editMessage(context.Background(), 42, 9, message); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 4 {
+		t.Fatalf("Telegram requests = %#v, want formatted and plain retries for send/edit", requests)
+	}
+	for index := range requests {
+		if index%2 == 0 {
+			if requests[index].ParseMode == nil || *requests[index].ParseMode != "HTML" || requests[index].Text != "Run <code>echo &lt;ok&gt;</code>" {
+				t.Errorf("formatted request %d = %+v", index, requests[index])
+			}
+		} else if requests[index].ParseMode != nil || requests[index].Text != message {
+			t.Errorf("plain fallback request %d = %+v", index, requests[index])
 		}
 	}
 }

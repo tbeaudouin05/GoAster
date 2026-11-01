@@ -450,7 +450,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		for _, want := range []string{
 			"An `/healthz` result of `ok` means only that the remote agent is ready.",
 			"Keep the user-facing onboarding status `partial` until all four Telegram gates have been verified:",
-			"The bot token was supplied through the local `/env` flow and installed by the separately approved remote setup.",
+			"The bot token was supplied through the local `/env` flow and installed by the approved remote setup.",
 			"The Telegram adapter reports ready after the agent health check and a real successful Telegram poll.",
 			"The intended Telegram account completed private pairing and received the pairing confirmation.",
 			"That paired user sent a fresh ordinary text message from a real Telegram chat and confirmed that a reply from the remote agent arrived in the same chat.",

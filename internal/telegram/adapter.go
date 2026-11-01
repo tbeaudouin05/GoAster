@@ -81,6 +81,10 @@ type telegramFile struct {
 	FilePath string `json:"file_path"`
 }
 
+type telegramFormattingError struct{}
+
+func (telegramFormattingError) Error() string { return "Telegram request failed" }
+
 const (
 	telegramToolFeedbackMaxChars  = 600
 	telegramTypingRefreshInterval = 4 * time.Second
@@ -212,14 +216,16 @@ func (a *adapter) call(ctx context.Context, method string, payload any, result a
 		return fmt.Errorf("Telegram request failed")
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Telegram request failed")
-	}
 	var envelope struct {
-		OK     bool            `json:"ok"`
-		Result json.RawMessage `json:"result"`
+		OK          bool            `json:"ok"`
+		Result      json.RawMessage `json:"result"`
+		Description string          `json:"description"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&envelope); err != nil || !envelope.OK {
+	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&envelope)
+	if isTelegramFormattingRejection(envelope.Description) {
+		return telegramFormattingError{}
+	}
+	if decodeErr != nil || !envelope.OK || resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("Telegram request failed")
 	}
 	if result != nil && json.Unmarshal(envelope.Result, result) != nil {
@@ -317,25 +323,16 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	}
 	sendFinal := func(text string) {
 		stopTyping()
-		runes := []rune(text)
-		if len(runes) == 0 {
+		chunks := splitTelegramMarkdown(text, 2000)
+		if len(chunks) == 0 {
 			return
 		}
 		if progressMessageID != 0 {
-			n := len(runes)
-			if n > 2000 {
-				n = 2000
-			}
-			_ = a.editMessage(ctx, m.Chat.ID, progressMessageID, string(runes[:n]))
-			runes = runes[n:]
+			_ = a.editMessage(ctx, m.Chat.ID, progressMessageID, chunks[0])
+			chunks = chunks[1:]
 		}
-		for len(runes) > 0 {
-			n := len(runes)
-			if n > 2000 {
-				n = 2000
-			}
-			a.send(ctx, m.Chat.ID, string(runes[:n]))
-			runes = runes[n:]
+		for _, chunk := range chunks {
+			a.send(ctx, m.Chat.ID, chunk)
 		}
 	}
 	attachments, err := a.downloadAttachments(ctx, m)
@@ -402,19 +399,34 @@ func (a *adapter) sendMessage(ctx context.Context, chatID int64, text string) (i
 	var result struct {
 		MessageID int64 `json:"message_id"`
 	}
-	err := a.call(ctx, "sendMessage", struct {
-		ChatID int64  `json:"chat_id"`
-		Text   string `json:"text"`
-	}{chatID, text}, &result)
+	payload := struct {
+		ChatID    int64  `json:"chat_id"`
+		Text      string `json:"text"`
+		ParseMode string `json:"parse_mode,omitempty"`
+	}{ChatID: chatID, Text: markdownToTelegramHTML(text), ParseMode: "HTML"}
+	err := a.call(ctx, "sendMessage", payload, &result)
+	if isTelegramFormattingError(err) {
+		payload.Text = text
+		payload.ParseMode = ""
+		err = a.call(ctx, "sendMessage", payload, &result)
+	}
 	return result.MessageID, err
 }
 
 func (a *adapter) editMessage(ctx context.Context, chatID, messageID int64, text string) error {
-	return a.call(ctx, "editMessageText", struct {
+	payload := struct {
 		ChatID    int64  `json:"chat_id"`
 		MessageID int64  `json:"message_id"`
 		Text      string `json:"text"`
-	}{chatID, messageID, text}, nil)
+		ParseMode string `json:"parse_mode,omitempty"`
+	}{ChatID: chatID, MessageID: messageID, Text: markdownToTelegramHTML(text), ParseMode: "HTML"}
+	err := a.call(ctx, "editMessageText", payload, nil)
+	if isTelegramFormattingError(err) {
+		payload.Text = text
+		payload.ParseMode = ""
+		err = a.call(ctx, "editMessageText", payload, nil)
+	}
+	return err
 }
 
 func toolFeedbackText(name, arguments string) string {
@@ -422,7 +434,21 @@ func toolFeedbackText(name, arguments string) string {
 	if preview == "" {
 		return fmt.Sprintf("🔧 `%s`", name)
 	}
-	return fmt.Sprintf("🔧 `%s`\n%s", name, preview)
+	return fmt.Sprintf("🔧 `%s`\n```json\n%s\n```", name, preview)
+}
+
+func isTelegramFormattingRejection(description string) bool {
+	description = strings.ToLower(description)
+	return strings.Contains(description, "can't parse entities") ||
+		strings.Contains(description, "can't find end tag") ||
+		strings.Contains(description, "unsupported start tag") ||
+		strings.Contains(description, "unsupported end tag") ||
+		strings.Contains(description, "no start tag")
+}
+
+func isTelegramFormattingError(err error) bool {
+	_, ok := err.(telegramFormattingError)
+	return ok
 }
 
 func truncateRunes(text string, max int) string {
