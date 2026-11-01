@@ -22,16 +22,16 @@ GoAster masks values and saves confirmed settings locally.`
 
 const ovhOnboardingStart = `OVH setup has started.
 
-I will first check whether GoAster already has a server connection saved on this computer. If it does, I will check that same server. I will not create a second server.
+I will first look for a GoAster server connection saved on this computer. If I find one, I will include its exact address in the routine checklist and ask once for approval before contacting it. I will not create a second server.
 
-You do not need to understand SSH, API calls, or service names. I will tell you one simple next step at a time.
+Approval applies only to the listed actions and that server. If anything unexpected or outside the plan comes up, I will pause and ask only for the needed input or approval. Approval does not guarantee setup will succeed. I will report progress as I go.
 
 If a server is already found, I will say one of these:
 - “The server is ready. Please approve the OpenAI sign-in in the terminal.”
 - “The server is ready, but Telegram still needs setup. Do not test Telegram yet.”
 - “Setup is complete. Please send one normal message to the Telegram bot and check that it replies.”
 
-If no server is saved, I will guide you through creating one. I will ask before anything that could cost money or change your OVH account. Starting this screen does not create or change anything.`
+If no server is saved, I will guide you through creating one. Creating an OVH resource, making a change that could cost money, or making another high-impact change always needs separate explicit approval. Starting this screen does not create or change anything.`
 
 const environmentFileCommand = "/env-file"
 const getEnvironmentFileCommand = "/get-env"

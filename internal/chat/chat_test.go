@@ -619,7 +619,7 @@ func TestInteractiveMalformedEnvironmentPathReturnsToPrompt(t *testing.T) {
 	}
 }
 
-func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
+func TestLoopStartsOVHOnboardingWithBoundedRoutineApprovalGuidance(t *testing.T) {
 	var output bytes.Buffer
 	var messages []string
 	provider := providerFunc(func(_ context.Context, _ string, message string) (string, error) {
@@ -635,13 +635,17 @@ func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
 	}
 	for _, want := range []string{
 		"OVH setup has started.",
-		"check whether GoAster already has a server connection saved on this computer",
+		"look for a GoAster server connection saved on this computer",
+		"If I find one, I will include its exact address in the routine checklist and ask once for approval before contacting it.",
 		"I will not create a second server.",
-		"You do not need to understand SSH, API calls, or service names.",
+		"Approval applies only to the listed actions and that server.",
+		"If anything unexpected or outside the plan comes up, I will pause and ask only for the needed input or approval.",
+		"Approval does not guarantee setup will succeed.",
+		"I will report progress as I go.",
 		"The server is ready, but Telegram still needs setup. Do not test Telegram yet.",
 		"Setup is complete. Please send one normal message to the Telegram bot and check that it replies.",
 		"If no server is saved, I will guide you through creating one.",
-		"I will ask before anything that could cost money or change your OVH account.",
+		"Creating an OVH resource, making a change that could cost money, or making another high-impact change always needs separate explicit approval.",
 		"Starting this screen does not create or change anything.",
 		"assistant [gpt-6.1-sol]> OVH skill response",
 	} {
@@ -649,8 +653,72 @@ func TestLoopStartsOVHOnboardingWithReadOnlyNextStep(t *testing.T) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
 	}
+	for _, outdated := range []string{
+		"one simple next step at a time",
+		"one approval at a time",
+		"approval before each routine step",
+	} {
+		if strings.Contains(output.String(), outdated) {
+			t.Errorf("onboarding start still implies per-step routine approval %q: %s", outdated, output.String())
+		}
+	}
 	if strings.Contains(output.String(), "POST /cloud/project") || strings.Contains(output.String(), "automatically create") {
 		t.Errorf("onboarding output contains account-level project creation guidance: %s", output.String())
+	}
+}
+
+func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) {
+	policy := strings.Join(strings.Fields(skills.OVHRemote), " ")
+	for _, want := range []string{
+		"## Consolidated routine approval for onboarding",
+		"Show one checklist for that exact target before the first remote connection or mutation.",
+		"Ask for one unambiguous approval of the listed routine plan.",
+		"Target: [exact existing OVH host name or address]",
+		"During a user-started multi-step onboarding, defer this remote check until the user approves the target-specific routine checklist",
+		"Read-only inspection and verification:",
+		"Local connection record (if needed): Save or refresh the verified server connection on this computer for future checks.",
+		"Installation and build actions (if required):",
+		"Starting or restarting the already-reviewed GoAster services (if required):",
+		"Remote OpenAI sign-in handoff (if required):",
+		"Telegram token and pairing setup (include only if the token was already supplied through the local `/env` flow):",
+		"this approval covers exactly the listed actions and that target.",
+		"It does not authorize another server, creating or changing OVH resources or costs, destructive changes or unexpected file replacement, unrelated commands or any other unlisted action, new service definitions, Telegram privacy changes, or changes to firewall, SSH, or user configuration.",
+		"If a step is unexpected, changes scope, needs input not yet supplied, requires a new service definition, has financial or destructive impact, or cannot be safely predicted, stop before that step and ask only for the specific input or approval needed.",
+		"Do not repeat the chat approval request before each listed step",
+		"Approval of the routine bundle does not mean onboarding will succeed",
+		"Count business steps, never individual shell commands.",
+	} {
+		if !strings.Contains(policy, want) {
+			t.Errorf("OVH remote approval policy missing %q", want)
+		}
+	}
+
+	for _, outdated := range []string{
+		"Before each stage, show the exact script",
+		"Apply approval separately to:",
+		"obtain fresh explicit approval immediately before running it",
+		"Starting or restarting either unit also needs its own approval.",
+		"Immediately before each, present the exact temporary script",
+		"show the exact target and local key to the user in chat",
+	} {
+		if strings.Contains(policy, outdated) {
+			t.Errorf("OVH remote approval policy still requires repeated approval: %q", outdated)
+		}
+	}
+
+	checklistStart := strings.Index(skills.OVHRemote, "Target: [exact existing OVH host name or address]")
+	if checklistStart < 0 {
+		t.Fatal("OVH remote approval policy is missing the target-specific checklist")
+	}
+	checklistTail := skills.OVHRemote[checklistStart:]
+	checklistEnd := strings.Index(checklistTail, "\n\nAsk the user to approve")
+	if checklistEnd < 0 {
+		t.Fatal("OVH remote approval checklist has no clear end")
+	}
+	checklist := checklistTail[:checklistEnd]
+	technicalDetails := regexp.MustCompile(`(?i)\b(?:ssh|port|systemd|root|healthz|shell_execute|remote_login)\b|api endpoint|known_hosts|key path|raw commands?`)
+	if detail := technicalDetails.FindString(checklist); detail != "" {
+		t.Errorf("user-facing OVH routine checklist exposes internal detail %q", detail)
 	}
 }
 

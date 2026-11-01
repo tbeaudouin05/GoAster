@@ -68,13 +68,16 @@ A safe record looks like this:
 {"target":"root@141.95.179.66","port":22,"known_hosts":"~/.ssh/known_hosts"}
 ```
 
-On every restart, if both the private key and its record exist, first perform a
-read-only strict-host-key SSH check against that exact target. Check only whether
-GoAster's remote agent answers its local health check and whether the separate
-remote OpenAI login is already present and usable. Do not provision, install,
-restart, pair Telegram, or change OVH state during this automatic check. If the
-check fails, say plainly that the saved server could not be confirmed and ask
-for one next action; do not silently create another server.
+Outside a user-started multi-step onboarding, on every restart where both the
+private key and its record exist, perform a read-only strict-host-key SSH check
+against that exact target. Check only whether GoAster's remote agent answers
+its local health check and whether the separate remote OpenAI login is already
+present and usable. Do not provision, install, restart, pair Telegram, or
+change OVH state during this automatic check. If it fails, say plainly that
+the saved server could not be confirmed and ask for one next action; do not
+silently create another server. During a user-started multi-step onboarding,
+defer this remote check until the user approves the target-specific routine
+checklist, then perform it as part of the listed read-only inspection.
 
 After a newly created host or an existing host has been successfully verified,
 save or refresh this record before continuing. On later starts, use the saved
@@ -245,6 +248,85 @@ Do not store a remote script, credentials, or command transcript in the
 repository. Use bounded timeouts for network operations unless the user
 specifically needs an interactive session.
 
+## Consolidated routine approval for onboarding
+
+For a multi-step onboarding of an existing host, first resolve the exact
+candidate target from the user's request or saved connection record without
+contacting the host. Show one checklist for that exact target before the first
+remote connection or mutation. Ask for one unambiguous approval of the listed
+routine plan. The bundle includes the read-only inspection and verification
+needed for that host as well as the routine setup actions below. Do not repeat
+the chat approval request before each listed step; after approval, continue
+through the listed expected steps and report progress after each meaningful
+business step or approval-gated stage.
+
+Use plain, concise user-facing wording, with the exact target identified by
+its server name or address but without SSH paths, ports, service-unit names,
+API endpoints, health-check paths, raw commands, or implementation details.
+The checklist must name only the actions actually included in this run:
+
+Target: [exact existing OVH host name or address]
+
+Read-only inspection and verification: Confirm this is the exact current OVH
+server and secure access; check its operating system, available space, needed
+tools, existing GoAster setup, and current service readiness.
+
+Local connection record (if needed): Save or refresh the verified server
+connection on this computer for future checks.
+
+Installation and build actions (if required): Install the required build tool
+if missing, prepare GoAster's reviewed build files, build the agent and
+Telegram components, and install them only if this will not replace unexpected
+existing files.
+
+Starting or restarting the already-reviewed GoAster services (if required):
+Start or restart the existing, reviewed GoAster agent service and, if Telegram
+setup is included, its existing Telegram service when needed, in the planned
+order.
+
+Remote OpenAI sign-in handoff (if required): Start the protected sign-in
+handoff for this host and wait for the administrator to complete browser
+authorization.
+
+Telegram token and pairing setup (include only if the token was already
+supplied through the local `/env` flow): Install that locally supplied token
+on this server and prepare private pairing for the intended user.
+
+Ask the user to approve the routine plan for the named target. State that this
+approval covers exactly the listed actions and that target. Treat only an
+unambiguous affirmative answer to this checklist as approval; a general
+request to continue is not enough. It does not
+authorize another server, creating or changing OVH resources or costs,
+destructive changes or unexpected file replacement, unrelated commands or
+any other unlisted action, new service definitions, Telegram privacy changes,
+or changes to firewall, SSH, or user configuration. Those actions require a
+separate, specific approval; OVH resource creation keeps its provisioning
+workflow's separate explicit approval.
+
+If the Telegram token has not yet been supplied through local `/env`, omit
+Telegram token and pairing setup from this checklist. Pause when that input is
+needed and ask only for it through the local environment-file flow. Once the
+input exists, obtain specific approval for Telegram setup if it was not in the
+approved checklist. Do not reveal or repeat any secret value.
+
+The approval is bounded to this exact target and checklist; it is not blanket
+permission for follow-up work. If a step is unexpected, changes scope, needs
+input not yet supplied, requires a new service definition, has financial or
+destructive impact, or cannot be safely predicted, stop before that step and
+ask only for the specific input or approval needed. Do not ask again for
+already-listed steps. After resolving the issue, continue the remaining
+approved steps unless the user declines or the changed scope requires a new
+plan. Approval of the routine bundle does not mean onboarding will succeed;
+failures, mismatches, and uncertain results still pause the flow. If discovery
+is still needed to know the remaining scope, say it is being assessed without
+inventing a total. Once known, give a concise numbered plan and total, then
+revise the plan and progress counts if discovery changes the remaining scope.
+Count business steps, never individual shell commands.
+
+This chat approval authorizes invoking the remote sign-in handoff as listed;
+it does not remove the handoff's existing local terminal confirmation or the
+administrator's browser/device authorization. Keep both safeguards.
+
 ## Orchestrate the interactive remote login
 
 After the agent is installed and the root account is ready for SSH, the
@@ -262,10 +344,11 @@ approved host policy. Do not create or switch to an unprivileged runtime
 account as part of onboarding. If root SSH is unavailable, stop and report the
 blocker; do not weaken SSH or silently substitute another account.
 
-Before using the tool, show the exact target and local key to the user in chat
-and get explicit approval to contact that host. Then call `remote_login` with
-the confirmed target and approved local key. The tool prints the target, key
-path, port, and strict host-key policy in the local terminal and requires the
+Before using the tool, confirm internally that the exact target and local key
+are those covered by the approved routine checklist. Then call `remote_login`
+with that confirmed target and approved local key; do not request a second
+chat approval for this listed handoff. The tool prints the target, key path,
+port, and strict host-key policy in the local terminal and requires the
 administrator to type `YES` there before connecting. It opens `/dev/tty` when
 available. If the model tool has no controlling terminal, it may use inherited
 stdin and stdout only when both refer to the same actual terminal device; pipes,
@@ -309,37 +392,48 @@ remote login writes only root's separate
 `/root/.goaster/agent-auth.json`; it never copies the local `/root/.goaster/auth.json`.
 For reauthentication, keep the agent service running so the command's
 built-in read-only health check can reach it, invoke the same interactive
-flow, and wait for administrator approval and a successful health check. Any
-agent or adapter service restart requires separate explicit approval.
+flow, and wait for administrator approval and a successful health check. A
+service restart during reauthentication still needs separate explicit
+approval unless that exact restart is included in a new routine checklist.
 
 ## Safe workflow
 
-1. Confirm that the remote already exists and that the user wants this exact
-   host contacted. Do not create, discover, or delete OVH resources as part of
-   this skill.
-2. Start with read-only checks: verify the host key, SSH identity, effective
-   user, hostname, OS, working directory, disk space, relevant service state,
-   and network reachability. Report the target and sanitized results.
-3. Before any remote state change, show the exact command or temporary script,
-   target, privilege level, files or services affected, expected cost or
-   downtime, and whether the action is reversible. Obtain a fresh, explicit
-   approval immediately before running it. Approval for one command does not
-   authorize a different command or follow-up action.
-4. After approval, run one focused change at a time. Stop on the first failure
-   or uncertain result; inspect the remote state before considering a retry.
-   Never retry a command that may have partially completed without checking its
-   effect and getting approval for the retry.
-5. Verify the requested change with a separate read-only check, remove the
-   temporary host script, and report what was verified. If cleanup fails,
-   report the temporary path so the user can remove it safely.
+1. Resolve the exact existing host from the request or saved connection. Do
+   not silently substitute a saved server for a host the user specified.
+   Present the target-specific routine checklist above and get explicit
+   approval before any remote connection or mutation. Do not create, discover,
+   or delete OVH resources as part of this skill.
+2. After approval, perform the listed read-only checks first. Verify the host
+   key, SSH identity, effective user, hostname, OS, working directory, disk
+   space, relevant service state, and network reachability. If identity,
+   trust, or any value is uncertain, stop and ask only for the needed input or
+   approval.
+3. Before each listed mutation, review the exact command or temporary script,
+   target, privilege level, affected files or services, expected impact, and
+   reversibility in the operator workflow. Run it only if it stays within the
+   approved checklist. In normal onboarding messages, describe the action in
+   plain language without exposing commands or implementation details. No
+   additional chat approval is needed for a listed action.
+4. Stop on the first failure or uncertain result; inspect remote state before
+   considering a retry and request specific approval for the retry. Never
+   retry a command that may have partially completed without checking its
+   effect.
+5. Verify each change with a separate read-only check, remove the temporary
+   host script, and report what was verified. If cleanup fails, keep its path
+   in operator guidance and report the issue without exposing the path in a
+   normal onboarding message.
 
-Explicit approval is required immediately before package installation or
-removal, file or data changes, service start/stop/restart/enable/disable,
-account or SSH configuration changes, firewall or network changes, reboots,
-deployments, pulls or checkouts, and any privileged or destructive command.
-Never run broad deletion, disk-formatting, shutdown, or `curl | sh`-style
-commands without a separately approved, narrowly scoped alternative; refuse
-to guess at a destructive scope.
+The routine checklist can authorize only its listed read-only checks,
+build/install actions, already-reviewed service starts/restarts, sign-in
+handoff, and Telegram token/pairing setup when included, on the named target.
+Separate explicit approval remains required for package removal, file
+replacement not listed, service definition creation or changes, service
+enable/disable or stop actions, account or SSH configuration changes, firewall
+or network changes, reboots, deployments outside the reviewed build, OVH
+resource creation or cost, and any other destructive or unlisted action.
+Never run broad deletion, disk-formatting, shutdown, or
+`curl | sh`-style commands without a separately approved, narrowly scoped
+alternative; refuse to guess at a destructive scope.
 
 ## Bootstrap the remote agent from a host-side build
 
@@ -370,22 +464,28 @@ overwrite files automatically.
 Use separate temporary host scripts for each mutating stage. Each local SSH
 wrapper must use `set -eu`, avoid shell tracing, and trap cleanup of its
 temporary wrapper on success and failure. Remote scripts must fail on errors
-and clean temporary archives. Before each stage, show the exact script,
-target, files/directories and privilege level affected, and obtain fresh
-explicit approval immediately before running it. One approval does not
-authorize a later stage. The SSH user's home holds a user-scoped Go toolchain
+and clean temporary archives. Before each stage, review the exact script,
+target, files/directories and privilege level affected in the operator
+workflow. Run a stage without another chat approval only when its action and
+target are covered by the approved routine checklist. The SSH user's home
+holds a user-scoped Go toolchain
 when needed, the `main` branch checkout, and Go's module/build cache. The Go
 archive is about 64–67 MB, plus repository/module downloads and extracted
 toolchain/build-cache space; these host file operations have no OVH resource
 cost. If `sudo -n` is unavailable for the final binary installation, stop; do
 not put a sudo password in a script, command, or chat.
 
-Apply approval separately to: installing Go when the pinned toolchain is not
-already available; cloning the latest fetched `main` branch; building both
-binaries and writing their staging files; installing the root-owned binaries
-at `/usr/local/bin/goaster-agent` and `/usr/local/bin/goaster-telegram` (state
-clearly whether either destination will be replaced); and any service-unit or
-service start/restart action. Service changes are separate and file
+The approved installation/build group may cover installing the pinned Go
+toolchain when absent, fetching the reviewed `main` source, building both
+binaries and writing their staging files, and installing the root-owned
+binaries at `/usr/local/bin/goaster-agent` and
+`/usr/local/bin/goaster-telegram` only when the destinations are clear and
+will not replace an unexpected existing file. If a destination conflicts or
+would be replaced, stop and ask for specific approval. Starting or restarting
+existing services is covered only when their definitions were inspected,
+found suitable, and those service actions are included in the checklist.
+Creating or changing a service unit always requires separate explicit
+approval. Service changes are separate from binary installation, and file
 installation itself should not interrupt a running service.
 
 Inside the reviewed host script, map `uname -m` to Go's `amd64` or `arm64`
@@ -457,11 +557,14 @@ or use a separate unprivileged GoAster runtime account. Root execution is
 required for the agent's full server self-management through `shell_execute`.
 If no units exist, present the exact service definitions for review and get
 separate approval before creating them. Starting or restarting either unit
-also needs its own approval. Start the agent first, then have the onboarder
+is covered by the routine checklist only when its existing definition was
+reviewed and that action is listed; otherwise get separate explicit approval.
+Start the agent first, then have the onboarder
 invoke the remote OpenAI login flow below and wait for its `/healthz` check
 before starting the Telegram adapter. Configure its systemd unit as
 `Type=notify`.
-Keep Telegram token/pairing setup in its separate flow below. This bootstrap
+Use the Telegram token/pairing flow below; include it in the routine checklist
+only when the token was already supplied through local `/env`. This bootstrap
 does not add an agent self-update command or behavior.
 
 ## Telegram setup
@@ -486,8 +589,9 @@ administrator's approval and the command's read-only health check to return
 permissions in a `0700` directory. For reauthentication, keep the root-run
 agent service running while the
 onboarder invokes the same interactive flow, wait for device approval and
-health-check success, and obtain separate explicit approval before any agent
-or adapter service restart.
+health-check success. A restart is covered only if that exact service restart
+is included in the approved routine checklist; otherwise obtain separate
+explicit approval before restarting an agent or adapter service.
 
 Do not claim the agent is ready for Telegram chat until remote login succeeds
 and the running agent's loopback `http://127.0.0.1:8765/healthz` returns `ok`.
@@ -495,8 +599,10 @@ That check verifies the stored credential and refreshes it if needed; it is not
 a successful model request. Configure a systemd adapter service as
 `Type=notify` for readiness reporting; the adapter requires this health check
 and an initial successful poll before sending its ready notification. If it was
-started before remote login, restart it after the agent is ready, with the
-required approval. Preserve the existing Telegram token and pairing boundaries.
+started before remote login, restart it after the agent is ready only if that
+restart is listed in the approved routine checklist; otherwise ask for
+separate explicit approval. Preserve the existing Telegram token and pairing
+boundaries.
 
 ### Plain-language status rules
 
@@ -555,7 +661,7 @@ not complete end-to-end onboarding. Keep the user-facing onboarding status
 `partial` until all four Telegram gates have been verified:
 
 1. The bot token was supplied through the local `/env` flow and installed by
-   the separately approved remote setup.
+   the approved remote setup.
 2. The Telegram adapter reports ready after the agent health check and a real
    successful Telegram poll. A successful poll confirms token and connection
    readiness, but does not prove that a paired user's message gets a reply.
@@ -625,12 +731,13 @@ include the token or pairing code in a status report; report only whether
 setup and pairing completed.
 
 Treat writing the token/verifier and starting or restarting the adapter as
-separate remote mutations. Immediately before each, present the exact
-temporary script, target, privilege level, affected paths or service, and
-expected impact, then obtain fresh explicit approval under the safe workflow
-above. Do not assume that approval to install binaries or authenticate the
-agent also approves Telegram setup. The user sends the pairing command only
-after the adapter is running and ready for Telegram polling.
+separate remote mutations. They may proceed under one routine checklist
+approval only when the token was already supplied through local `/env` and
+the checklist explicitly includes Telegram token/pairing setup and the
+relevant service start or restart. If either action is not listed, pause and
+obtain specific explicit approval under the safe workflow above; do not ask
+again for any Telegram action already listed. The user sends the pairing
+command only after the adapter is running and ready for Telegram polling.
 
 After pairing, ask the intended user to send a fresh ordinary text message
 in the private Telegram chat and confirm that the agent's reply arrives in
