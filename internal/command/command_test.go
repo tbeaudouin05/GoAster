@@ -13,6 +13,7 @@ import (
 )
 
 func TestExecuteSuccess(t *testing.T) {
+	backgroundTestHelper()
 	result, err := Execute(context.Background(), Request{Command: successCommand()})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -26,6 +27,7 @@ func TestExecuteSuccess(t *testing.T) {
 	if result.ExitCode != 0 {
 		t.Errorf("exit code = %d, want 0", result.ExitCode)
 	}
+	exerciseBackgroundCommandSupport(t)
 }
 
 func TestExecuteCapturesStderrAndNonzeroExit(t *testing.T) {

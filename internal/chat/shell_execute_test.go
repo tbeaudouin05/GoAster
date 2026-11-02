@@ -18,11 +18,21 @@ import (
 )
 
 func TestCodexProviderAdvertisesShellExecute(t *testing.T) {
+	exerciseBackgroundCommandTool(t)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request codexRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode Codex request: %v", err)
 			return
+		}
+		backgroundFound := false
+		for _, tool := range request.Tools {
+			if tool.Name == backgroundCommandToolName {
+				backgroundFound = true
+			}
+		}
+		if !backgroundFound {
+			t.Errorf("Codex tools = %+v, missing background_command", request.Tools)
 		}
 		var shellTool *codexTool
 		for i := range request.Tools {
@@ -65,6 +75,11 @@ func TestCodexProviderAdvertisesShellExecute(t *testing.T) {
 	defer backend.Close()
 
 	provider := newShellTestProvider(t, backend)
+	manager := command.NewBackgroundCommandManagerAt(filepath.Join(t.TempDir(), "background-commands.json"))
+	defer manager.Close()
+	if err := RegisterBackgroundCommandTool(provider, manager); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := provider.Reply(context.Background(), "gpt-test", "hello"); err != nil {
 		t.Fatal(err)
 	}
