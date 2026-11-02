@@ -65,24 +65,38 @@ paths outside the local user's home or `.ssh` directory.
 A safe record looks like this:
 
 ```json
-{"target":"root@141.95.179.66","port":22,"known_hosts":"~/.ssh/known_hosts"}
+{"target":"root@server.example","port":22,"known_hosts":"~/.ssh/known_hosts"}
 ```
 
-Outside a user-started multi-step onboarding, on every restart where both the
-private key and its record exist, perform a read-only strict-host-key SSH check
-against that exact target. Check only whether GoAster's remote agent answers
-its local health check and whether the separate remote OpenAI login is already
-present and usable. Do not provision, install, restart, pair Telegram, or
-change OVH state during this automatic check. If it fails, say plainly that
-the saved server could not be confirmed and ask for one next action; do not
-silently create another server. During a user-started multi-step onboarding,
-defer this remote check until the user approves the target-specific routine
-checklist, then perform it as part of the listed read-only inspection.
+Only when the user requests server work, inspect a matching saved record. Check
+that its identity and record are private regular files, neither is a symlink,
+the record is valid and unambiguous, and the target matches the user's request
+and current OVH instance lookup. Do not print private key contents. If multiple
+records match or validation fails, stop and ask for the next action.
+
+After the target-specific routine checklist is approved, perform the read-only
+liveness check with `ssh -T` using the exact identity, target and port, empty
+stdin, a 30-second overall timeout and these options: `BatchMode=yes`,
+`IdentitiesOnly=yes`, `PasswordAuthentication=no`,
+`KbdInteractiveAuthentication=no`, `PreferredAuthentications=publickey`,
+`StrictHostKeyChecking=yes`, `UpdateHostKeys=no`, `ControlMaster=no`,
+`ControlPath=none`, `ConnectTimeout=10`, `ServerAliveInterval=15`, and
+`ServerAliveCountMax=3`. When a known-hosts file is recorded, use it with
+`GlobalKnownHostsFile=none` and `UserKnownHostsFile` set to the safely quoted
+absolute path. Run only `curl --fail --silent --show-error --max-time 10
+http://127.0.0.1:8765/livez` remotely and suppress remote output. This checks
+only that the agent process responds; it does not check whether its separate
+OpenAI login is usable. Do not call `/healthz` as part of this read-only check:
+that endpoint can refresh and write credentials. If readiness must be checked,
+include a `/healthz` check and possible credential refresh in the approved
+routine checklist, or obtain separate approval first. On
+failure, say the saved server could not be confirmed and ask for one next
+action; do not create another server or change anything as part of the check.
 
 After a newly created host or an existing host has been successfully verified,
-save or refresh this record before continuing. On later starts, use the saved
-record automatically and tell the user in simple terms that GoAster found the
-server. Never print the private key or any secret-bearing remote output.
+save or refresh this record before continuing. Reuse it for later user-requested
+server work when appropriate. Never print the private key or any secret-bearing
+remote output. No server check runs merely because GoAster starts.
 
 ## Move SSH access to another computer
 
@@ -108,10 +122,8 @@ interpolating them into an unquoted shell command.
 
 Before every connection to an OVH host, use a read-only current instance
 lookup to match the exact OVH instance ID and its current public IP to the SSH
-target. A saved record, screenshot, or old IP alone is not authoritative. The
-observed screenshot showed `root@51.77.186.59`; do not connect to it unless it
-still matches the current instance ID and public IP. Stop if that match cannot
-be confirmed.
+target. A saved record, screenshot, or old IP alone is not authoritative.
+Stop if that match cannot be confirmed.
 
 For a host created by the OVH provisioning skill, use the dedicated local key
 it generated (normally `~/.ssh/goaster-ovh`; on Windows, `$HOME/.ssh/goaster-ovh`)
@@ -269,15 +281,15 @@ Target: [exact existing OVH host name or address]
 
 Read-only inspection and verification: Confirm this is the exact current OVH
 server and secure access; check its operating system, available space, needed
-tools, existing GoAster setup, and current service readiness.
+tools, existing GoAster setup, and current service state and liveness.
 
 Local connection record (if needed): Save or refresh the verified server
 connection on this computer for future checks.
 
 Installation and build actions (if required): Install the required build tool
 if missing, prepare GoAster's reviewed build files, build the agent and
-Telegram components, and install them only if this will not replace unexpected
-existing files.
+Telegram components and their starter files, and install them only if this
+will not replace unexpected existing files.
 
 Starting or restarting the already-reviewed GoAster services (if required):
 Start or restart the existing, reviewed GoAster agent service and, if Telegram
@@ -285,8 +297,8 @@ setup is included, its existing Telegram service when needed, in the planned
 order.
 
 Remote OpenAI sign-in handoff (if required): Start the protected sign-in
-handoff for this host and wait for the administrator to complete browser
-authorization.
+handoff for this host, wait for the administrator to complete browser
+authorization, and check readiness; that check may refresh the credential.
 
 Telegram token and pairing setup (include only if the token was already
 supplied through the local `/env` flow): Install that locally supplied token
@@ -384,14 +396,15 @@ before running it.
 The administrator opens the displayed URL, signs in, and approves the remote
 device authorization in the browser. Wait for that approval and for the
 interactive login to exit. The existing command then opens a second strict SSH
-session for the read-only `curl` check of
-`http://127.0.0.1:8765/healthz`; continue onboarding only when it returns `ok`.
+session for the `curl` check of `http://127.0.0.1:8765/healthz`; this can
+refresh and write the remote credential. Include it in the approved login
+handoff and continue onboarding only when it returns `ok`.
 Treat a canceled login or failed health check as a failure or uncertain result.
 Do not relay the device code, login output, or tokens to the model or chat. The
 remote login writes only root's separate
 `/root/.goaster/agent-auth.json`; it never copies the local `/root/.goaster/auth.json`.
 For reauthentication, keep the agent service running so the command's
-built-in read-only health check can reach it, invoke the same interactive
+built-in health check can reach it, invoke the same interactive
 flow, and wait for administrator approval and a successful health check. A
 service restart during reauthentication still needs separate explicit
 approval unless that exact restart is included in a new routine checklist.
@@ -453,7 +466,7 @@ it, while pinning the Go toolchain:
 Before proposing a bootstrap, use read-only checks to confirm the host is
 Linux, its architecture is `x86_64` or `aarch64`, the SSH deployment user's
 home directory and available disk space, and whether `git`, `curl`, `tar`,
-`sha256sum`, and `sudo` are available. Check whether the Go toolchain path,
+`awk`, `sha256sum`, and `sudo` are available. Check whether the Go toolchain path,
 source directory `$HOME/src/GoAster`, build staging directory
 `$HOME/.cache/goaster-build`, or either target binary already exists. If a
 requirement is missing, a path
@@ -474,6 +487,86 @@ archive is about 64–67 MB, plus repository/module downloads and extracted
 toolchain/build-cache space; these host file operations have no OVH resource
 cost. If `sudo -n` is unavailable for the final binary installation, stop; do
 not put a sudo password in a script, command, or chat.
+
+The agent also needs the starter files from that same reviewed checkout. Install
+the checkout's intended tracked regular starter files, including `MEMORY.md`, at
+`/usr/local/share/goaster/skills`, alongside the binaries' installation prefix.
+Inspect the destination and its parents first; reject symlinks and unexpected
+existing files. Include creation and copying in the reviewed installation
+checklist. Never overwrite an existing asset directory: use it only if it
+already matches the reviewed source, or install the new assets in a separate
+approved directory and bind `GOASTER_STARTER_DIR` to that directory in the
+reviewed service configuration. Before starting the root agent for a fresh
+installation, verify that the chosen asset directory, everything inside it,
+and every parent are root-owned and cannot be modified by untrusted users,
+including through ACLs; reject symlinks. Check the installed asset tree and its
+contents against the reviewed checkout after copying. Stop if ownership,
+permissions, ACLs, paths, or contents cannot be verified; do not silently repair
+or replace existing files. The agent installs starters only when its user
+skills directory is absent and creates default `MEMORY.md` only if missing;
+never replace existing user skills or memory. Ensure these assets are installed
+before starting the agent.
+
+After cloning and before building or installing anything, verify that this
+source revision includes the current asset packaging checks and all required
+tracked assets. Inspect the checkout's asset-check script against the reviewed
+source before executing it. From the checkout, run:
+
+```sh
+test -f packaging/assets.sh && test ! -L packaging/assets.sh
+git -C "$SOURCE_DIR" ls-files --error-unmatch -- packaging/assets.sh >/dev/null
+test "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$SOURCE_COMMIT"
+SOURCE_STATUS="$(git -C "$SOURCE_DIR" status --porcelain)"
+test -z "$SOURCE_STATUS"
+repo_root="$SOURCE_DIR"
+. "$SOURCE_DIR/packaging/assets.sh"
+check_tracked_regular packaging/assets.sh
+check_starter_tree "$SOURCE_DIR/skills"
+check_tracked_starters
+```
+
+If the checks fail, stop and report that the source assets are unavailable or
+invalid. Build both binaries and copy only checked assets from the same clean
+checkout. Never replace user-owned skills or memory as part of bootstrap.
+
+For a first installation, include the following asset installation in its own
+approved root-run host script, after the checks above and before starting the
+agent. Pass the same reviewed `SOURCE_DIR` and `SOURCE_COMMIT` to this stage;
+each stage runs in a new shell, so neither functions nor variables from an
+earlier script survive automatically. Recheck the checkout and source the
+reviewed helper in this shell before using it. Inspect `/usr`, `/usr/local`, `/usr/local/share`, and
+`/usr/local/share/goaster` first, and stop if any existing parent is a symbolic
+link or is not a directory. The helper creates `skills` exclusively and
+verifies every installed file against the checkout. If it fails, stop and
+inspect the destination before retrying; do not delete or replace it blindly.
+
+```sh
+: "${SOURCE_DIR:?set SOURCE_DIR to the reviewed checkout}"
+: "${SOURCE_COMMIT:?set SOURCE_COMMIT to the reviewed commit}"
+test -f "$SOURCE_DIR/packaging/assets.sh" && test ! -L "$SOURCE_DIR/packaging/assets.sh"
+git -C "$SOURCE_DIR" ls-files --error-unmatch -- packaging/assets.sh >/dev/null
+test "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$SOURCE_COMMIT"
+SOURCE_STATUS="$(git -C "$SOURCE_DIR" status --porcelain)"
+test -z "$SOURCE_STATUS"
+repo_root="$SOURCE_DIR"
+. "$SOURCE_DIR/packaging/assets.sh"
+check_tracked_regular packaging/assets.sh
+check_starter_tree "$SOURCE_DIR/skills"
+check_tracked_starters
+
+umask 022
+ASSET_BASE=/usr
+for ASSET_DIR in "$ASSET_BASE" "$ASSET_BASE/local" "$ASSET_BASE/local/share" "$ASSET_BASE/local/share/goaster"; do
+    if [ ! -e "$ASSET_DIR" ] && [ ! -L "$ASSET_DIR" ]; then
+        mkdir "$ASSET_DIR"
+    fi
+    if [ ! -d "$ASSET_DIR" ] || [ -L "$ASSET_DIR" ]; then
+        printf 'Unsafe asset directory: %s\n' "$ASSET_DIR" >&2
+        exit 1
+    fi
+done
+install_starters_to_prefix "$ASSET_BASE/local/share/goaster"
+```
 
 The approved installation/build group may cover installing the pinned Go
 toolchain when absent, fetching the reviewed `main` source, building both
@@ -496,17 +589,9 @@ system Go at `/root/.local/opt/go1.27.3`: download from
 `https://go.dev/dl/go1.27.3.linux-$arch.tar.gz`, verify it with
 `printf '%s  %s\n' "$go_sha256" "$archive" | sha256sum --check --status`
 before extraction, and stop if the destination already exists but is not that
-exact toolchain. The first observed attempt failed checksum verification
-because the go.dev URL redirected and the download script did not follow
-redirects; stop without extracting or building after such a failure. Any retry
-must use the corrected, separately approval-gated temporary script. It follows
-only validated HTTPS redirects, retains the original pinned SHA-256 and
-verification command, forces IPv4 (`curl --ipv4`) for this host's network-path
-issue, verifies before extraction, and installs only under
-`/root/.local/opt/go1.27.3`. This Go installation does not restart services or
-create OVH resources. This host's IPv6 path can return HTTP 404 for the valid
-archive while IPv4 returns HTTP 200; this is a network-path workaround, not
-evidence that the Go release is missing. Do not replace the host's system Go.
+exact toolchain. Follow only validated HTTPS redirects. If download or checksum
+verification fails, stop without extracting or building, inspect the result,
+and get approval for any retry. Do not replace the host's system Go.
 Set `GOTOOLCHAIN=local` for builds so the Go command cannot silently select a
 different toolchain. If checksum verification fails, stop without extracting
 or building.
@@ -550,7 +635,7 @@ the captured `SOURCE_COMMIT`, Go version, and binary paths without including
 environment values or secret-bearing output.
 
 Do not create or modify service units as an implicit part of this bootstrap.
-Inspect existing units read-only and confirm their `ExecStart` paths use the
+Inspect existing units read-only and confirm their `ExecStart` commands run the
 installed binaries. Run both `/usr/local/bin/goaster-agent` and
 `/usr/local/bin/goaster-telegram` as `root`, with `HOME=/root`. Do not create
 or use a separate unprivileged GoAster runtime account. Root execution is
@@ -559,6 +644,33 @@ If no units exist, present the exact service definitions for review and get
 separate approval before creating them. Starting or restarting either unit
 is covered by the routine checklist only when its existing definition was
 reviewed and that action is listed; otherwise get separate explicit approval.
+
+For a fresh systemd agent unit, include these service settings:
+
+```ini
+[Service]
+User=root
+ExecStart=/usr/bin/env HOME=/root GOASTER_STARTER_DIR=/usr/local/share/goaster/skills /usr/local/bin/goaster-agent
+```
+
+The explicit assignment binds both starter skills and default memory to the
+reviewed installation, even if `/usr/local/bin/skills` exists or the service
+manager supplies a different value. If a separate asset directory was approved,
+substitute its absolute, verified path in the assignment. For this fresh
+installation, inspect the effective unit, drop-ins, launch command and any
+environment files before starting it; the command must retain the explicit
+assignment and execute the intended binary. Verify that any service filesystem
+namespace, root directory, or bind mount exposes the same reviewed assets and
+binary at those paths. Ensure the unit files, `/usr/bin/env`, the agent binary
+and their parent directories are root-controlled and not writable by untrusted
+users, including through ACLs. Ensure the launch environment cannot load
+untrusted libraries or otherwise change the command's behavior. Stop if the
+effective configuration or asset path cannot be verified. A missing or unsafe
+bound asset directory is an error: do not unset the assignment or fall back to
+another directory. An existing unit used for this fresh installation is
+suitable only if it provides the same binding and protections; changing it
+still needs separate explicit approval.
+
 Start the agent first, then have the onboarder
 invoke the remote OpenAI login flow below and wait for its `/healthz` check
 before starting the Telegram adapter. Configure its systemd unit as
@@ -584,7 +696,7 @@ GoAster or Telegram chat.
 After installation and agent service setup, the onboarder invokes the local
 OpenAI remote login flow with `remote_login`; the administrator does not type
 the command during normal onboarding. The onboarder waits for the
-administrator's approval and the command's read-only health check to return
+administrator's approval and the command's health check to return
 `ok` before continuing with Telegram setup. The login writes root's `/root/.goaster/agent-auth.json` with `0600`
 permissions in a `0700` directory. For reauthentication, keep the root-run
 agent service running while the
@@ -606,8 +718,7 @@ boundaries.
 
 ### Plain-language status rules
 
-The observed onboarding screenshot showed setup still `partial` because
-Telegram was not ready. Do not test Telegram or call onboarding complete until
+Do not test Telegram or call onboarding complete until
 all four Telegram gates below pass.
 
 Normal user-facing messages must not expose implementation details such as SSH

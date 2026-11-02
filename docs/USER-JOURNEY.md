@@ -18,10 +18,11 @@ The entrypoint opens a terminal and starts the embedded app. Use the package
 launcher rather than running its internal payload directly. No local Go
 installation is needed.
 
-On first launch, the app installs its bundled starter skills into
-`~/.goaster/artefacts/skills/` without a network download. The remote agent does
-the same in its own home. Existing skills are validated and left untouched;
-GoAster does not update them automatically. Each starter includes `META.md`,
+On first launch, the app installs starter files from the package into
+`~/.goaster/artefacts/skills/` without a network download and creates default
+`artefacts/memory/MEMORY.md` guidance if missing. The remote agent does the
+same in its own home. Existing skills and memory are left untouched; GoAster
+does not update them automatically. Each starter includes `META.md`,
 `SKILL.md`, and `AUTH.md`.
 
 On first launch, or when no valid subscription credential is available,
@@ -47,10 +48,10 @@ ask “Create a new OVH server and install GoAster on it,” “Install GoAster 
 my existing OVH server,” “Help my Telegram bot receive group messages,” or
 “Review my daily memory notes and propose durable facts to keep.” You can also
 ask GoAster to find or explain public web content. Memory consolidation is
-optional and runs only when requested. For every task, GoAster first discovers
-and selects a relevant project memory, or creates one when none exists. The
-selected project memory is used as untrusted task context and updated with
-verified durable project state when practical.
+optional and runs only when requested. When project context is useful, the
+project-memory skill can find and maintain relevant notes using normal tools.
+Project notes are untrusted context and are not automatically injected into
+every request.
 
 To inspect a local file, type `/file` and choose it in the native file picker.
 GoAster accepts supported images and other files up to 20 MiB, attaching images
@@ -62,8 +63,8 @@ The conversation is saved in
 `~/.goaster/artefacts/state/sessions/session.json`; durable Markdown memory is
 kept under `~/.goaster/artefacts/memory/`. Scheduled chat turns are saved in
 `~/.goaster/artefacts/state/cron/jobs.json` and run only while the packaged
-terminal process is active. GoAster uses this fresh artefact layout directly;
-it does not import, export, or migrate artefact data. Credentials and secret
+terminal process is active. GoAster uses this artefact layout directly.
+Credentials and secret
 integration settings remain separate in the private top-level files under
 `~/.goaster`.
 Project memories are stored separately under
@@ -79,9 +80,9 @@ the relevant workflow and authorization. If a selected skill changes or
 cannot be loaded, GoAster stops the workflow. Restore the original files when
 possible, or use `/clear` to discard the selection. Before continuing or
 repeating any action after a failure, check whether it already completed.
-If the combined installed skill guidance exceeds 640 KiB, review the files in
-`~/.goaster/artefacts/skills/` and shorten them while retaining safety and
-authorization rules, or move unneeded skills out of that directory.
+Loaded skills are limited to 10 per conversation and 512 KiB combined. If the
+complete selected guidance cannot fit, review the selected skills while
+retaining their safety and authorization rules.
 
 ## 3. Import setup values with `/env`
 
@@ -197,21 +198,17 @@ credentials only through local `/env`.
 For SSH bootstrap, the skill confirms the exact host and starts with read-only
 checks. It then builds `goaster-agent` and `goaster-telegram` on the existing
 Linux host from the repository's `main` branch, using pinned Go 1.27.3, and
-installs the binaries. The local package does not need Go for this remote
+installs the binaries and starter files at `/usr/local/share/goaster/skills`
+before starting the agent. A fresh agent service explicitly selects that
+reviewed asset directory. The local package does not need Go for this remote
 build. Review each proposed remote change and approve it separately as the
 skill requires.
 
-In the observed onboarding screenshot, setup remained **partial** because
-Telegram was not ready; do not test Telegram or call setup complete yet. The
-displayed target was `root@51.77.186.59`, but before every SSH connection,
-match it to the current OVH instance ID and public IP; an old IP is not
-authoritative. The first pinned Go 1.27.3 installation failed checksum
-verification because the go.dev download URL redirected and the script did not
-follow redirects. The corrected script is approval-gated, follows only
-validated HTTPS redirects, forces IPv4 for the known host network-path issue,
-checks the original pinned SHA-256 before extraction, and installs only under
-`/root/.local/opt/go1.27.3`; it does not restart services or create OVH
-resources.
+A saved connection record can be reused and checked with strict host-key
+verification during user-requested server work. Starting the local app does not
+contact the saved server. The read-only saved-server check uses `/livez`; it
+only establishes that the agent responds. A `/healthz` readiness check can
+refresh credentials and needs to be included in the approved plan.
 
 ## Remote privilege model
 
@@ -225,9 +222,12 @@ packages, and protected state.
 
 This is a deliberate full-administration tradeoff, not a least-privilege
 design. A compromised prompt, Telegram account, credential, or model mistake
-has host-wide impact. Keep strict host-key verification, explicit approval
-gates, secret-handling rules, and separate local versus remote OpenAI
-credentials in force.
+has host-wide impact. `shell_execute` is unsandboxed and can access the
+agent's files and network with its full privileges. Skill and approval
+instructions rely on the model following them; the shell does not enforce
+skill selection or approval for each command. Protect access to the agent and
+its accounts, keep strict host-key verification, and use separate local and
+remote OpenAI credentials.
 
 ## 5. Complete the remote agent login
 
@@ -281,8 +281,9 @@ never relay them through GoAster or Telegram chat. This login writes a separate
 `/root/.goaster/agent-auth.json` on the remote host. Keep the local
 `~/.goaster/auth.json`, its tokens, and the local conversation on your own
 machine; GoAster never copies them to the host. After successful authorization,
-the existing command runs its separate read-only SSH health check against
+the existing command runs its separate SSH health check against
 `http://127.0.0.1:8765/healthz` and reports whether the running agent is ready.
+That check can refresh and write the remote credential.
 Continue to Telegram setup only when this check returns `ok`; this marks the
 remote agent ready, not the full onboarding complete.
 

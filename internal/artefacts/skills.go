@@ -15,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"goaster/internal/filesync"
-	"goaster/skills"
 )
 
 const (
@@ -115,28 +114,14 @@ func installStartersAt(ctx context.Context, root string, syncDirectory func(stri
 	}
 	destination := filepath.Join(root, "skills")
 	info, err = os.Lstat(destination)
+	if err := installDefaultMemory(root, syncDirectory); err != nil {
+		return err
+	}
 	if err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("skills path is not a real directory: %s", destination)
 		}
-		metadata, err := discoverAt(root)
-		if err != nil {
-			return fmt.Errorf("validate existing skills: %w", err)
-		}
-		if metadata == "" {
-			return fmt.Errorf("existing skills directory %s contains no usable skills; add a skill or move the directory aside before retrying", destination)
-		}
-		entries, err := os.ReadDir(destination)
-		if err != nil {
-			return fmt.Errorf("read existing skills: %w", err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				if _, err := loadAt(root, entry.Name()); err != nil {
-					return fmt.Errorf("validate existing skill %s: %w", entry.Name(), err)
-				}
-			}
-		}
+
 		return nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
@@ -148,7 +133,7 @@ func installStartersAt(ctx context.Context, root string, syncDirectory func(stri
 	}
 	files, err := starterFiles()
 	if err != nil {
-		return fmt.Errorf("validate bundled starter skills: %w", err)
+		return fmt.Errorf("validate starter skill assets: %w", err)
 	}
 	// Reserve the destination exclusively. Files are also created exclusively;
 	// a failed partial installation is never treated as complete on restart.
@@ -248,29 +233,70 @@ func ValidName(name string) bool {
 	return validName(name)
 }
 
+// starterDirectory locates ordinary package assets next to the executable,
+// or under its installation prefix. The explicit override supports
+// development and service installations.
+func starterDirectory() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("GOASTER_STARTER_DIR")); path != "" {
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("starter assets directory is unavailable or not a real directory: %s; set GOASTER_STARTER_DIR to the matching reviewed skills directory or unset it to use package assets", path)
+		}
+		return path, nil
+	}
+	var candidates []string
+	if executable, err := os.Executable(); err == nil {
+		dir := filepath.Dir(executable)
+		candidates = append(candidates, filepath.Join(dir, "skills"), filepath.Join(filepath.Dir(dir), "share", "goaster", "skills"))
+	}
+	for _, path := range candidates {
+		info, err := os.Lstat(path)
+		if err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			return path, nil
+		}
+	}
+	return "", errors.New("starter assets not found; place the package skills directory beside the executable or under its prefix at share/goaster/skills, or set GOASTER_STARTER_DIR")
+}
+
 func starterFiles() (map[string]map[string][]byte, error) {
-	entries, err := skills.Starters.ReadDir(".")
+	directory, err := starterDirectory()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, err
 	}
 	files := make(map[string]map[string][]byte)
 	for _, entry := range entries {
 		name := entry.Name()
+		if name == "MEMORY.md" && entry.Type().IsRegular() {
+			continue
+		}
 		if !entry.IsDir() || !validName(name) || len(files) >= maxSkills {
-			return nil, fmt.Errorf("invalid bundled starter %q", name)
+			return nil, fmt.Errorf("invalid starter asset %q", name)
+		}
+		children, err := os.ReadDir(filepath.Join(directory, name))
+		if err != nil {
+			return nil, fmt.Errorf("read starter directory %s: %w", name, err)
+		}
+		for _, child := range children {
+			if child.Name() != "META.md" && child.Name() != "SKILL.md" && child.Name() != "AUTH.md" {
+				return nil, fmt.Errorf("unexpected starter asset %s/%s", name, child.Name())
+			}
 		}
 		contents := make(map[string][]byte)
 		for _, filename := range []string{"META.md", "SKILL.md", "AUTH.md"} {
-			data, err := skills.Starters.ReadFile(name + "/" + filename)
-			if err != nil {
-				return nil, fmt.Errorf("read bundled starter %s: %w", name, err)
-			}
-			limit := skillLimit
+			limit := int64(skillLimit)
 			if filename != "SKILL.md" {
 				limit = metadataLimit
 			}
-			if len(data) > limit || strings.TrimSpace(string(data)) == "" || !utf8.Valid(data) {
-				return nil, fmt.Errorf("bundled starter %s has invalid %s", name, filename)
+			data, err := readSkillFile(filepath.Join(directory, name, filename), limit)
+			if err != nil {
+				return nil, fmt.Errorf("read starter %s/%s: %w", name, filename, err)
+			}
+			if strings.TrimSpace(string(data)) == "" || !utf8.Valid(data) {
+				return nil, fmt.Errorf("starter %s has invalid %s", name, filename)
 			}
 			contents[filename] = data
 		}
@@ -280,9 +306,78 @@ func starterFiles() (map[string]map[string][]byte, error) {
 		files[name] = contents
 	}
 	if len(files) == 0 {
-		return nil, errors.New("no bundled starter skills")
+		return nil, errors.New("no starter skills")
 	}
 	return files, nil
+}
+
+// installDefaultMemory only publishes a complete template if no file exists.
+// Both publication methods leave concurrently created files untouched.
+func installDefaultMemory(root string, syncDirectory func(string) error) error {
+	return installDefaultMemoryUsing(root, syncDirectory, os.Link, renameMemoryNoReplace)
+}
+
+func installDefaultMemoryUsing(root string, syncDirectory func(string) error, link, renameNoReplace func(string, string) error) error {
+	directory := filepath.Join(root, "memory")
+	if err := privateDir(directory); err != nil {
+		return err
+	}
+	path := filepath.Join(directory, "MEMORY.md")
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect default memory: %w", err)
+	}
+	source, err := starterDirectory()
+	if err != nil {
+		return err
+	}
+	data, err := readSkillFile(filepath.Join(source, "MEMORY.md"), metadataLimit)
+	if err != nil || !utf8.Valid(data) || strings.TrimSpace(string(data)) == "" {
+		return fmt.Errorf("read default memory template: invalid or unavailable asset")
+	}
+	file, err := os.CreateTemp(directory, ".memory-starter-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary default memory: %w", err)
+	}
+	defer os.Remove(file.Name())
+	written, writeErr := file.Write(data)
+	if writeErr == nil && written != len(data) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return fmt.Errorf("write default memory: %w", errors.Join(writeErr, closeErr))
+	}
+	if err := publishMemory(file.Name(), path, link, renameNoReplace); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return fmt.Errorf("install default memory without overwriting: %w; use a filesystem supporting hard links or atomic non-replacing rename, or create MEMORY.md yourself before retrying", err)
+	}
+	if err := syncDirectory(directory); err != nil {
+		return fmt.Errorf("sync default memory: %w; inspect the file before retrying", err)
+	}
+	return nil
+}
+
+// publishMemory never exposes partially written content or replaces a file.
+// Some filesystems prohibit hard links but support an exclusive atomic rename.
+func publishMemory(source, destination string, link, renameNoReplace func(string, string) error) error {
+	linkErr := link(source, destination)
+	if linkErr == nil || errors.Is(linkErr, os.ErrExist) {
+		return linkErr
+	}
+	if err := renameNoReplace(source, destination); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return err
+		}
+		return errors.Join(fmt.Errorf("hard link: %w", linkErr), fmt.Errorf("atomic non-replacing rename: %w", err))
+	}
+	return nil
 }
 
 func validateMetadata(name string, data []byte) error {

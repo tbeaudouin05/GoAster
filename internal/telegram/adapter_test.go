@@ -746,7 +746,6 @@ func TestTelegramSendAndEditFallbackToPlainTextAfterFormattingRejection(t *testi
 
 func TestTelegramDisplaysSafeSkillRecoveryForDirectAndStreamErrors(t *testing.T) {
 	const guidance = "Some actions may already have completed. Check their results before continuing or repeating any action. Skill guidance could not be loaded or restored. Check the installed skill files; use /clear if the selection cannot be restored."
-	const sizeGuidance = "Some actions may already have completed. Check their results before continuing or repeating any action. Combined installed skill guidance exceeds 640 KiB. Review ~/.goaster/artefacts/skills and shorten the guidance while retaining safety and authorization requirements, or move unneeded skills out of that directory."
 	for _, tc := range []struct {
 		name   string
 		status int
@@ -756,8 +755,6 @@ func TestTelegramDisplaysSafeSkillRecoveryForDirectAndStreamErrors(t *testing.T)
 	}{
 		{"direct", http.StatusServiceUnavailable, guidance, true, guidance},
 		{"stream", http.StatusOK, `{"type":"skill_recovery","error":"` + guidance + `"}` + "\n", false, guidance},
-		{"size-direct", http.StatusServiceUnavailable, sizeGuidance, true, sizeGuidance},
-		{"size-stream", http.StatusOK, `{"type":"skill_recovery","error":"` + sizeGuidance + `"}` + "\n", false, sizeGuidance},
 		{"forged", http.StatusOK, `{"type":"skill_recovery","error":"private fake-secret"}` + "\n", false, "The remote agent could not answer"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

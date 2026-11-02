@@ -100,10 +100,6 @@ Do not claim a root cause from the status mismatch alone. If both paths return
 the same 404 and the authoritative listing agrees, report that the resource
 appears unavailable. If evidence is mixed, say the result is inconclusive.
 
-The known OVH Go archive IPv6 404 case is an example: an OVH Go archive URL can
-return 404 on the IPv6 path while the same URL succeeds over IPv4. Treat that
-mismatch as a path-specific response to verify, not immediate proof that the
-archive is missing. Check the exact Go version and archive name against the
-official release listing and checksum, make only the one targeted IPv4
-comparison, and explain what each request returned. This example does not mean
-that every OVH 404, or every 404 on another host, is a network-path artifact.
+When comparing an archive download, check the exact version and archive name
+against the official release listing and checksum. A difference between paths
+is evidence to investigate, not proof that every 404 has the same cause.

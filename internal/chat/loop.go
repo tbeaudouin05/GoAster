@@ -125,7 +125,7 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 			reply, err := session.Reply(ctx, message)
 			if err != nil {
 				if ui.interactive {
-					ui.renderError(w, "Conversation history could not be cleared.")
+					ui.renderError(w, "Conversation command could not be completed.")
 					if flushErr := w.Flush(); flushErr != nil {
 						return flushErr
 					}

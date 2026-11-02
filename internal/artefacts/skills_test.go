@@ -6,14 +6,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
-
-	"goaster/skills"
 )
 
 func TestInstallBundledStartersOnce(t *testing.T) {
+	assetDir, err := filepath.Abs(filepath.Join("..", "..", "skills"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOASTER_STARTER_DIR", assetDir)
 	if os.Getenv("GOASTER_STARTER_LOCK_TEST") == "holder" {
 		root := os.Getenv("GOASTER_STARTER_LOCK_ROOT")
 		first := true
@@ -58,7 +62,16 @@ func TestInstallBundledStartersOnce(t *testing.T) {
 			}
 		}
 	}
-	if _, err := skills.Starters.ReadFile("ovh/AUTH.md"); err != nil {
+	memoryPath := filepath.Join(root, "memory", "MEMORY.md")
+	memory, err := os.ReadFile(memoryPath)
+	if err != nil || !strings.Contains(string(memory), "project-memory") {
+		t.Fatalf("default memory = %q, error = %v", memory, err)
+	}
+	info, err := os.Stat(memoryPath)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("default memory permissions: %v, %v", info, err)
+	}
+	if err := os.WriteFile(memoryPath, []byte("user memory"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "skills", "ovh", "SKILL.md")
@@ -71,7 +84,128 @@ func TestInstallBundledStartersOnce(t *testing.T) {
 	if got, _ := os.ReadFile(path); string(got) != "custom workflow" {
 		t.Fatalf("existing skill was updated: %q", got)
 	}
+	if got, err := os.ReadFile(memoryPath); err != nil || string(got) != "user memory" {
+		t.Fatalf("existing memory changed: %q, %v", got, err)
+	}
 	checkConcurrentStarterInstallation(t)
+	checkStarterSourceValidation(t)
+	checkDefaultMemoryWithoutHardLinks(t)
+}
+
+func checkDefaultMemoryWithoutHardLinks(t interface {
+	TempDir() string
+	Fatal(...any)
+	Fatalf(string, ...any)
+}) {
+	assetDir, err := starterDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(filepath.Join(assetDir, "MEMORY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupported := errors.New("hard links unsupported")
+	link := func(source, destination string) error {
+		data, err := os.ReadFile(source)
+		if err != nil || string(data) != string(want) {
+			t.Fatalf("fallback source was incomplete: %q, %v", data, err)
+		}
+		return unsupported
+	}
+	root := t.TempDir()
+	err = installDefaultMemoryUsing(root, syncStarterDirectory, link, renameMemoryNoReplace)
+	path := filepath.Join(root, "memory", "MEMORY.md")
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		if err != nil {
+			t.Fatalf("exclusive rename fallback failed: %v", err)
+		}
+		if data, readErr := os.ReadFile(path); readErr != nil || string(data) != string(want) {
+			t.Fatalf("fallback memory = %q, %v", data, readErr)
+		}
+	} else if err == nil {
+		t.Fatal("unsupported publication methods should fail safely")
+	} else if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("failed fallback left a destination: %v", statErr)
+	}
+
+	// Another writer wins between the existence check and publication.
+	racingRoot := t.TempDir()
+	racingLink := func(source, destination string) error {
+		if err := os.WriteFile(destination, []byte("user memory"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return unsupported
+	}
+	err = installDefaultMemoryUsing(racingRoot, syncStarterDirectory, racingLink, renameMemoryNoReplace)
+	if (runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows") && err != nil {
+		t.Fatalf("concurrent destination was not preserved: %v", err)
+	}
+	if data, readErr := os.ReadFile(filepath.Join(racingRoot, "memory", "MEMORY.md")); readErr != nil || string(data) != "user memory" {
+		t.Fatalf("concurrent user memory was changed: %q, %v", data, readErr)
+	}
+
+	failedRoot := t.TempDir()
+	failedRename := func(source, destination string) error { return errors.New("rename unsupported") }
+	if err := installDefaultMemoryUsing(failedRoot, syncStarterDirectory, link, failedRename); err == nil || !strings.Contains(err.Error(), "create MEMORY.md yourself") {
+		t.Fatalf("unsupported methods did not provide recovery guidance: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(failedRoot, "memory"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("failed publication left partial files: %v, %v", entries, err)
+	}
+}
+
+func checkStarterSourceValidation(t interface {
+	TempDir() string
+	Setenv(string, string)
+	Fatal(...any)
+	Fatalf(string, ...any)
+}) {
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	assets := filepath.Join(fixture, "skills")
+	dir := filepath.Join(assets, "example")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"MEMORY.md": "memory", "example/META.md": "name: example\ndescription: example\n",
+		"example/SKILL.md": "workflow", "example/AUTH.md": "authorization",
+	} {
+		if err := os.WriteFile(filepath.Join(assets, filepath.FromSlash(name)), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chdir(fixture); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(working)
+	t.Setenv("GOASTER_STARTER_DIR", "")
+	if found, err := starterDirectory(); err == nil && found == assets {
+		t.Fatal("arbitrary current-directory skills were trusted")
+	}
+	t.Setenv("GOASTER_STARTER_DIR", assets)
+	if found, err := starterDirectory(); err != nil || found != assets {
+		t.Fatalf("explicit development override = %q, %v", found, err)
+	}
+	if _, err := starterFiles(); err != nil {
+		t.Fatalf("valid explicit starter tree rejected: %v", err)
+	}
+	for _, extra := range []string{filepath.Join(assets, ".private"), filepath.Join(dir, ".private")} {
+		if err := os.WriteFile(extra, []byte("unexpected"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := starterFiles(); err == nil {
+			t.Fatalf("unexpected starter asset accepted: %s", extra)
+		}
+		if err := os.Remove(extra); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func checkConcurrentStarterInstallation(t interface {
@@ -133,9 +267,14 @@ func checkConcurrentStarterInstallation(t interface {
 }
 
 func TestStarterInstallationPreservesIncompleteState(t *testing.T) {
+	assetDir, err := filepath.Abs(filepath.Join("..", "..", "skills"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOASTER_STARTER_DIR", assetDir)
 	root := filepath.Join(t.TempDir(), ".goaster", "artefacts")
 	failure := errors.New("directory sync failed")
-	err := installStartersAt(context.Background(), root, func(dir string) error {
+	err = installStartersAt(context.Background(), root, func(dir string) error {
 		if filepath.Base(dir) == "internet-fetch" {
 			return failure
 		}
@@ -153,12 +292,17 @@ func TestStarterInstallationPreservesIncompleteState(t *testing.T) {
 }
 
 func TestStarterInstallationLeavesExistingEmptyDirectoryUntouched(t *testing.T) {
+	assetDir, err := filepath.Abs(filepath.Join("..", "..", "skills"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOASTER_STARTER_DIR", assetDir)
 	root := filepath.Join(t.TempDir(), ".goaster", "artefacts")
 	directory := filepath.Join(root, "skills")
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := installStartersAt(context.Background(), root, syncStarterDirectory); err == nil || !strings.Contains(err.Error(), "no usable skills") {
+	if err := installStartersAt(context.Background(), root, syncStarterDirectory); err != nil {
 		t.Fatalf("empty existing directory = %v", err)
 	}
 	entries, err := os.ReadDir(directory)
@@ -166,6 +310,45 @@ func TestStarterInstallationLeavesExistingEmptyDirectoryUntouched(t *testing.T) 
 		t.Fatalf("existing directory was modified: %v, %v", entries, err)
 	}
 	checkInvalidExistingSkillText(t)
+
+	// Existing files remain untouched even when package assets are unavailable.
+	memoryPath := filepath.Join(root, "memory", "MEMORY.md")
+	if err := os.WriteFile(memoryPath, []byte("existing memory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOASTER_STARTER_DIR", filepath.Join(root, "missing-assets"))
+	if err := installStartersAt(context.Background(), root, syncStarterDirectory); err != nil {
+		t.Fatalf("existing files require assets: %v", err)
+	}
+	if got, err := os.ReadFile(memoryPath); err != nil || string(got) != "existing memory" {
+		t.Fatalf("existing memory changed: %q %v", got, err)
+	}
+
+	missingRoot := filepath.Join(t.TempDir(), ".goaster", "artefacts")
+	if err := installStartersAt(context.Background(), missingRoot, syncStarterDirectory); err == nil {
+		t.Fatal("missing starter assets were accepted")
+	}
+	if _, err := os.Lstat(filepath.Join(missingRoot, "skills")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing assets created skill files: %v", err)
+	}
+	// A preexisting memory symlink is never followed or overwritten.
+	t.Setenv("GOASTER_STARTER_DIR", assetDir)
+	otherRoot := filepath.Join(t.TempDir(), ".goaster", "artefacts")
+	if err := os.MkdirAll(filepath.Join(otherRoot, "memory"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "memory-target")
+	if err := os.WriteFile(outside, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(otherRoot, "memory", "MEMORY.md")); err == nil {
+		if err := installStartersAt(context.Background(), otherRoot, syncStarterDirectory); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(outside); err != nil || string(got) != "original" {
+			t.Fatalf("symlink target changed: %q %v", got, err)
+		}
+	}
 }
 
 func checkInvalidExistingSkillText(t interface {
@@ -189,8 +372,8 @@ func checkInvalidExistingSkillText(t interface {
 					t.Fatal(err)
 				}
 			}
-			if err := installStartersAt(context.Background(), root, syncStarterDirectory); err == nil {
-				t.Fatal("installation accepted invalid existing skill text")
+			if err := installStartersAt(context.Background(), root, syncStarterDirectory); err != nil {
+				t.Fatalf("existing skill installation: %v", err)
 			}
 			data, err := os.ReadFile(filepath.Join(dir, filename))
 			if err != nil || string(data) != content {
@@ -201,10 +384,15 @@ func checkInvalidExistingSkillText(t interface {
 }
 
 func TestStarterInstallationReportsFinalDirectorySyncFailure(t *testing.T) {
+	assetDir, err := filepath.Abs(filepath.Join("..", "..", "skills"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOASTER_STARTER_DIR", assetDir)
 	root := filepath.Join(t.TempDir(), ".goaster", "artefacts")
 	failure := errors.New("final sync failed")
 	rootSyncs := 0
-	err := installStartersAt(context.Background(), root, func(directory string) error {
+	err = installStartersAt(context.Background(), root, func(directory string) error {
 		if directory == root {
 			rootSyncs++
 			if rootSyncs == 3 {

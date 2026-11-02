@@ -34,17 +34,24 @@ directly. The terminal interface is intentional: it preserves the normal
 interactive onboarding and chat experience on every supported operating
 system.
 
-On the first launch, GoAster installs the starter skills bundled with that
-build into `~/.goaster/artefacts/skills/`. The remote agent does the same in
-its own home. Installation does not require a network connection. An existing
-skills directory is validated and left untouched, including user edits;
-GoAster never automatically updates skills.
+On first launch, GoAster installs starter skills from the package's ordinary
+`skills` files into `~/.goaster/artefacts/skills/`. It also creates a default
+`artefacts/memory/MEMORY.md` with project-memory guidance if that file is
+missing. The remote agent does the same in its own home. Installation needs no
+network connection. An existing skills directory, even an empty one, and an
+existing MEMORY.md are left untouched; GoAster never updates user skills
+automatically.
 
 Each starter contains `META.md`, `SKILL.md`, and `AUTH.md`. If installation is
 interrupted, GoAster reports the `.skills-installing` marker and stops; inspect
 the partial files, preserve any edits, and remove or move them and the marker
 aside before retrying. File and directory sync failures are reported where
 supported; unsupported directory syncing is best effort.
+Default-memory publication requires either hard links or an atomic
+non-replacing rename. Linux, macOS, and Windows try the latter when hard links
+fail. If neither method is available, installation stops without replacing or
+exposing a partial MEMORY.md; create that file yourself, or use a supported
+filesystem, before retrying. Other platforms currently require hard-link support.
 
 Authentication is part of this normal startup journey and does not require a
 separate command. On the first launch, or whenever no valid subscription
@@ -78,7 +85,7 @@ use the operational `/env`, `/get-env`, and `/file` flows described below.
 
 ## Build packages (developers)
 
-Packaging requires Go 1.22+ and a POSIX-compatible shell. From the repository
+Packaging requires Git, Go 1.22+, and a POSIX-compatible shell. From the repository
 root, build the macOS, Windows, and Linux distributables with:
 
 ```sh
@@ -94,8 +101,24 @@ and Linux packages under `dist/`. To build one platform or architecture:
 GOASTER_ARCH=arm64 ./packaging/build.sh linux
 ```
 
-The archive helper uses only Go's standard library, and the validation script
-checks package structure and launcher wiring without opening a host GUI.
+The build accepts only intended tracked regular package assets and rejects
+unexpected files or symlinks in `skills/`. Add newly created intended assets
+to Git's index before building. The archive helper uses only Go's standard
+library, and the validation script checks package structure, starter files,
+and launcher wiring without opening a host GUI. `./packaging/test.sh` also
+builds and checks actual archives and, on Linux, tests fresh local and remote
+installations offline; it requires Python 3.
+For source development, explicitly set `GOASTER_STARTER_DIR` to the
+absolute path of this checkout's `skills` directory, for example:
+
+```sh
+GOASTER_STARTER_DIR="$(pwd)/skills" go run ./cmd/goaster
+```
+
+This override also works when running from another directory. A separately
+installed binary also looks for `skills` beside the executable and under its
+installation prefix at `share/goaster/skills`. Keep the assets together with
+the binary; they are not embedded in it.
 
 ## Environment variables
 
@@ -177,23 +200,19 @@ runtime state under `~/.goaster/artefacts`:
 `artefacts/memory/MEMORY.md` is protected long-term knowledge. Daily notes are
 appended to the date-based file, with private directories and restrictive file
 permissions; appends are written through an atomic replacement. Normal model
-requests receive `MEMORY.md` and the three most recent daily notes as clearly
-marked Markdown context, newest note first. If the memory files are empty or
-missing, the existing request behavior is unchanged.
+requests receive `MEMORY.md` as user-managed guidance and the three most recent
+daily notes, newest first, separately as JSON-encoded untrusted data. Note
+headings cannot turn a daily note into long-term guidance. If the memory files
+are empty or missing, the existing request behavior is unchanged.
 
-Project memories are private, bounded Markdown files under
-`artefacts/memory/projects/`. The installed [project-memory skill](skills/project-memory/SKILL.md)
-requires the agent to discover and select a relevant project memory at the
-start of each task, create one when none exists, use its contents as untrusted
-context during the task, and update it with verified durable project state when
-the task completes. Project memories are kept separate from protected
-`MEMORY.md` and daily notes, while remaining inside the memory folder for
-complete folder exports. GoAster records the selected project name with the
-conversation and uses atomic, restrictive, bounded persistence for project
-memory files.
+The default MEMORY.md suggests using the installed
+[project-memory skill](skills/project-memory/SKILL.md) when project context is
+useful. The skill uses ordinary tools to find and maintain relevant notes under
+`artefacts/memory/projects/`, separate from shared memory and daily notes.
+Project notes are untrusted context and are read when relevant, not injected
+automatically. There is no project-memory tool or persistent project selection.
 
-GoAster uses this fresh artefact layout directly. It does not import, export,
-migrate, or read artefact data from outside it. Credentials and secret
+GoAster uses this artefact layout directly. Credentials and secret
 integration settings remain separate in the private files at the top level of
 `~/.goaster`; they are never copied into skills, memory, configuration, or
 session state.
@@ -202,32 +221,23 @@ Each skill directory contains a small `META.md` with only `name:` and
 `description:` lines, a workflow in `SKILL.md`, and its authorization rules
 in `AUTH.md`.
 Skill directory names use lowercase letters, digits, and hyphens. GoAster
-reads metadata to discover skills and includes every installed workflow and
-authorization in each tool-enabled request, including when a tool is requested
-directly. The build also supplies its shipped workflows and authorization rules,
-so their mandatory rules apply even before a runtime skill is selected.
-User edits can add requirements without weakening the
-shipped rules and apply without a rebuild. Invalid,
-missing, oversized, or symlinked skill files produce an error rather than a
-partial workflow. Skills must still follow the app's safety, approval, and
-secret-handling rules. Once selected, skills remain associated with that
-conversation until `/clear`; their workflow and authorization are reloaded on
-later turns, including after a terminal restart. Telegram sessions retain them
-for the lifetime of the remote agent's conversation, separately for each chat.
-Selection does not grant approval. If a selected skill changes or becomes
-unavailable, the workflow stops; restore its original files, or use `/clear`
-to discard the selection. Installed guidance is checked again before each tool
-action; changes since the model's request stop the action. If loading fails or
-is interrupted, check whether earlier actions already completed before
-continuing or repeating them. A conversation may select up to 10 skills. A request
-includes each selected skill's loaded workflow once and limits combined loaded
-skill text to 512 KiB. The combined installed guidance included in every
-tool-enabled request is limited to 640 KiB; if it exceeds that limit, review
-and shorten the files while retaining their safety and authorization rules,
-or move unneeded skills out of `artefacts/skills`. No guidance is silently
-omitted. If the complete text cannot fit within
-the estimated conversation context, the request stops instead of truncating
-the skill or its authorization rules.
+reads only metadata to discover skills. Before a relevant workflow, the model
+can load its complete workflow and authorization with `load_skill`; other skill
+contents are not included in requests. Skill files are user-owned and edits
+apply without a rebuild. Invalid, missing, oversized, or symlinked skill files
+produce an error instead of a partial workflow. Skills must still follow the
+app's safety, approval, and secret-handling rules. Once selected, skills
+remain associated with that conversation until `/clear`; their workflow and
+authorization are reloaded on later turns, including after a terminal restart.
+Telegram sessions retain them for the lifetime of each chat's remote-agent
+conversation. Selection does not grant approval. If a selected skill changes or
+becomes unavailable, the workflow stops; restore its original files or use
+`/clear` to discard the selection. Selected guidance is checked before each tool
+action. If loading fails or is interrupted, check whether earlier actions
+completed before continuing or repeating them. A conversation may select up to
+10 skills, with combined loaded skill text limited to 512 KiB. If the complete
+text cannot fit within the estimated conversation context, the request stops
+instead of truncating the skill or its authorization rules.
 
 Conversation summarization continues to update only the conversation summary
 in `artefacts/state/sessions/session.json`; it never rewrites
@@ -289,9 +299,15 @@ a separate unprivileged `goaster` runtime account.
 This is a deliberate full-administration tradeoff, not a least-privilege
 design. A compromised prompt, Telegram account, credential, or model mistake
 has host-wide impact and can affect system files, SSH access, secrets, firewall
-rules, and the GoAster installation itself. The existing strict host-key
-checks, explicit approval gates, secret-handling rules, and separate local and
-remote OpenAI credentials remain mandatory.
+rules, and the GoAster installation itself. `shell_execute` is not sandboxed:
+it can run with the agent's permissions, access its files and network, and
+does not enforce skill selection or approval rules on each command. Skill
+instructions, approval requests, and untrusted-data guidance depend on model
+behavior; they are not a security boundary and can be bypassed by a mistake or
+prompt injection. Command output is returned to the model without general
+secret redaction. Time and output limits do not isolate commands. Protect
+access to the agent and its accounts, and retain strict host-key checks and
+separate local and remote OpenAI credentials.
 
 ## OVH provisioning and remote access
 
@@ -315,9 +331,10 @@ deployment region only when that preference is genuinely unknown. The
 US$8/month ceiling applies when a price is known. It waits for explicit
 approval before billable creation or other mutations. When you ask to install
 GoAster on an existing OVH host, including one just provisioned, GoAster follows
-the [OVH remote SSH skill](skills/ovh-remote/SKILL.md). It starts with read-only
-SSH preflight, requires fresh explicit approval before each remote mutation,
-and verifies the result; it does not provision
+the [OVH remote SSH skill](skills/ovh-remote/SKILL.md). It requests approval
+for a target-specific routine plan before the read-only SSH preflight and
+listed actions, requires separate approval for unlisted changes, and verifies
+the result; it does not provision
 resources through the OVH API.
 
 Before starting OVH provisioning, create the Public Cloud project yourself in
@@ -376,7 +393,8 @@ are approved in chat, the handoff displays them in the local terminal and
 requires the administrator to type `YES` before connecting. It then attaches
 the terminal directly to the login flow, waits while the administrator
 approves the OpenAI device authorization in a browser, and completes the
-existing read-only `/healthz` check before continuing onboarding. The
+existing `/healthz` check before continuing onboarding; that check may refresh
+and write the remote credential. The
 administrator must approve both the host contact and device authorization;
 GoAster cannot approve them on their behalf. `remote_login` is an internal
 tool and `goaster remote-login` is an internal command for exceptional use;
@@ -387,22 +405,19 @@ The local package does not need Go to bootstrap the remote agent: the SSH skill
 verifies or installs pinned Go 1.27.3 on the existing Linux host, clones the
 latest `main` branch from this repository at bootstrap time, records the
 resolved commit, builds `goaster-agent` and `goaster-telegram` from that
-checkout on the host, then installs the resulting binaries. The Go archive
-checksums and remote build steps are documented in the skill. This SSH bootstrap
-does not manage the OVH resource lifecycle or add an agent
+checkout on the host, then installs the resulting binaries and the checkout's
+starter files at `/usr/local/share/goaster/skills` before starting the agent.
+For fresh installs, the reviewed agent service explicitly selects that asset
+directory so an executable-adjacent `skills` directory cannot shadow it. The
+Go archive checksums and remote build steps are documented in the skill.
+This SSH bootstrap does not manage the OVH resource lifecycle or add an agent
 self-update feature.
 
-Observed onboarding remained **partial** because Telegram was not ready; do
-not test Telegram or call setup complete yet. The screenshot showed
-`root@51.77.186.59`, but before every SSH connection, match the target to the
-current OVH instance ID and public IP; an old screenshot IP is not authoritative.
-The first pinned Go 1.27.3 attempt failed checksum verification because the
-go.dev URL redirected and the script did not follow redirects. The corrected
-script is approval-gated, follows only validated HTTPS redirects, forces IPv4
-for this host's network-path issue, retains the original pinned SHA-256 and
-verifies it before extraction, and installs only under
-`/root/.local/opt/go1.27.3`. This toolchain install does not restart services
-or create OVH resources.
+Before each SSH connection, match the target to the current OVH instance ID and
+public IP. A saved address or old screenshot is not authoritative. A saved
+server's read-only liveness check uses `/livez`; it does not establish that the
+remote login is ready. Any `/healthz` readiness check must be included in the
+approved plan because it can refresh credentials.
 
 The terminal and remote agent require **two independent OpenAI device logins**.
 The local terminal login described above stays local. Never copy or send its
@@ -413,10 +428,10 @@ for login, but its loopback `/healthz` and `/chat` endpoints return unavailable.
 
 GoAster also remembers a successful server connection locally. It saves a
 small non-secret connection record beside the dedicated SSH key, containing
-only the server address, port, and optional known-hosts file. On the next start,
-GoAster checks that saved server first and does not ask you to type the address
-again or create another server. If the saved server cannot be reached, it says
-so and asks for the next simple action. The record never contains the private
+only the server address, port, and optional known-hosts file. The
+server-management skill can reuse and verify the record during a relevant
+user-requested workflow, with strict host-key checking. Starting GoAster does
+not connect to a saved server. The record never contains the private
 key, OpenAI login, Telegram token, pairing code, or environment values.
 
 ### If the administrator changes computers
@@ -468,8 +483,9 @@ Telegram chat. The remote login saves its own credentials as
 `0700` directory permissions. This file is separate from
 `/root/.goaster/auth.json`, even if both programs use the same home; GoAster never
 copies the local file. After login exits successfully, the command runs a
-separate read-only SSH health check against the remote agent's loopback
-`/healthz` endpoint and reports failure clearly. If login is canceled or the
+separate SSH health check against the remote agent's loopback `/healthz`
+endpoint and reports failure clearly. This check can refresh remote credentials.
+If login is canceled or the
 health check fails, inspect the remote service before retrying. For later
 reauthentication, keep the agent service running so the command's built-in
 health check can reach it; GoAster invokes the same flow again. Any separate

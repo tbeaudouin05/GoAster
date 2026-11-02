@@ -3,6 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$script_dir/assets.sh"
 output_dir=${GOASTER_OUTPUT_DIR:-"$repo_root/dist"}
 target=${1:-all}
 
@@ -42,6 +43,10 @@ if [ -z "$output_dir" ] || [ "$output_dir" = "/" ]; then
 fi
 mkdir -p "$output_dir"
 
+check_tracked_regular packaging/assets.sh || die "asset checks must be tracked"
+check_starter_tree "$repo_root/skills" || die "invalid starter assets"
+check_tracked_starters || die "starter assets must be tracked regular files"
+
 stage_dir=
 cleanup_stage() {
 	if [ -n "${stage_dir:-}" ] && [ -e "$stage_dir" ]; then
@@ -76,6 +81,9 @@ build_package() {
 
 	case "$platform" in
 		macos)
+			[ -d "$script_dir/macos" ] && [ ! -L "$script_dir/macos" ] || die "invalid macOS assets directory"
+			check_tracked_regular packaging/macos/Info.plist || die "invalid macOS package asset"
+			check_tracked_regular packaging/macos/launcher.sh || die "invalid macOS package asset"
 			goos=darwin
 			binary_path="$package_root/GoAster.app/Contents/Resources/goaster"
 			mkdir -p "$package_root/GoAster.app/Contents/MacOS" "$(dirname "$binary_path")"
@@ -87,6 +95,8 @@ build_package() {
 			binary_suffix=
 			;;
 		windows)
+			[ -d "$script_dir/windows" ] && [ ! -L "$script_dir/windows" ] || die "invalid Windows assets directory"
+			check_tracked_regular packaging/windows/GoAster.cmd || die "invalid Windows package asset"
 			goos=windows
 			binary_path="$package_root/payload/goaster"
 			mkdir -p "$(dirname "$binary_path")"
@@ -96,6 +106,8 @@ build_package() {
 			binary_suffix=.exe
 			;;
 		linux)
+			[ -d "$script_dir/linux" ] && [ ! -L "$script_dir/linux" ] || die "invalid Linux assets directory"
+			check_tracked_regular packaging/linux/GoAster.desktop || die "invalid Linux package asset"
 			goos=linux
 			binary_path="$package_root/payload/goaster"
 			mkdir -p "$(dirname "$binary_path")"
@@ -109,6 +121,9 @@ build_package() {
 			die "unknown platform: $platform"
 			;;
 	esac
+
+	# Skill and memory templates are ordinary files alongside the payload.
+	copy_starters "$(dirname "$binary_path")/skills"
 
 	case "$architecture" in
 		amd64|arm64) ;;

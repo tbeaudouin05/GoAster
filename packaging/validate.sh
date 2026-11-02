@@ -3,6 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$script_dir/assets.sh"
 dist_dir=${1:-${GOASTER_OUTPUT_DIR:-"$repo_root/dist"}}
 case "$dist_dir" in
 	/*) ;;
@@ -18,13 +19,13 @@ fail() {
 }
 
 require_file() {
-	if [ ! -f "$1" ]; then
-		fail "missing file: $1"
+	if [ ! -f "$1" ] || [ -L "$1" ]; then
+		fail "missing regular file: $1"
 	fi
 }
 
 require_executable() {
-	if [ ! -x "$1" ]; then
+	if [ ! -f "$1" ] || [ -L "$1" ] || [ ! -x "$1" ]; then
 		fail "not executable: $1"
 	fi
 }
@@ -120,6 +121,10 @@ if [ -d "$dist_dir" ]; then
 				;;
 			*) fail "unrecognized package directory: $package_dir" ;;
 		esac
+		assets="$(dirname "$payload")/skills"
+		if ! check_starter_tree "$assets"; then
+			fail "invalid starter assets: $assets"
+		fi
 	done
 fi
 

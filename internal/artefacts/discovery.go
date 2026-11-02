@@ -10,12 +10,6 @@ import (
 	"unicode/utf8"
 )
 
-// MaxGuidanceBytes bounds the complete installed guidance included in every
-// tool-enabled request, including its headings. Guidance is never truncated.
-const MaxGuidanceBytes = 640 << 10
-
-var ErrGuidanceTooLarge = errors.New("combined installed skill guidance exceeds the size limit")
-
 // Discover reads only metadata. The workflow and authorization are loaded on
 // demand, so changes to user-owned skills take effect without a rebuild.
 func Discover() (string, error) {
@@ -24,45 +18,6 @@ func Discover() (string, error) {
 		return "", err
 	}
 	return discoverAt(root)
-}
-
-// Authorizations returns every installed workflow and its authorization so
-// their requirements reach the model even when it requests a tool directly.
-func Authorizations() (string, error) {
-	root, err := Root()
-	if err != nil {
-		return "", err
-	}
-	metadata, err := discoverAt(root)
-	if err != nil || metadata == "" {
-		return "", err
-	}
-	dir := filepath.Join(root, "skills")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", fmt.Errorf("read skills directory: %w", err)
-	}
-	var rules strings.Builder
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		content, err := loadAt(root, entry.Name())
-		if err != nil {
-			return "", fmt.Errorf("invalid guidance for skill %s: %w", entry.Name(), err)
-		}
-		rule := "Runtime " + entry.Name() + " guidance (apply when relevant):\n" + content
-		separator := ""
-		if rules.Len() > 0 {
-			separator = "\n\n"
-		}
-		if len(rule)+len(separator) > MaxGuidanceBytes-rules.Len() {
-			return "", fmt.Errorf("%w (%d bytes)", ErrGuidanceTooLarge, MaxGuidanceBytes)
-		}
-		rules.WriteString(separator)
-		rules.WriteString(rule)
-	}
-	return rules.String(), nil
 }
 
 func discoverAt(root string) (string, error) {
@@ -178,14 +133,26 @@ func checkSkillFile(path string, limit int64) error {
 }
 
 func readSkillFile(path string, limit int64) ([]byte, error) {
-	if err := checkSkillFile(path, limit); err != nil {
+	before, err := os.Lstat(path)
+	if err != nil {
 		return nil, err
+	}
+	if !before.Mode().IsRegular() || before.Size() > limit || before.Size() == 0 {
+		return nil, fmt.Errorf("%s must be a nonempty regular file within the size limit", path)
 	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !opened.Mode().IsRegular() || !after.Mode().IsRegular() || !os.SameFile(before, opened) || !os.SameFile(opened, after) {
+		return nil, fmt.Errorf("%s changed while being opened", path)
+	}
 	data, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, err

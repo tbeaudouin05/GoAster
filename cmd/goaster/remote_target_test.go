@@ -174,99 +174,40 @@ func TestLoadRemoteTargetRecordRejectsMalformedSymlinkAndUnknownFields(t *testin
 }
 
 func TestMalformedSavedTargetIsRejectedBeforeSSH(t *testing.T) {
-	home, identityFile, _ := prepareRemoteTargetFiles(t)
-	if err := os.Chmod(filepath.Join(home, ".ssh"), 0700); err != nil {
+	home, identity, _ := prepareRemoteTargetFiles(t)
+	if err := os.WriteFile(identity+remoteTargetRecordSuffix, []byte(`{"target":"root@host.example","port":22,"extra":"value"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(identityFile+remoteTargetRecordSuffix, []byte(`{"target":"root@host.example","port":22,"extra":"value"}`), 0600); err != nil {
-		t.Fatal(err)
+	if _, err := loadRemoteTargetRecord(home, identity); err == nil {
+		t.Fatal("malformed saved target accepted")
 	}
-	calls := 0
-	if _, found, err := checkSavedRemoteTarget(context.Background(), home, func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
-		calls++
-		return nil
-	}); err == nil || found {
-		t.Fatalf("malformed saved target found = %v, error = %v", found, err)
-	}
-	if calls != 0 {
-		t.Fatalf("SSH calls = %d, want no connection for malformed record", calls)
-	}
-}
 
-func TestSavedRemoteTargetReusePerformsReadOnlyStrictHostKeyCheck(t *testing.T) {
-	home, identityFile, knownHosts := prepareRemoteTargetFiles(t)
-	record := remoteTargetRecord{Target: "root@host.example", Port: 2222, KnownHosts: "~/.ssh/known_hosts"}
-	if err := saveRemoteTargetRecord(home, identityFile, record); err != nil {
+	if err := os.Remove(identity + remoteTargetRecordSuffix); err != nil {
 		t.Fatal(err)
 	}
-	path := identityFile + remoteTargetRecordSuffix
-	before, err := os.ReadFile(path)
+	if err := saveRemoteTargetRecord(home, identity, remoteTargetRecord{Target: "root@host.example", Port: 22}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A startup with a saved server must not attempt SSH. Fail locally at auth
+	// initialization to avoid login or any network access in this test.
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	assets, err := filepath.Abs(filepath.Join("..", "..", "skills"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	calls := 0
-	var captured []string
-	checked, found, err := checkSavedRemoteTarget(context.Background(), home, func(ctx context.Context, arguments []string, input io.Reader, output, errorOutput io.Writer) error {
-		calls++
-		captured = append([]string(nil), arguments...)
-		if _, ok := ctx.Deadline(); !ok {
-			t.Error("read-only check has no timeout")
-		}
-		if output != io.Discard || errorOutput != io.Discard {
-			t.Error("remote check output is not discarded")
-		}
-		if remaining, readErr := io.ReadAll(input); readErr != nil || len(remaining) != 0 {
-			t.Errorf("read-only check input = %q, error = %v", remaining, readErr)
-		}
-		return nil
-	})
-	if err != nil || !found {
-		t.Fatalf("saved target check found = %v, error = %v", found, err)
-	}
-	if checked.Record != record || checked.IdentityFile != identityFile {
-		t.Fatalf("reused target = %+v, want record %+v and key %q", checked, record, identityFile)
-	}
-	if calls != 1 {
-		t.Fatalf("SSH calls = %d, want one read-only check", calls)
-	}
-	joined := strings.Join(captured, " ")
-	for _, want := range []string{
-		"-T",
-		"-i " + identityFile,
-		"-p 2222",
-		"BatchMode=yes",
-		"StrictHostKeyChecking=yes",
-		"UpdateHostKeys=no",
-		"GlobalKnownHostsFile=none",
-		"UserKnownHostsFile=" + knownHosts,
-		"root@host.example",
-		remoteHealthCommand,
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("read-only SSH arguments missing %q: %s", want, joined)
-		}
-	}
-	if strings.Contains(joined, remoteLoginCommand) {
-		t.Fatalf("read-only SSH arguments included interactive login: %s", joined)
-	}
-	after, err := os.ReadFile(path)
-	if err != nil {
+	t.Setenv("GOASTER_STARTER_DIR", assets)
+	if err := os.MkdirAll(filepath.Join(home, ".goaster", "auth.json"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if string(after) != string(before) {
-		t.Fatal("read-only reuse changed the saved connection record")
-	}
-
-	failedCalls := 0
-	_, found, err = checkSavedRemoteTarget(context.Background(), home, func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
-		failedCalls++
-		return errors.New("private remote output")
+	calls := 0
+	err = runWithSSH(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
+		calls++
+		return nil
 	})
-	if err == nil || !found || failedCalls != 1 {
-		t.Fatalf("failed read-only check found = %v, calls = %d, error = %v", found, failedCalls, err)
-	}
-	if strings.Contains(err.Error(), "private remote output") {
-		t.Fatalf("read-only check exposed remote output: %v", err)
+	if err == nil || calls != 0 {
+		t.Fatalf("startup error=%v SSH calls=%d", err, calls)
 	}
 }
 

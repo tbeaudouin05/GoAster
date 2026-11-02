@@ -193,6 +193,21 @@ func TestAgentLoopbackHandler(t *testing.T) {
 			}
 		})
 	}
+	checks := 0
+	h := handler(fakeProvider{}, func(context.Context) error { checks++; return nil })
+	for _, endpoint := range []string{"/livez", "/healthz"} {
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765"+endpoint, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", endpoint, response.Code)
+		}
+		if endpoint == "/livez" && checks != 0 {
+			t.Fatal("liveness check called the credential check")
+		}
+	}
+	if checks != 1 {
+		t.Fatalf("readiness authentication checks = %d, want 1", checks)
+	}
 }
 
 func TestAgentSessionsReuseHistoryAndIsolateChats(t *testing.T) {

@@ -625,12 +625,31 @@ func TestLoopStartsOVHOnboardingWithBoundedRoutineApprovalGuidance(t *testing.T)
 func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) {
 	remoteSkill := readRepositorySkill(t, "ovh-remote")
 	policy := strings.Join(strings.Fields(remoteSkill), " ")
+	checkStart := strings.Index(remoteSkill, "After the target-specific routine checklist is approved")
+	checkEnd := strings.Index(remoteSkill, "After a newly created host")
+	if checkStart < 0 || checkEnd <= checkStart {
+		t.Fatal("saved-server check guidance missing")
+	}
+	check := strings.Join(strings.Fields(remoteSkill[checkStart:checkEnd]), " ")
+	for _, want := range []string{"http://127.0.0.1:8765/livez", "does not check whether its separate OpenAI login is usable", "can refresh and write credentials", "obtain separate approval"} {
+		if !strings.Contains(check, want) {
+			t.Errorf("saved-server check missing %q", want)
+		}
+	}
+	if strings.Contains(check, "http://127.0.0.1:8765/healthz") {
+		t.Error("read-only saved-server command invokes healthz")
+	}
 	for _, want := range []string{
 		"## Consolidated routine approval for onboarding",
 		"Show one checklist for that exact target before the first remote connection or mutation.",
 		"Ask for one unambiguous approval of the listed routine plan.",
 		"Target: [exact existing OVH host name or address]",
-		"During a user-started multi-step onboarding, defer this remote check until the user approves the target-specific routine checklist",
+		"After the target-specific routine checklist is approved, perform the read-only liveness check",
+		"No server check runs merely because GoAster starts.",
+		"StrictHostKeyChecking=yes",
+		"UpdateHostKeys=no",
+		"BatchMode=yes",
+		"/usr/local/share/goaster/skills",
 		"Read-only inspection and verification:",
 		"Local connection record (if needed): Save or refresh the verified server connection on this computer for future checks.",
 		"Installation and build actions (if required):",

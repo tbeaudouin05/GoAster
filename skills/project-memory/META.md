@@ -1,2 +1,2 @@
 name: project-memory
-description: Required task-start project context and completion updates stored as bounded Markdown beside GoAster's user memory.
+description: Find and maintain relevant project-specific Markdown notes using normal tools.

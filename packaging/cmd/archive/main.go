@@ -101,8 +101,8 @@ func writeZip(output io.Writer, source string) error {
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symbolic links are not supported: %s", path)
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("only directories and regular files are supported: %s", path)
 		}
 		header, err := zip.FileInfoHeader(info)
 		if err != nil {
@@ -145,8 +145,8 @@ func writeTarGz(output io.Writer, source string) error {
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symbolic links are not supported: %s", path)
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("only directories and regular files are supported: %s", path)
 		}
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {

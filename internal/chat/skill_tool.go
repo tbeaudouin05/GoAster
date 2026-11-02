@@ -19,7 +19,6 @@ const (
 	skillResetMessage   = skillActionNotice + " Skill guidance could not be loaded or restored. Check the installed skill files; use /clear if the selection cannot be restored."
 	skillChangedMessage = skillActionNotice + " Skill guidance changed. Restore the original files or use /clear to discard the selection."
 	skillBudgetMessage  = skillActionNotice + " Skill guidance does not fit in the conversation. Review installed skills in ~/.goaster/artefacts/skills and retain their safety and authorization requirements; use /clear if selected skills or conversation history still do not fit."
-	skillSizeMessage    = skillActionNotice + " Combined installed skill guidance exceeds 640 KiB. Review ~/.goaster/artefacts/skills and shorten the guidance while retaining safety and authorization requirements, or move unneeded skills out of that directory."
 	skillSaveMessage    = skillActionNotice + " Skill selection could not be saved. Restart to reload the conversation, then use /clear if needed."
 )
 
@@ -53,7 +52,7 @@ func SkillRecoveryMessage(err error) string {
 // protocol so arbitrary remote error text is never shown as recovery guidance.
 func IsSkillRecoveryMessage(message string) bool {
 	switch message {
-	case skillResetMessage, skillChangedMessage, skillBudgetMessage, skillSizeMessage, skillSaveMessage:
+	case skillResetMessage, skillChangedMessage, skillBudgetMessage, skillSaveMessage:
 		return true
 	default:
 		return false

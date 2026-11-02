@@ -48,30 +48,27 @@ const (
 type SessionStore struct {
 	Path string
 
-	mu                    sync.Mutex
-	version               [sha256.Size]byte // Zero means the file was absent at the last load.
-	selectedSkills        []selectedSkill
-	selectedProjectMemory string
-	syncDirectory         func(string) error // Optional per-store seam for filesystem failures.
+	mu             sync.Mutex
+	version        [sha256.Size]byte // Zero means the file was absent at the last load.
+	selectedSkills []selectedSkill
+	syncDirectory  func(string) error // Optional per-store seam for filesystem failures.
 }
 
 // SessionLoadResult describes a safely loaded conversation. Recovered means
 // an invalid file was moved aside without exposing its contents.
 type SessionLoadResult struct {
-	Messages              []ChatMessage
-	Summary               string
-	Recovered             bool
-	Trimmed               bool
-	selectedSkills        []selectedSkill
-	selectedProjectMemory string
+	Messages       []ChatMessage
+	Summary        string
+	Recovered      bool
+	Trimmed        bool
+	selectedSkills []selectedSkill
 }
 
 type sessionFile struct {
-	Version               int             `json:"version"`
-	Summary               string          `json:"summary,omitempty"`
-	Messages              []ChatMessage   `json:"messages"`
-	SelectedSkills        []selectedSkill `json:"selected_skills"`
-	SelectedProjectMemory string          `json:"selected_project_memory,omitempty"`
+	Version        int             `json:"version"`
+	Summary        string          `json:"summary,omitempty"`
+	Messages       []ChatMessage   `json:"messages"`
+	SelectedSkills []selectedSkill `json:"selected_skills"`
 }
 
 // NewSessionStore locates the default conversation file at
@@ -135,7 +132,6 @@ func NewSessionWithStoreAndMemory(config Config, provider Provider, store *Sessi
 	session.history = cloneChatMessages(loaded.Messages)
 	session.summary = loaded.Summary
 	session.selectedSkills = append([]selectedSkill(nil), loaded.selectedSkills...)
-	session.selectedProjectMemory = loaded.selectedProjectMemory
 	session.recoveryPending = loaded.Recovered
 	if loaded.Recovered {
 		session.startupNotice = appendSessionNotice(session.startupNotice, ErrConversationRecovery.Error())
@@ -182,7 +178,6 @@ func (s *SessionStore) loadStateUnderTurnLock(version *[sha256.Size]byte) (loade
 	if errors.Is(err, os.ErrNotExist) {
 		s.version = [sha256.Size]byte{}
 		s.selectedSkills = nil
-		s.selectedProjectMemory = ""
 		// A quarantine or missing-file marker without a replacement means no
 		// interactive turn has acknowledged the loss, even after a restart.
 		entries, readErr := os.ReadDir(filepath.Dir(s.Path))
@@ -249,13 +244,11 @@ func (s *SessionStore) loadStateUnderTurnLock(version *[sha256.Size]byte) (loade
 	bounded, budgetTrimmed := boundSessionMessages(summary, messages, false, maxContextTokens, maxSessionMessages)
 	s.version = sha256.Sum256(data)
 	s.selectedSkills = append([]selectedSkill(nil), disk.SelectedSkills...)
-	s.selectedProjectMemory = disk.SelectedProjectMemory
 	return SessionLoadResult{
-		Messages:              bounded,
-		Summary:               summary,
-		Trimmed:               normalized || summaryTrimmed || budgetTrimmed,
-		selectedSkills:        append([]selectedSkill(nil), s.selectedSkills...),
-		selectedProjectMemory: s.selectedProjectMemory,
+		Messages:       bounded,
+		Summary:        summary,
+		Trimmed:        normalized || summaryTrimmed || budgetTrimmed,
+		selectedSkills: append([]selectedSkill(nil), s.selectedSkills...),
 	}, nil
 }
 
@@ -283,10 +276,6 @@ func (s *SessionStore) saveState(summary string, messages []ChatMessage) error {
 // Sessions pass their expected token by value so another user of the same
 // store cannot advance their expected version.
 func (s *SessionStore) saveStateWithVersion(summary string, messages []ChatMessage, selected []selectedSkill, expectedVersion [sha256.Size]byte, hasExpectedVersion bool) ([sha256.Size]byte, error) {
-	return s.saveStateWithProjectMemory(summary, messages, selected, s.selectedProjectMemory, expectedVersion, hasExpectedVersion)
-}
-
-func (s *SessionStore) saveStateWithProjectMemory(summary string, messages []ChatMessage, selected []selectedSkill, selectedProjectMemory string, expectedVersion [sha256.Size]byte, hasExpectedVersion bool) ([sha256.Size]byte, error) {
 	if err := s.validatePath(); err != nil {
 		return [sha256.Size]byte{}, err
 	}
@@ -321,10 +310,7 @@ func (s *SessionStore) saveStateWithProjectMemory(summary string, messages []Cha
 	if !validSelectedSkills(selected) {
 		return [sha256.Size]byte{}, fmt.Errorf("conversation contains invalid skill selections")
 	}
-	if selectedProjectMemory != "" && !validProjectMemoryName(selectedProjectMemory) {
-		return [sha256.Size]byte{}, fmt.Errorf("conversation contains invalid project memory selection")
-	}
-	data, err := encodeSessionFileWithProjectMemory(summary, bounded, selected, selectedProjectMemory)
+	data, err := encodeSessionFile(summary, bounded, selected)
 	if err != nil {
 		return [sha256.Size]byte{}, fmt.Errorf("encode conversation state: %w", err)
 	}
@@ -372,7 +358,6 @@ func (s *SessionStore) saveStateWithProjectMemory(summary string, messages []Cha
 	}
 	s.version = sha256.Sum256(data)
 	s.selectedSkills = append([]selectedSkill(nil), selected...)
-	s.selectedProjectMemory = selectedProjectMemory
 	return s.version, nil
 }
 
@@ -399,7 +384,6 @@ func (s *SessionStore) recoverInvalid() (SessionLoadResult, error) {
 	}
 	s.version = [sha256.Size]byte{}
 	s.selectedSkills = nil
-	s.selectedProjectMemory = ""
 	return SessionLoadResult{Recovered: true}, nil
 }
 
@@ -436,19 +420,12 @@ func decodeSessionFile(data []byte) (sessionFile, error) {
 	if disk.SelectedSkills == nil || !validSelectedSkills(disk.SelectedSkills) {
 		return sessionFile{}, errors.New("invalid conversation skill selections")
 	}
-	if disk.SelectedProjectMemory != "" && !validProjectMemoryName(disk.SelectedProjectMemory) {
-		return sessionFile{}, errors.New("invalid conversation project memory selection")
-	}
 	return disk, nil
 }
 
 func encodeSessionFile(summary string, messages []ChatMessage, selected []selectedSkill) ([]byte, error) {
-	return encodeSessionFileWithProjectMemory(summary, messages, selected, "")
-}
-
-func encodeSessionFileWithProjectMemory(summary string, messages []ChatMessage, selected []selectedSkill, selectedProjectMemory string) ([]byte, error) {
 	selections := append(make([]selectedSkill, 0, len(selected)), selected...)
-	data, err := json.MarshalIndent(sessionFile{Version: sessionFormatVersion, Summary: summary, Messages: messages, SelectedSkills: selections, SelectedProjectMemory: selectedProjectMemory}, "", "  ")
+	data, err := json.MarshalIndent(sessionFile{Version: sessionFormatVersion, Summary: summary, Messages: messages, SelectedSkills: selections}, "", "  ")
 	if err != nil {
 		return nil, err
 	}

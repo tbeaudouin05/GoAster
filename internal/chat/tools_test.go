@@ -105,7 +105,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 					if overlapCheck != nil {
 						overlapCheck()
 					}
-					if strings.Contains(text, "PRIVATE WORKFLOW TEXT") || !strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || !strings.Contains(request.Instructions, "FIXTURE AUTHORIZATION") {
+					if strings.Contains(text, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHORIZATION") {
 						t.Error("installed guidance or selection state was incorrect")
 					}
 					json.NewEncoder(w).Encode(codexResponse{Output: []codexOutputItem{
@@ -122,7 +122,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 					}
 					fmt.Fprint(w, `{"output_text":"Approve showing the status of host A?"}`)
 				case 3, 7, 8:
-					if strings.Contains(text, "PRIVATE WORKFLOW TEXT") || !strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || !strings.Contains(request.Instructions, "FIXTURE AUTHORIZATION") {
+					if strings.Contains(text, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHORIZATION") {
 						t.Errorf("another or cleared session received selected skill guidance: %s", text)
 					}
 					fmt.Fprint(w, `{"output_text":"No selected skill."}`)
@@ -199,8 +199,8 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 		}
 		switch backendRequests.Add(1) {
 		case 1:
-			if len(request.Tools) != 6 {
-				t.Errorf("tools = %+v, want five built-ins and one optional tool", request.Tools)
+			if len(request.Tools) != 5 {
+				t.Errorf("tools = %+v, want four built-ins and one optional tool", request.Tools)
 			}
 			var skillTool *codexTool
 			for i := range request.Tools {
@@ -345,7 +345,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 	if reply, err := provider.ReplyWithHistory(context.Background(), "gpt-test", history); err == nil || !strings.Contains(err.Error(), "insufficient room") || reply != "" {
 		t.Fatalf("context budget reply = %q, %v", reply, err)
 	}
-	if gotArguments != "" || backendRequests.Load() != 0 {
+	if gotArguments != "" || backendRequests.Load() != 1 {
 		t.Fatal("action or follow-up ran after exceeding the context budget")
 	}
 

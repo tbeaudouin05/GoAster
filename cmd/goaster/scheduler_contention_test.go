@@ -33,7 +33,7 @@ func checkSkillPreflightFailureKeepsOneShot(t interface {
 		t.Fatal(err)
 	}
 	for name, content := range map[string]string{
-		"META.md":  "name: broken\ndescription: invalid skill\n",
+		"META.md":  "name: broken\ndescription: invalid skill\nunexpected: data\n",
 		"SKILL.md": "workflow", "AUTH.md": "invalid \xff",
 	} {
 		if err := os.WriteFile(filepath.Join(skillDir, name), []byte(content), 0600); err != nil {

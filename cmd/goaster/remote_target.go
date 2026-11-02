@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,13 +10,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const (
 	remoteTargetRecordSuffix = ".goaster-target.json"
 	remoteTargetRecordLimit  = 16 * 1024
-	remoteTargetCheckTimeout = 30 * time.Second
 )
 
 // remoteTargetRecord contains only non-secret SSH destination details.
@@ -25,11 +22,6 @@ type remoteTargetRecord struct {
 	Target     string `json:"target"`
 	Port       int    `json:"port"`
 	KnownHosts string `json:"known_hosts,omitempty"`
-}
-
-type savedRemoteTarget struct {
-	Record       remoteTargetRecord
-	IdentityFile string
 }
 
 func remoteTargetRecordPath(home, identityFile string) (string, bool, error) {
@@ -418,140 +410,4 @@ func persistRemoteTargetAfterVerification(options remoteLoginOptions) error {
 		return err
 	}
 	return saveRemoteTargetRecord(home, options.IdentityFile, record)
-}
-
-func findSavedRemoteTarget(home string) (savedRemoteTarget, bool, error) {
-	homePath, err := filepath.Abs(home)
-	if err != nil {
-		return savedRemoteTarget{}, false, errors.New("resolve local home directory")
-	}
-	sshDirectory := filepath.Join(homePath, ".ssh")
-	directoryInfo, err := os.Lstat(sshDirectory)
-	if errors.Is(err, os.ErrNotExist) {
-		return savedRemoteTarget{}, false, nil
-	}
-	if err != nil {
-		return savedRemoteTarget{}, false, errors.New("inspect local .ssh directory")
-	}
-	if directoryInfo.Mode()&os.ModeSymlink != 0 || !directoryInfo.IsDir() {
-		return savedRemoteTarget{}, false, errors.New("local .ssh path must be a real directory")
-	}
-	entries, err := os.ReadDir(sshDirectory)
-	if err != nil {
-		return savedRemoteTarget{}, false, fmt.Errorf("read local .ssh directory: %w", err)
-	}
-	var found savedRemoteTarget
-	count := 0
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), remoteTargetRecordSuffix) {
-			continue
-		}
-		recordPath := filepath.Join(sshDirectory, entry.Name())
-		identityPath := strings.TrimSuffix(recordPath, remoteTargetRecordSuffix)
-		identityInfo, identityErr := os.Lstat(identityPath)
-		if errors.Is(identityErr, os.ErrNotExist) {
-			continue
-		}
-		if identityErr != nil {
-			return savedRemoteTarget{}, false, errors.New("inspect saved SSH identity")
-		}
-		if identityInfo.Mode()&os.ModeSymlink != 0 || !identityInfo.Mode().IsRegular() {
-			return savedRemoteTarget{}, false, errors.New("saved SSH identity must be a regular non-symlink file")
-		}
-		record, err := readRemoteTargetRecord(recordPath, home)
-		if err != nil {
-			return savedRemoteTarget{}, false, err
-		}
-		count++
-		if count > 1 {
-			return savedRemoteTarget{}, false, errors.New("multiple saved GoAster server targets are ambiguous")
-		}
-		found = savedRemoteTarget{Record: record, IdentityFile: identityPath}
-	}
-	return found, count == 1, nil
-}
-
-func checkSavedRemoteTarget(ctx context.Context, home string, sshRun sshRunner) (savedRemoteTarget, bool, error) {
-	if ctx == nil {
-		return savedRemoteTarget{}, false, errors.New("saved target check context must not be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return savedRemoteTarget{}, false, err
-	}
-	if sshRun == nil {
-		return savedRemoteTarget{}, false, errors.New("saved target SSH runner is unavailable")
-	}
-	target, found, err := findSavedRemoteTarget(home)
-	if err != nil || !found {
-		return target, found, err
-	}
-	knownHosts := ""
-	if target.Record.KnownHosts != "" {
-		knownHosts, err = resolveLocalHomePath(target.Record.KnownHosts, home, true)
-		if err != nil {
-			return savedRemoteTarget{}, false, err
-		}
-	}
-	options := remoteLoginOptions{
-		Target:         target.Record.Target,
-		IdentityFile:   target.IdentityFile,
-		KnownHostsFile: knownHosts,
-		Port:           target.Record.Port,
-	}
-	if err := validateRemoteLoginOptions(options); err != nil {
-		return savedRemoteTarget{}, false, err
-	}
-	checkContext, cancel := context.WithTimeout(ctx, remoteTargetCheckTimeout)
-	checkErr := sshRun(checkContext, readOnlyRemoteHealthArguments(options), strings.NewReader(""), io.Discard, io.Discard)
-	contextErr := checkContext.Err()
-	cancel()
-	if checkErr != nil || contextErr != nil {
-		return target, true, sshFailure("saved remote health check", contextErr, checkErr)
-	}
-	return target, true, nil
-}
-
-func readOnlyRemoteHealthArguments(options remoteLoginOptions) []string {
-	arguments := []string{
-		"-T",
-		"-i", options.IdentityFile,
-		"-p", strconv.Itoa(options.Port),
-		"-o", "BatchMode=yes",
-		"-o", "IdentitiesOnly=yes",
-		"-o", "PasswordAuthentication=no",
-		"-o", "KbdInteractiveAuthentication=no",
-		"-o", "PreferredAuthentications=publickey",
-		"-o", "StrictHostKeyChecking=yes",
-		"-o", "UpdateHostKeys=no",
-		"-o", "ControlMaster=no",
-		"-o", "ControlPath=none",
-		"-o", "ConnectTimeout=" + strconv.Itoa(remoteConnectTimeout),
-		"-o", "ServerAliveInterval=15",
-		"-o", "ServerAliveCountMax=3",
-	}
-	if options.KnownHostsFile != "" {
-		arguments = append(arguments,
-			"-o", "GlobalKnownHostsFile=none",
-			"-o", "UserKnownHostsFile="+options.KnownHostsFile,
-		)
-	}
-	return append(arguments, "--", options.Target, remoteHealthCommand)
-}
-
-func reportSavedRemoteTarget(ctx context.Context, home string, sshRun sshRunner, output io.Writer) error {
-	if output == nil {
-		output = io.Discard
-	}
-	target, found, err := checkSavedRemoteTarget(ctx, home, sshRun)
-	if err != nil {
-		if _, writeErr := fmt.Fprintln(output, "A saved GoAster server could not be safely confirmed. No server was changed or replaced."); writeErr != nil {
-			return writeErr
-		}
-		return nil
-	}
-	if !found {
-		return nil
-	}
-	_, err = fmt.Fprintf(output, "GoAster found the saved server %q and its read-only strict host-key check succeeded.\n", target.Record.Target)
-	return err
 }
