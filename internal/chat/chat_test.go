@@ -654,7 +654,7 @@ func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) 
 		"Local connection record (if needed): Save or refresh the verified server connection on this computer for future checks.",
 		"Installation and build actions (if required):",
 		"Starting or restarting the already-reviewed GoAster services (if required):",
-		"Remote OpenAI sign-in handoff (if required):",
+		"Protected sign-in process handoff (if required):",
 		"Telegram token and pairing setup (include only if the token was already supplied through the local `/env` flow):",
 		"this approval covers exactly the listed actions and that target.",
 		"It does not authorize another server, creating or changing OVH resources or costs, destructive changes or unexpected file replacement, unrelated commands or any other unlisted action, new service definitions, Telegram privacy changes, or changes to firewall, SSH, or user configuration.",
@@ -691,7 +691,7 @@ func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) 
 		t.Fatal("OVH remote approval checklist has no clear end")
 	}
 	checklist := checklistTail[:checklistEnd]
-	technicalDetails := regexp.MustCompile(`(?i)\b(?:ssh|port|systemd|root|healthz|shell_execute|remote_login)\b|api endpoint|known_hosts|key path|raw commands?`)
+	technicalDetails := regexp.MustCompile(`(?i)\b(?:ssh|port|systemd|root|healthz|shell_execute|process_handoff)\b|api endpoint|known_hosts|key path|raw commands?`)
 	if detail := technicalDetails.FindString(checklist); detail != "" {
 		t.Errorf("user-facing OVH routine checklist exposes internal detail %q", detail)
 	}
@@ -815,7 +815,7 @@ func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
 		"do not ask the user to retrieve a host fingerprint from OVHcloud Manager for this new-server flow.",
 		"`StrictHostKeyChecking=yes` with `UpdateHostKeys=no` for every SSH command",
 		"Set `GlobalKnownHostsFile=none` with this explicit file so no other known-hosts source can authorize a changed key.",
-		"Pass the file in `remote_login`'s optional `known_hosts` field",
+		"Pass the file in `process_handoff`'s optional `known_hosts` field",
 		"Never use `accept-new` again for this target.",
 		"If the first attempt fails, inspect the OVH instance, exact IP, and known-hosts file before any retry",
 	} {
@@ -866,7 +866,7 @@ func TestOVHRemoteUserFacingOnboardingWording(t *testing.T) {
 	paragraphs := strings.Split(wording, "\n\n")
 	for _, action := range []string{
 		"Next: Wait while I finish setup. Do not test Telegram yet.",
-		"Next: Approve the OpenAI sign-in in the terminal.",
+		"Next: Approve the sign-in in the terminal.",
 		"Open a private chat with the Telegram bot you created or selected using @BotFather, using the same bot whose token you entered through GoAster's local /env flow. Send /start, then send /start followed by the exact pairing string GoAster showed you, unchanged. Example only: /start EXAMPLE_CODE_ONLY.",
 		"Next: Send one normal message to the bot and check for a reply.",
 	} {
@@ -882,7 +882,7 @@ func TestOVHRemoteUserFacingOnboardingWording(t *testing.T) {
 		}
 	}
 
-	technicalDetails := regexp.MustCompile(`(?i)\b(?:ssh|port|systemd|root|healthz|adapter|shell_execute|remote_login|systemctl)\b|key path|known_hosts(?: path)?|host-key verification|api endpoint(?:s)?|raw tool command`)
+	technicalDetails := regexp.MustCompile(`(?i)\b(?:ssh|port|systemd|root|healthz|adapter|shell_execute|process_handoff|systemctl)\b|key path|known_hosts(?: path)?|host-key verification|api endpoint(?:s)?|raw tool command`)
 	if detail := technicalDetails.FindString(wording); detail != "" {
 		t.Errorf("user-facing OVH status wording exposes internal detail %q", detail)
 	}
