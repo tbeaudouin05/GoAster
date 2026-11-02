@@ -650,36 +650,11 @@ For a fresh systemd agent unit, include these service settings:
 ```ini
 [Service]
 User=root
-EnvironmentFile=/etc/goaster/github-auth.env
 ExecStart=/usr/bin/env HOME=/root GOASTER_STARTER_DIR=/usr/local/share/goaster/skills /usr/local/bin/goaster-agent
 ```
 
-The same root-controlled `EnvironmentFile` must be present in the
-`goaster-telegram` unit. It contains the public OAuth client ID and one shared,
-high-entropy internal control secret, for example:
-
-```text
-GOASTER_GITHUB_CLIENT_ID=<public GitHub OAuth client ID>
-GOASTER_GITHUB_AUTH_CONTROL_SECRET=<deployment-generated random secret>
-```
-
-To get the client ID, create an OAuth App in GitHub under **Settings →
-Developer settings → OAuth Apps → New OAuth App**, enable **Device Flow** in
-the app settings, and copy its public **Client ID** to
-`GOASTER_GITHUB_CLIENT_ID`. Device Flow does not require a GitHub client
-secret. In the operator's secure local terminal, generate a unique
-deployment-local control secret with `openssl rand -hex 32` (or an equivalent
-cryptographically secure random generator). Supply it only through the
-approved local `/env` and protected deployment-file flow, and configure the
-same value in both the agent and Telegram service; do not reuse it across
-deployments.
-
-Create and protect this file through the deployment system with root ownership
-and mode `0600`; do not put either value in an `ExecStart` command line. The
-agent rejects `/auth/github/authorize` and `/auth/github/cancel` without the
-secret header, and the Telegram adapter sends that header only after the
-paired user authorizes from the private chat. An arbitrary `chat_id` is not a
-control credential.
+The Telegram unit also runs as `root`; no GitHub-specific environment file is
+needed for the standard GitHub CLI web login.
 
 The explicit assignment binds both starter skills and default memory to the
 reviewed installation, even if `/usr/local/bin/skills` exists or the service
@@ -707,11 +682,28 @@ Use the Telegram token/pairing flow below; include it in the routine checklist
 only when the token was already supplied through local `/env`. This bootstrap
 does not add an agent self-update command or behavior.
 
-The GitHub handoff does not sandbox credentials from the root-run agent. The
-existing unrestricted root shell can access locally stored `gh` credentials;
-do not claim that the installed GitHub token is inaccessible to the agent or
-model. The handoff only keeps device instructions and credentials out of
-ordinary model messages and Telegram progress output.
+The root-run unrestricted shell can access locally stored `gh` credentials.
+Do not describe those credentials as inaccessible to the agent or model; the
+standard web login does not create a credential sandbox.
+
+When a workflow needs GitHub login, use an existing `gh` session if it is
+authenticated to `github.com`. Before GitHub API requests, and again after any
+login, verify it with `gh auth status --hostname github.com` and
+`gh api --hostname github.com user --jq '.login'`. Continue only when the
+verified login is the account the user intends to use.
+
+If login is needed, run this command in the foreground:
+
+```sh
+gh auth login --hostname github.com --web
+```
+
+If `gh` displays an official GitHub URL and one-time code, relay only that URL
+and code to the user. The user completes authentication in the browser. Let
+the command finish, then verify the session and account as above. Do not enter
+the code on the user's behalf or ask them to send it back. Never ask the user
+to paste a password or token into chat, read credential files, or put secrets
+in command arguments, URLs, logs, or reports.
 
 ## Telegram setup
 

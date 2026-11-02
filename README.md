@@ -309,31 +309,29 @@ secret redaction. Time and output limits do not isolate commands. Protect
 access to the agent and its accounts, and retain strict host-key checks and
 separate local and remote OpenAI credentials.
 
-The same limitation applies to the GitHub handoff: the root-run unrestricted
-shell can access locally stored `gh` credentials. The handoff keeps device
-instructions and credentials out of ordinary model messages and Telegram
-progress output, but it does not make the installed GitHub token inaccessible
-to the agent or model. The loopback authorization uses the shared deployment
-secret `GOASTER_GITHUB_AUTH_CONTROL_SECRET`; protect it in the root-controlled
-service environment. This secret protects the chat and control routes from
-callers that do not have the deployment environment; it is not a privilege
-boundary against the existing unrestricted root shell. If GitHub rollback
-cannot remove the named account or restore the prior snapshot, the handoff
-fails closed and requires manual credential reconciliation before retrying.
+GoAster's root-run unrestricted shell can access locally stored `gh`
+credentials. The standard web login does not create a credential sandbox; do
+not describe those credentials as inaccessible to the agent or model.
 
-### GitHub device login
+### GitHub CLI login
 
-GitHub login is restricted to the paired user's private Telegram chat. Send
-`/github-login`, then ask GoAster to continue the fixed GitHub device flow. The
-device URL and one-time code are delivered only as an out-of-band Telegram
-status. `/github-login cancel` requests cancellation and reports that cleanup
-is pending; it does not claim cancellation succeeded. The final status arrives
-after cleanup as either canceled or reconciliation-required. A cleanup failure
-blocks another login for that chat. Inspect and manually reconcile the `gh`
-credential first, then send `/github-login reconcile` to acknowledge the
-reconciliation before authorizing another login. If the token-verified GitHub
-account already exists in any stored `gh` account, installation is refused so
-rollback cannot delete an inactive pre-existing account.
+Use an existing `gh` session when it is authenticated to `github.com`. Before
+GitHub API requests, and again after any login, verify the session with
+`gh auth status --hostname github.com` and
+`gh api --hostname github.com user --jq '.login'`. Continue only when the
+verified login is the account the user intends to use.
+
+If login is needed, the agent runs this command in the foreground:
+
+```sh
+gh auth login --hostname github.com --web
+```
+
+If `gh` displays an official GitHub URL and one-time code, relay only that URL
+and code to the user. The user completes authentication in the browser. Let the
+command finish, then verify the session and account with the commands above.
+Do not enter the code for the user or ask them to send it back. Report only the
+verified host and login. The separate OpenAI `remote_login` flow is unchanged.
 
 ## OVH provisioning and remote access
 

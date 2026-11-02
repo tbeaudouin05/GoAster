@@ -1,6 +1,6 @@
 ---
 name: github-fork-starter
-description: Safely guide creation of a user-approved fork of tbeaudouin05/GoAster and a dedicated branch without changing upstream contents. Use an existing authenticated gh session; if login is needed, use GoAster's allowlisted secure GitHub handoff in the paired private Telegram chat.
+description: Safely guide creation of a user-approved fork of tbeaudouin05/GoAster and a dedicated branch without changing upstream contents. Use an existing authenticated gh session or the standard foreground GitHub CLI web login when needed.
 ---
 
 # GitHub fork starter
@@ -23,66 +23,26 @@ commit, push, reset, deploy, or change application files.
   authenticated login. Use `github.com` explicitly; do not infer a host,
   account, fork name, or branch from local Git configuration.
 - Keep using a working `gh` session that is already authenticated to
-  `github.com`. If its authenticated login is not the account the user wants,
-  stop.
-- If login is needed in Telegram, first have the paired user send the exact
-  `/github-login` command in the paired **private** chat. This is the explicit,
-  short-lived authorization for one handoff. Then ask GoAster to continue the
-  GitHub workflow so its fixed `auth_handoff` tool can request provider
-  `github`; the tool accepts no command, token, password, device code, or
-  arbitrary provider. The agent sends GitHub's short-lived verification URL and
-  code directly to that private chat through an out-of-band Telegram event.
-  The code never enters model context or history, tool output, command
-  arguments, logs, or reports. Never send a token.
-- The handoff supports cancellation and expiry. Send `/github-login cancel` in
-  the same paired private chat to cancel an active handoff. Stop if the user
-  cancels or the code expires; do not refresh, reissue, or retry without a new
-  `/github-login` authorization. After completion, the agent stores the
-  provider credential through `gh`'s GitHub credential path and verifies the
-  account with `gh api --hostname github.com user --jq '.login'` before
-  reporting success. Report only the host and verified login.
-- The agent must be configured with the non-secret public OAuth client ID in
-  `GOASTER_GITHUB_CLIENT_ID`; no GitHub client secret is used for this device
-  flow. The requested OAuth scopes are `repo read:org gist`, matching the
-  minimum scope set documented for `gh auth login --with-token`. If the
-  provider is not configured, stop and report that blocker.
-- To obtain the client ID, create an OAuth App in GitHub under **Settings →
-  Developer settings → OAuth Apps → New OAuth App**, enable **Device Flow** in
-  the app settings, and copy its public **Client ID** into
-  `GOASTER_GITHUB_CLIENT_ID`. Device Flow needs no GitHub client secret.
-- The agent and Telegram adapter must share the deployment-only
-  `GOASTER_GITHUB_AUTH_CONTROL_SECRET` through a root-controlled service
-  `EnvironmentFile`. The agent requires that secret on every loopback `/chat`
-  and GitHub control request; an arbitrary `chat_id` is never sufficient. Do
-  not put the secret in command arguments, chat, logs, or reports.
-- Generate `GOASTER_GITHUB_AUTH_CONTROL_SECRET` in the operator's secure local
-  terminal with `openssl rand -hex 32` (or an equivalent cryptographically
-  secure random generator). Keep it unique to this deployment and configure
-  the exact same value in both services' root-controlled `EnvironmentFile`;
-  never reuse it across deployments or commit it.
-- Rollback removes the newly-installed account by its verified login before
-  restoring a prior snapshot, including inactive `gh` accounts. If removal or
-  restoration is uncertain, stop with the documented manual reconciliation
-  state and do not report the handoff as successful.
-- GoAster's existing `remote_login` is an OpenAI-specific login handoff and
-  remains unchanged. Do not emulate either handoff with shell background jobs,
-  captured `gh auth login` output, `tmux`, `expect`, pipes, or another
-  workaround.
-- Never ask the user to paste a password, token, or device code into chat;
-  never read credential files or put secrets in command arguments, URLs,
-  logs, or reports.
+  `github.com`.
+- If login is needed, run the standard foreground web flow:
 
-This is not a credential sandbox. The root-run GoAster shell is intentionally
-unrestricted and can access locally stored `gh` credentials. Do not claim that
-the installed GitHub token is inaccessible to the agent or model; only the
-device instructions and credentials are kept out of normal model messages,
-conversation history, and adapter progress output.
+  ```sh
+  gh auth login --hostname github.com --web
+  ```
 
-For `gh`, check `gh auth status --hostname github.com` and
-`gh api --hostname github.com user --jq '.login'`. Report only the login and
-host. If the login is not the account the user wants, stop and have the user
-switch credentials locally. If authentication or a suitable interface is not
-available, stop rather than guessing.
+  If `gh` displays an official GitHub URL and one-time code, relay only that
+  URL and code to the user. The user completes authentication in the browser;
+  do not enter the code on the user's behalf or ask them to send it back.
+- Before any GitHub API requests, and again after any login, verify the session
+  with `gh auth status --hostname github.com` and
+  `gh api --hostname github.com user --jq '.login'`. Require the verified login
+  to match the user's requested account; if it does not, stop and have the user
+  switch credentials locally. Report only the verified login and host. If
+  authentication or a suitable interface is not available, stop rather than
+  guessing.
+- Never ask the user to paste a password or token into chat; never read
+  credential files or put secrets in command arguments, URLs, logs, or
+  reports.
 
 ## Read-only preflight
 

@@ -229,26 +229,24 @@ skill selection or approval for each command. Protect access to the agent and
 its accounts, keep strict host-key verification, and use separate local and
 remote OpenAI credentials.
 
-The GitHub device handoff does not change this privilege boundary. The
-root-run unrestricted shell can access locally stored `gh` credentials, so the
-token must not be described as inaccessible to the agent or model. The handoff
-only keeps device instructions and credentials out of ordinary model messages
-and Telegram progress output. Its loopback chat and GitHub control requests are
-authenticated with the shared deployment secret
-`GOASTER_GITHUB_AUTH_CONTROL_SECRET`. If rollback cannot remove the named
-account or restore the prior snapshot, the handoff stops in a manual
-reconciliation state rather than reporting success.
+The root-run unrestricted shell can access locally stored `gh` credentials.
+Do not describe those credentials as inaccessible to the agent or model; the
+standard web login does not create a credential sandbox.
 
-For a GitHub device login, the paired user must work in the private Telegram
-chat: send `/github-login`, then ask GoAster to continue the GitHub workflow.
-The device URL and one-time code arrive only as an out-of-band status. Send
-`/github-login cancel` to request cancellation; Telegram reports that cleanup
-is pending until the agent emits the final canceled status. If cleanup fails,
-the agent emits reconciliation-required and blocks another login for that
-chat. Manually inspect and reconcile the `gh` credential, then send
-`/github-login reconcile` before authorizing a new handoff. Before installing,
-GoAster lists stored GitHub accounts and refuses a token whose verified target
-already exists, which prevents rollback from deleting an inactive account.
+When GitHub login is needed, GoAster runs the standard foreground web flow:
+
+```sh
+gh auth login --hostname github.com --web
+```
+
+If `gh` displays an official GitHub URL and one-time code, relay only that URL
+and code to the user. The user completes authentication in the browser. Let
+the command finish, then verify the session with
+`gh auth status --hostname github.com` and the account with
+`gh api --hostname github.com user --jq '.login'`. Continue only when that
+login is the account the user intends to use. Do not enter the code on the
+user's behalf or ask them to send it back. The separate OpenAI `remote_login`
+flow is unchanged.
 
 ## 5. Complete the remote agent login
 
