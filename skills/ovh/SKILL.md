@@ -188,41 +188,41 @@ row; use it to add the remaining rows:
 | GET | `/cloud/project/*` |
 | POST | `/cloud/project/*` |
 
-Do not add other method/path rows or replace `*` with a project ID. After the
-user creates the keys, have them enter the values only through GoAster's local
-`/env` flow. Keep the Application Key, Application Secret, and Consumer Key
-out of chat, screenshots, and reports. No account-level project-creation
-permission is needed because the user creates the project in OVHcloud Manager.
-Once the configured OVH client authenticates, use the read-only project
-verification workflow above; `POST /cloud/project/*` is for later
-project-scoped provisioning operations. The user does not enter a project ID
-on the Create API Keys screen.
+For this initial provisioning credential, do not add other method/path rows or
+replace `*` with a project ID. After the user creates the keys, have them enter
+the values only through GoAster's local `/env` flow. Keep the Application Key,
+Application Secret, and Consumer Key out of chat, screenshots, and reports. No
+account-level project-creation permission is needed because the user creates the
+project in OVHcloud Manager. Once the configured OVH client authenticates, use
+the read-only project verification workflow above; `POST /cloud/project/*` is
+for later project-scoped provisioning operations. The user does not enter a
+project ID on the Create API Keys screen.
 
-### Optional project-scoped backup extension
+### Optional Public Cloud instance backup
 
-The three rows above remain the current provisioning scope. They are enough
-for project discovery and the approved project-scoped provisioning flow; they
-do not grant snapshot or backup access. The new GoAster backup workflow treats
-snapshot/backup access as a separate, project-scoped extension beyond those
-provisioning rights.
+The three rows above also cover documented Public Cloud instance backup
+creation and inspection. The [OVH instance-backup guide](https://docs.ovhcloud.com/en/guides/public-cloud/compute/save-an-instance)
+uses `GET /cloud/project/{serviceName}/region` and
+`POST /cloud/project/{serviceName}/region/{regionName}/instance/{instanceId}/snapshot`;
+backup listing/read operations are under `/cloud/project/*`. No separate
+credential extension is required for those operations.
 
-Before using that optional extension, verify the current OVH account endpoint,
-project UI, and official OVH documentation for the exact method/path rows and
-permission names needed by the selected backup or snapshot operation. This
-skill intentionally does not publish unverified backup endpoint paths. Do not
-copy a guessed path, assume that a similarly named permission is equivalent,
-or broaden the credential to account-wide access. The verification should
-cover only the categories required for the approved operation: reading
-available backup/snapshot capabilities and state, creating the selected
-backup, checking completion and restore readiness, restoring or attaching it,
-and deleting or changing retention when explicitly included.
+Before using the optional path, verify the current account endpoint, project,
+resource, exact method/path, and rights against official OVH documentation and
+the project UI. Other operations may require different rights. If GoAster
+performs deletion or retention changes, it needs `DELETE` rights for the
+relevant documented endpoint and any other required rights. Do not guess paths
+or broaden access account-wide. If creation or inspection cannot be verified,
+skip the OVH backup and keep the mandatory server-local rollback bundle. For
+other operations, skip only the unverified operation.
 
-The user must separately approve the exact project, resource, operation, cost,
-retention, deletion behavior, and whether secret-inclusive data is included.
-The current provisioning approval and the three rows above do not approve this
-extension. If exact rights or paths cannot be verified at execution time, do
-not use the optional OVH backup path; keep the mandatory server-local rollback
-bundle and report that the extension was not authorized.
+Before creating a backup, tell the user they are responsible for managing and
+deleting old backups and schedules to minimize ongoing storage costs. GoAster
+must never delete them automatically unless separately approved. Obtain
+explicit approval for the exact project, resource, operation, and cost, and
+separate approval for retention, deletion (including OVH-managed rotation),
+and any secret-inclusive data. The [backup workflow](../goaster-backup/SKILL.md)
+covers retention and pricing.
 
 ### Public price estimate
 

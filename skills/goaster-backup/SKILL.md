@@ -42,33 +42,57 @@ service. Keep existing bundles; do not delete them automatically.
 ## Optional OVH snapshot or backup
 
 Only after the local bundle passes, ask whether the user wants the optional OVH
-path. It is not part of the essential workflow. Before any OVH call, perform a
-fresh verification of the current account endpoint, the selected project, the
-target instance, and the exact snapshot/backup capability in the official OVH
-documentation and the project UI. The verification must identify the exact
-method/path and permission names that are valid now. This repository
-intentionally does not name those unverified endpoint paths; never substitute
-a guessed path.
+path. It is not part of the essential workflow. The existing provisioning rows
+`GET /cloud/project`, `GET /cloud/project/*`, and `POST /cloud/project/*`
+cover documented Public Cloud instance backup creation and inspection. The
+[OVH instance-backup guide](https://docs.ovhcloud.com/en/guides/public-cloud/compute/save-an-instance)
+uses `GET /cloud/project/{serviceName}/region` and
+`POST /cloud/project/{serviceName}/region/{regionName}/instance/{instanceId}/snapshot`;
+backup listing and read operations are under `/cloud/project/*`. The
+[OVH US backup guide](https://support.us.ovhcloud.com/hc/en-us/articles/4460743125395-Backing-up-an-instance)
+documents `GET /cloud/project/{serviceName}/snapshot` for verification.
+No separate credential extension is required for those creation and inspection
+operations.
 
-Treat the permission extension as separate from the current provisioning scope.
-At minimum, verify which project-scoped rights cover the needed categories:
+Before using OVH, verify the current account endpoint, project, instance,
+capability, and exact method/path and rights for the selected operation against
+current official OVH documentation and the project UI. Other operations, such
+as volume backups, restore, or attachment, may require different rights. If
+GoAster performs deletion or retention changes, it needs `DELETE` rights for
+the relevant documented endpoint and any other required rights. For example,
+the US backup guide documents `DELETE /cloud/project/{serviceName}/snapshot/{snapshotId}`
+for a backup and
+`DELETE /cloud/project/{serviceName}/region/{regionName}/workflow/backup/{backupWorkflowId}`
+for a schedule. Do not broaden to account-wide access. If creation or
+inspection cannot be verified, skip the optional backup and continue with the
+local bundle. For other operations, skip only the unverified operation.
 
-- listing or reading available backup/snapshot capabilities and state;
-- creating a snapshot or backup for the selected instance or volume;
-- inspecting completion and restore readiness;
-- restoring or attaching a selected backup when rollback requires it; and
-- deleting or changing retention only when the approved plan includes it.
+OVH documents default automatic schedules that retain the last 7 or last 14
+daily backups, as well as custom schedules. No universal cap on manually
+created backups was verified; do not assume a rolling maximum for them.
 
-The current provisioning rights do not imply any of these categories. If the
-exact rights cannot be verified, stop the optional path and continue with the
-local bundle only. Do not broaden an account-wide scope to make the check pass.
+The [OVH US Public Cloud price list](https://us.ovhcloud.com/public-cloud/prices/)
+lists Instance Backup storage replicated x3 at about US\$0.000017/GB/hour or
+US\$0.0123/GB/month, excluding tax. Used space is billed with 1 GB granularity.
+A distant backup is charged separately at the remote region's storage price.
+Actual prices vary by OVH account region and current pricing; verify the user's
+price before estimating, or say the cost is unknown.
 
 Before creating an OVH backup, show the target project and resource, expected
-cost or the fact that cost is unknown, retention period, deletion behavior,
-data location when verified, and whether any secret-inclusive data is present.
-Obtain explicit approval for the exact operation. Approval for a local bundle
-does not approve an OVH backup, extra retention, deletion, restore, or secret
-inclusion. Never delete a snapshot or backup automatically.
+cost or the fact that cost is unknown, retention plan, deletion behavior, data
+location when verified, and whether any secret-inclusive data is present.
+Explicitly tell the user: "You are responsible for managing and deleting old
+backups and schedules if you want to minimize ongoing storage costs. Retained
+backups can continue to incur charges after the instance is deleted."
+
+Obtain explicit approval for the exact operation and cost, and separate
+approval for retention, deletion, restore, and any secret inclusion. Approval
+for a local bundle does not approve an OVH backup. GoAster must never delete
+backups or schedules automatically unless separately approved. OVH-managed
+schedule rotation can delete older backups; explain that behavior and obtain
+separate approval before creating or changing such a schedule. After creation,
+inspect completion and, where verifiable, restore readiness before reporting
+success.
 
 ## Result and rollback handoff
 

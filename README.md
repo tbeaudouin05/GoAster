@@ -137,11 +137,11 @@ Then use the [build/test workflow](skills/goaster-build-test/SKILL.md) for
 `go build`, the explicit core Go tests, an isolated binary start, and one short
 prompt smoke test. It intentionally does not run Telegram or adapter tests.
 Before deployment, the [backup workflow](skills/goaster-backup/SKILL.md)
-requires a verified rollback bundle stored on the server. An OVH snapshot or
-backup is optional: it needs an additional project-scoped credential extension
-beyond the current provisioning rights, exact current endpoint/permission
-verification, and separate approval for cost, retention, deletion, and any
-secret-inclusive data. The [deployment workflow](skills/goaster-deploy/SKILL.md)
+requires a verified rollback bundle stored on the server. An OVH instance
+backup is optional; existing provisioning rights cover documented creation and
+inspection. GoAster verifies the current endpoint and rights, explains cleanup
+responsibilities, and requires approval for the operation, cost, retention,
+deletion, and any secret-inclusive data. The [deployment workflow](skills/goaster-deploy/SKILL.md)
 uses the stable `/usr/local/libexec/goaster-deploy` helper, stages and checksums
 the versioned release, swaps it atomically, restarts, runs health and prompt
 smoke checks, and rolls back to the local bundle on failure. The
@@ -447,12 +447,28 @@ needed because you create the project yourself in OVHcloud Manager. See the
 After configuring the keys through local `/env` and authenticating, GoAster
 will verify your active project with read-only checks. Do not enter a project
 ID on the Create API Keys screen. Never paste keys into chat or include them
-in screenshots. These three provisioning rows do not grant snapshot or backup
-access. The optional backup path needs a separate project-scoped rights
-extension, with exact method/path and permission verification against current
-official OVH documentation or the project UI before use. Do not guess those
-unverified paths, and approve its cost, retention, deletion, and any
-secret-inclusive backup separately.
+in screenshots. These three rows also cover documented Public Cloud instance
+backup creation and inspection; no separate credential extension is needed for
+those operations. The [OVH instance-backup guide](https://docs.ovhcloud.com/en/guides/public-cloud/compute/save-an-instance)
+documents the region lookup and snapshot creation endpoints. GoAster verifies
+current methods and rights before use. If it performs deletion or retention
+changes, it needs `DELETE` rights for the relevant documented endpoint and any
+other required rights. Backup operations and costs require explicit approval;
+retention, deletion, and secret-inclusive data require separate approval.
+
+The OVH guide documents daily automatic schedules retaining the last 7 or last
+14 backups; no universal cap on manually created backups was verified. You are
+responsible for managing and deleting old backups and schedules if you want to
+minimize ongoing storage costs. Retained backups can incur charges after the
+instance is deleted. GoAster must never delete backups or schedules automatically
+unless separately approved; OVH-managed schedule rotation that deletes older
+backups also requires separate approval.
+
+The [OVH US Public Cloud price list](https://us.ovhcloud.com/public-cloud/prices/)
+lists Instance Backup storage replicated x3 at about US\$0.000017/GB/hour or
+US\$0.0123/GB/month, excluding tax, billed by used space with 1 GB granularity.
+Distant backups are charged separately at the remote region's storage price.
+Actual prices vary by OVH account region and current pricing.
 
 **End-to-end:** Start in local GoAster chat and sign in to OVHcloud directly on
 its website. Enter the generated OVH API key values and Telegram bot token only

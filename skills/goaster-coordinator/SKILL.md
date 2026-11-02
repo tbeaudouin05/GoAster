@@ -22,11 +22,16 @@ fork -> source -> build/test -> local backup -> optional OVH backup -> deploy ->
 4. **Local backup** — Run `goaster-backup` on the exact target host. Require a
    verified server-local rollback bundle before any deployment action.
 5. **Optional OVH backup** — Offer the optional project-scoped OVH
-   snapshot/backup only after the local bundle. Verify current exact endpoint
-   and permission details before use, because current provisioning rights do
-   not grant backup rights. Require separate approval for cost, retention,
-   deletion, and secret-inclusive data. If skipped or not verifiable, continue
-   with the local bundle and report it clearly.
+   instance backup only after the local bundle. Existing provisioning GET and
+   POST rows cover documented creation and inspection; verify current endpoint
+   and rights before use. If GoAster performs deletion or retention changes,
+   it needs `DELETE` rights for the relevant documented endpoint. Before
+   creation, tell the user they are responsible for managing and deleting old
+   backups and schedules to minimize ongoing storage costs. Never delete them
+   automatically unless separately approved. Require explicit approval for the
+   operation and cost, and separate approval for retention, deletion (including
+   OVH-managed rotation), and secret-inclusive data. If skipped or not
+   verifiable, continue with the local bundle and report it clearly.
 6. **Deploy** — Run `goaster-deploy` with the approved binary checksum. Stage,
    verify the checksum, atomically swap the release selector, restart the
    approved service through the stable helper, and retain the previous release.
