@@ -46,11 +46,20 @@ commit, push, reset, deploy, or change application files.
   flow. The requested OAuth scopes are `repo read:org gist`, matching the
   minimum scope set documented for `gh auth login --with-token`. If the
   provider is not configured, stop and report that blocker.
+- To obtain the client ID, create an OAuth App in GitHub under **Settings →
+  Developer settings → OAuth Apps → New OAuth App**, enable **Device Flow** in
+  the app settings, and copy its public **Client ID** into
+  `GOASTER_GITHUB_CLIENT_ID`. Device Flow needs no GitHub client secret.
 - The agent and Telegram adapter must share the deployment-only
   `GOASTER_GITHUB_AUTH_CONTROL_SECRET` through a root-controlled service
   `EnvironmentFile`. The agent requires that secret on every loopback `/chat`
   and GitHub control request; an arbitrary `chat_id` is never sufficient. Do
   not put the secret in command arguments, chat, logs, or reports.
+- Generate `GOASTER_GITHUB_AUTH_CONTROL_SECRET` in the operator's secure local
+  terminal with `openssl rand -hex 32` (or an equivalent cryptographically
+  secure random generator). Keep it unique to this deployment and configure
+  the exact same value in both services' root-controlled `EnvironmentFile`;
+  never reuse it across deployments or commit it.
 - Rollback removes the newly-installed account by its verified login before
   restoring a prior snapshot, including inactive `gh` accounts. If removal or
   restoration is uncertain, stop with the documented manual reconciliation

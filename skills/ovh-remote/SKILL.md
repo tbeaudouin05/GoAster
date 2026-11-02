@@ -663,6 +663,17 @@ GOASTER_GITHUB_CLIENT_ID=<public GitHub OAuth client ID>
 GOASTER_GITHUB_AUTH_CONTROL_SECRET=<deployment-generated random secret>
 ```
 
+To get the client ID, create an OAuth App in GitHub under **Settings →
+Developer settings → OAuth Apps → New OAuth App**, enable **Device Flow** in
+the app settings, and copy its public **Client ID** to
+`GOASTER_GITHUB_CLIENT_ID`. Device Flow does not require a GitHub client
+secret. In the operator's secure local terminal, generate a unique
+deployment-local control secret with `openssl rand -hex 32` (or an equivalent
+cryptographically secure random generator). Supply it only through the
+approved local `/env` and protected deployment-file flow, and configure the
+same value in both the agent and Telegram service; do not reuse it across
+deployments.
+
 Create and protect this file through the deployment system with root ownership
 and mode `0600`; do not put either value in an `ExecStart` command line. The
 agent rejects `/auth/github/authorize` and `/auth/github/cancel` without the
