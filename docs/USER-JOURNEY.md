@@ -115,10 +115,20 @@ fork -> source -> build/test -> local backup -> optional OVH backup -> deploy ->
 The [GitHub CLI skill](../skills/github-cli/SKILL.md) authenticates locally
 with `gh` and keeps credentials out of chat. The [fork workflow](../skills/goaster-fork/SKILL.md)
 verifies the public `tbeaudouin05/GoAster` upstream read-only, tells the user
-that a public fork is public, and works only in the user's own fork and branch.
+that a public fork is public, and works only in the user's own fork's
+`goaster-customizations` and `goaster-contributions` branches.
 The [source workflow](../skills/goaster-source/SKILL.md) supports arbitrary
 customization in that fork and preserves existing user changes; it does not
 silently merge or reset from upstream.
+
+For sharing, the [contribution-sharing skill](../skills/goaster-share-contribution/SKILL.md)
+uses the standard `goaster-customizations` branch for existing source changes
+and verified local skill artifacts, then places only exact-commit manifests on
+the manifest-only `goaster-contributions` branch. A local skill is committed
+to the customization branch before its manifest is created. The
+[contribution-discovery skill](../skills/goaster-find-contributions/SKILL.md)
+inspects those manifests read-only; neither workflow writes upstream or
+silently discards user changes.
 
 The [build/test workflow](../skills/goaster-build-test/SKILL.md) runs the Go
 build, explicit core tests, an isolated binary start, and one concise prompt

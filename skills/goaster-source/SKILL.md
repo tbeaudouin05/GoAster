@@ -6,9 +6,10 @@ identity explicit and reproducible.
 
 ## Source preflight
 
-1. Confirm the approved `github.com` account, fork owner/name, branch, and
-   checkout path. Verify `origin` points to that fork and any `upstream` remote
-   is read-only. Do not infer identity from a directory name.
+1. Confirm the approved `github.com` account, fork owner/name, exact
+   `goaster-customizations` branch, and checkout path. Verify `origin` points
+   to that fork and any `upstream` remote is read-only. Do not infer identity
+   from a directory name or use another branch for persistent changes.
 2. Inspect the exact branch and current full SHA through GitHub and local Git.
    Record the source SHA used for this stage. If local files are dirty, show
    the status and preserve it; do not reset or stash without explicit approval.
@@ -32,7 +33,7 @@ Before build/test, report:
 ```text
 source_host=github.com
 source_repo=<approved fork owner/name>
-source_branch=<exact branch>
+source_branch=goaster-customizations
 source_sha=<exact full SHA>
 source_path=<absolute checkout path>
 working_tree=<clean or described user changes>

@@ -1,6 +1,6 @@
 ---
 name: github-fork-starter
-description: Safely guide creation of a user-approved fork of tbeaudouin05/GoAster and a dedicated branch without changing upstream contents. Use an existing authenticated gh session or the standard foreground GitHub CLI web login when needed.
+description: Safely guide creation of a user-approved fork of tbeaudouin05/GoAster with the standard goaster-customizations and goaster-contributions branches without changing upstream contents. Use an existing authenticated gh session or the standard foreground GitHub CLI web login when needed.
 ---
 
 # GitHub fork starter
@@ -10,7 +10,8 @@ host checks, read-only discovery, and safe GitHub actions. This workflow is the
 fork-specific procedure built on that shared contract.
 
 Prepare a user's fork of `tbeaudouin05/GoAster` for future development when
-asked in ordinary language. End after a dedicated branch is verified; do not
+asked in ordinary language. Verify the standard `goaster-customizations` and
+`goaster-contributions` branches. End after both branches are verified; do not
 commit, push, reset, deploy, or change application files.
 
 ## Boundaries and authentication
@@ -67,14 +68,14 @@ commit, push, reset, deploy, or change application files.
 
 2. Tell the user **forks of public repositories are public** before asking for
    confirmation. Do not offer a private fork; if private visibility is
-   required, stop without creating one. Ask for the exact personal account,
-   fork name, and dedicated branch if not already supplied. The account must
-   match the authenticated login. Preserve the user's values, validate the
-   account and fork name as single GitHub path components, and validate the
-   branch with `git check-ref-format --branch` when available. Require its
-   output to equal the supplied branch, since it can expand checkout
-   shorthand. Do not treat a general “go ahead” as approval for unspecified
-   values.
+   required, stop without creating one. Ask for the exact personal account
+   and fork name if not already supplied. The account must match the
+   authenticated login. Preserve the user's values and validate the account
+   and fork name as single GitHub path components. Branch names are fixed:
+   `goaster-customizations` for persistent user changes and
+   `goaster-contributions` for contribution manifests. Do not ask the user to
+   choose an arbitrary branch. Do not treat a general “go ahead” as approval
+   for unspecified values.
 
 3. Inspect `repos/$ACCOUNT/$FORK_NAME` before writing. A 404 alone does not
    prove absence: it can hide an inaccessible private repository. Confirm
@@ -86,17 +87,19 @@ commit, push, reset, deploy, or change application files.
    `tbeaudouin05/GoAster`. Require a default branch and its exact commit ref;
    otherwise stop without changing it.
 
-4. If the fork exists, inspect the exact dedicated branch in it. If it is
-   missing, use the fork's default branch and commit as the proposed base. If
-   it exists, show its current commit and ask the user to explicitly choose
-   either to reuse it as-is or to supply another branch name. Never overwrite
-   it; do not report the workflow complete or reuse it without that choice.
-   A reused branch need not equal the default-branch commit. Recheck the new
-   name if one is chosen. Treat an ambiguous ref lookup as a blocker.
+4. If the fork exists, inspect both exact standard branches in it. For each
+   missing branch, use the fork's default branch and commit as the proposed
+   base. For each existing branch, show its current commit and ask the user
+   explicitly whether to reuse that exact branch as-is. Do not offer an
+   alternate branch name. Never overwrite an existing branch or report the
+   workflow complete without an explicit reuse choice for every existing
+   branch. A reused branch need not equal the default-branch commit. Treat an
+   ambiguous ref lookup as a blocker.
 
    If the fork is absent, **do not query any branch in it**. Propose the
-   upstream default branch and commit recorded in step 1 as the base. Explain
-   that the fork's branch can be inspected only after creation and readiness.
+   upstream default branch and commit recorded in step 1 as the base for both
+   standard branches. Explain that the branches can be inspected only after
+   creation and readiness.
    A missing upstream ref or an uncertain candidate-fork state is a blocker,
    not a reason to guess a base.
 
@@ -107,16 +110,18 @@ quote values; never pass untrusted text through `eval`.
 ## Approval
 
 Before any creation, present the exact upstream, authenticated account,
-fork `owner/name`, **public** visibility, dedicated branch, and proposed
-default branch and base SHA. State whether the fork exists, whether the branch
-has been inspected, and the intended writes: create the separate fork only if
-absent, then create the branch in that fork only if missing. For an existing
-branch, describe reuse as-is with its observed SHA and make no branch write.
-Obtain explicit approval of that exact plan; reuse also requires the user's
-explicit choice. If any approved identity, visibility, branch, default branch,
-base SHA, or reuse SHA changes, stop and obtain a new choice or approval.
-Immediately before each creation request, recheck that the active GitHub login
-is still the approved account; if it changed or cannot be verified, stop.
+fork `owner/name`, **public** visibility, both standard branch refs, and
+proposed default branch and base SHA. State whether the fork exists and,
+separately for each branch, whether it has been inspected, its current or
+proposed SHA, and the intended write. Create the separate fork only if absent,
+then create each standard branch in that fork only if missing. For every
+existing branch, describe reuse as-is with its observed SHA and make no branch
+write. Obtain explicit approval of that exact plan; reuse also requires the
+user's explicit choice. If any approved identity, visibility, branch, default
+branch, base SHA, or reuse SHA changes, stop and obtain a new choice or
+approval. Immediately before each creation request, recheck that the active
+GitHub login is still the approved account; if it changed or cannot be
+verified, stop.
 
 ## Create and verify the fork
 
@@ -151,13 +156,16 @@ identity, default branch, and commit immediately before branch creation; if
 they differ from the approved plan, stop and repeat the appropriate preflight
 and approval, including the upstream-match check for a newly created fork.
 
-## Create or reuse the branch
+## Create or reuse the standard branches
 
-Once the fork is verified and ready, inspect the exact target branch again
+Once the fork is verified and ready, inspect each exact standard branch again
 immediately before any branch write. This is the first target-branch lookup in
-an initially absent fork. If it now exists, show its SHA and ask the user to
-choose reuse as-is or a different name; do not create or overwrite it. If the
-ref is confirmed missing, create it at the approved `BASE_SHA` in the fork:
+an initially absent fork. If a branch now exists, show its SHA and ask the user
+to choose reuse as-is; do not offer a different name and do not create or
+overwrite it. If the ref is confirmed missing, create that standard branch at
+the approved `BASE_SHA` in the fork. Set `BRANCH` only to
+`goaster-customizations` or `goaster-contributions`, for an approved missing
+ref:
 
 ```sh
 gh api --hostname github.com --method POST "repos/$ACCOUNT/$FORK_NAME/git/refs" \
@@ -167,17 +175,18 @@ gh api --hostname github.com --method POST "repos/$ACCOUNT/$FORK_NAME/git/refs" 
 
 If creation fails or times out, inspect the exact ref; never overwrite or
 blindly retry it. If a ref exists, show its SHA and ask for an explicit choice
-to reuse it or select another branch. If its state is uncertain, stop and
-report that state. Do not claim an uncertain write succeeded.
+to reuse that exact standard branch. If its state is uncertain, stop and report
+that state. Do not claim an uncertain write succeeded. Recheck the login and
+fork identity immediately before each branch creation.
 
 ## Verify and hand off
 
 Re-read the upstream identity, the fork's owner/name, public visibility,
-parent/source and default branch, and the exact dedicated ref. A newly
-created branch must resolve to the approved base SHA; a reused branch must
-resolve to the SHA the user explicitly chose to reuse. If the reused ref
+parent/source and default branch, and both exact standard refs. Each newly
+created branch must resolve to the approved base SHA; each reused branch must
+resolve to the SHA the user explicitly chose to reuse. If a reused ref
 changed, ask for a new choice. If verification fails, report the observed
 state rather than claiming completion. Report the verified account, fork URL,
-public visibility, default branch, dedicated branch, and commit IDs. Later
-commits or pushes require a separate request and a fresh destination check;
-this workflow does not modify upstream contents.
+public visibility, default branch, both standard branch names, and their
+commit IDs. Later commits or pushes require a separate request and a fresh
+destination check; this workflow does not modify upstream contents.

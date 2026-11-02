@@ -12,7 +12,8 @@ fork -> source -> build/test -> local backup -> optional OVH backup -> deploy ->
 
 1. **Fork** — Run `goaster-fork`, using `github-cli` and
    `github-fork-starter`. Verify the user's authenticated account, public fork,
-   dedicated branch, and exact SHA. Keep upstream read-only.
+   `goaster-customizations` branch, manifest-only `goaster-contributions`
+   branch, and exact SHAs. Keep upstream read-only.
 2. **Source** — Run `goaster-source`. Confirm the fork checkout, branch, exact
    source SHA, and path. Support arbitrary user customization in that fork;
    preserve existing changes and do not auto-merge upstream.
@@ -44,7 +45,8 @@ fork -> source -> build/test -> local backup -> optional OVH backup -> deploy ->
 Treat the handoff as a tuple, not a general “go ahead”:
 
 ```text
-(github_host, fork_owner/name, branch, source_sha, source_path,
+(github_host, fork_owner/name, goaster-customizations,
+goaster-contributions, source_sha, source_path,
  binary_sha256, target_host_identity, service, release_path, helper_path)
 ```
 

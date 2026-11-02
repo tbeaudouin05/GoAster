@@ -127,11 +127,25 @@ the binary; they are not embedded in it.
 The simple customization journey is user-owned and sequential: use the
 [GitHub CLI skill](skills/github-cli/SKILL.md) and
 [fork workflow](skills/goaster-fork/SKILL.md) to verify `github.com`, create or
-reuse a public fork, and create a dedicated branch. Upstream remains read-only;
+reuse a public fork, and create or reuse the standard `goaster-customizations`
+and `goaster-contributions` branches. Upstream remains read-only;
 all source work happens in the user's fork and this workflow does not create a
 pull request. The [source workflow](skills/goaster-source/SKILL.md) allows
 arbitrary user customization in that fork, including Go code, Markdown skills,
 packaging assets, documentation, and tests.
+
+To share an approved change, use the
+[contribution-sharing skill](skills/goaster-share-contribution/SKILL.md). It
+keeps implementation and locally selected skills on the user's
+`goaster-customizations` branch and stores only exact-commit JSON manifests on
+the manifest-only `goaster-contributions` branch. A local skill is copied into
+the customization branch and committed before its manifest is published;
+source contributions reference an existing customization commit without
+duplicating its implementation. Use
+[contribution discovery](skills/goaster-find-contributions/SKILL.md) for
+read-only manifest inspection. These workflows keep upstream read-only and
+require explicit approval for fork/branch writes, commits, pushes, and pull
+requests.
 
 Then use the [build/test workflow](skills/goaster-build-test/SKILL.md) for
 `go build`, the explicit core Go tests, an isolated binary start, and one short
