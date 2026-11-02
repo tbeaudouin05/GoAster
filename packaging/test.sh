@@ -29,6 +29,13 @@ memory_hash=$(git hash-object skills/MEMORY.md)
 git update-index --add --cacheinfo "100644,$memory_hash,skills/MEMORY.md"
 assets_hash=$(git hash-object packaging/assets.sh)
 git update-index --add --cacheinfo "100644,$assets_hash,packaging/assets.sh"
+for starter_skill in $starter_skills; do
+	for starter_file in META.md SKILL.md AUTH.md; do
+		starter_path="skills/$starter_skill/$starter_file"
+		starter_hash=$(git hash-object "$starter_path")
+		git update-index --add --cacheinfo "100644,$starter_hash,$starter_path"
+	done
+done
 check_starter_tree "$repo_root/skills"
 check_tracked_starters
 
