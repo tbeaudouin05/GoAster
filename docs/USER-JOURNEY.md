@@ -101,6 +101,43 @@ set; canceling leaves it unchanged. The relevant skill explains what each
 setting is for and where to find it. Secret values are never printed in the
 terminal.
 
+## Optional developer path: customize a user-owned fork
+
+The essential local chat and ordinary OVH onboarding paths remain unchanged.
+When the user wants to customize GoAster, ask for the
+[coordinator workflow](../skills/goaster-coordinator/SKILL.md) or follow its
+small stages:
+
+```text
+fork -> source -> build/test -> local backup -> optional OVH backup -> deploy -> verify
+```
+
+The [GitHub CLI skill](../skills/github-cli/SKILL.md) authenticates locally
+with `gh` and keeps credentials out of chat. The [fork workflow](../skills/goaster-fork/SKILL.md)
+verifies the public `tbeaudouin05/GoAster` upstream read-only, tells the user
+that a public fork is public, and works only in the user's own fork and branch.
+The [source workflow](../skills/goaster-source/SKILL.md) supports arbitrary
+customization in that fork and preserves existing user changes; it does not
+silently merge or reset from upstream.
+
+The [build/test workflow](../skills/goaster-build-test/SKILL.md) runs the Go
+build, explicit core tests, an isolated binary start, and one concise prompt
+smoke test. It does not run Telegram or adapter tests. Before deployment, the
+[backup workflow](../skills/goaster-backup/SKILL.md) requires a verified
+server-local rollback bundle. An OVH snapshot or backup is optional and needs
+an additional project-scoped credential extension beyond the current
+provisioning scope. Verify the exact current endpoint and permission rows from
+official OVH documentation and the project UI before use; the workflow does
+not invent unverified paths. Approve its cost, retention, deletion, and any
+secret-inclusive backup separately.
+
+The [deployment workflow](../skills/goaster-deploy/SKILL.md) stages the exact
+checksum, atomically swaps the versioned release, restarts through the stable
+`/usr/local/libexec/goaster-deploy` helper, runs health and prompt smoke checks,
+and rolls back to the local bundle if verification fails. Any change to the
+GitHub identity, source SHA, local path, binary checksum, or target host
+invalidates downstream approval and returns the journey to the affected stage.
+
 ## 4. Ask for the OVH setup you need
 
 Ask GoAster to create a new OVH server and install GoAster, or to install it on
@@ -193,7 +230,14 @@ needed because the user creates the project in OVHcloud Manager. GoAster
 verifies the active project read-only before continuing. The user does not
 enter a project ID on the Create API Keys screen. Keep the Application Key,
 Application Secret, and Consumer Key out of chat and screenshots; enter
-credentials only through local `/env`.
+credentials only through local `/env`. These three provisioning rows do not
+grant snapshot or backup access. The optional backup path requires a separate
+project-scoped rights extension beyond the current provisioning rights. Before
+using it, verify the exact current method/path and permission names against
+official OVH documentation and the project UI; do not guess or publish an
+unverified endpoint path. Get separate approval for cost, retention, deletion,
+and any secret-inclusive backup. If that verification or approval is missing,
+keep the mandatory server-local rollback bundle and skip OVH backup.
 
 For SSH bootstrap, the skill confirms the exact host and starts with read-only
 checks. It then builds `goaster-agent` and `goaster-telegram` on the existing

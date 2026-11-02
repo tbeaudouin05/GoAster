@@ -1,5 +1,10 @@
 # Authorization
 
+Load and follow the canonical [github-cli skill](../github-cli/SKILL.md) and
+its [authorization rules](../github-cli/AUTH.md) before using GitHub. This
+workflow adds the fork-specific identity and branch approvals below; it does
+not replace the generic GitHub safety rules.
+
 Use read-only GitHub discovery first; if the fixed upstream cannot be verified, stop and report the blocker. Disclose before approval that forks of public repositories are public. Before any creation, obtain explicit approval for the exact authenticated account, public fork, branch, default branch, base commit, and intended actions. An existing branch may be reused only by the user's explicit choice and must never be overwritten.
 
 GitHub's upstream forks endpoint requests creation of a separate approved fork and does not modify upstream contents. Approval does not authorize changes to upstream contents, refs, settings, or access, nor commits, pushes, deletes, overwrites, force pushes, or resets. Branch creation must target only the approved fork.

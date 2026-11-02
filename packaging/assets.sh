@@ -1,6 +1,6 @@
 #!/bin/sh
 # Shared allowlist for starter assets in release packages.
-starter_skills='github-fork-starter internet-fetch model-administration ovh-remote ovh project-memory self-improvement-memory-consolidation telegram-group-privacy'
+starter_skills='github-cli github-fork-starter goaster-backup goaster-build-test goaster-coordinator goaster-deploy goaster-fork goaster-source internet-fetch model-administration ovh-remote ovh project-memory self-improvement-memory-consolidation telegram-group-privacy'
 
 check_starter_tree() {
 	asset_tree=$1

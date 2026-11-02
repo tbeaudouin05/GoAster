@@ -36,6 +36,9 @@ for starter_skill in $starter_skills; do
 		git update-index --add --cacheinfo "100644,$starter_hash,$starter_path"
 	done
 done
+if ! sh "$script_dir/test-skill-assets.sh"; then
+	fail 'skill allowlist or stale-reference checks failed'
+fi
 check_starter_tree "$repo_root/skills"
 check_tracked_starters
 
