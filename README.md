@@ -122,6 +122,32 @@ installed binary also looks for `skills` beside the executable and under its
 installation prefix at `share/goaster/skills`. Keep the assets together with
 the binary; they are not embedded in it.
 
+## User-owned fork workflow (developers)
+
+The simple customization journey is user-owned and sequential: use the
+[GitHub CLI skill](skills/github-cli/SKILL.md) and
+[fork workflow](skills/goaster-fork/SKILL.md) to verify `github.com`, create or
+reuse a public fork, and create a dedicated branch. Upstream remains read-only;
+all source work happens in the user's fork and this workflow does not create a
+pull request. The [source workflow](skills/goaster-source/SKILL.md) allows
+arbitrary user customization in that fork, including Go code, Markdown skills,
+packaging assets, documentation, and tests.
+
+Then use the [build/test workflow](skills/goaster-build-test/SKILL.md) for
+`go build`, the explicit core Go tests, an isolated binary start, and one short
+prompt smoke test. It intentionally does not run Telegram or adapter tests.
+Before deployment, the [backup workflow](skills/goaster-backup/SKILL.md)
+requires a verified rollback bundle stored on the server. An OVH snapshot or
+backup is optional: it needs an additional project-scoped credential extension
+beyond the current provisioning rights, exact current endpoint/permission
+verification, and separate approval for cost, retention, deletion, and any
+secret-inclusive data. The [deployment workflow](skills/goaster-deploy/SKILL.md)
+uses the stable `/usr/local/libexec/goaster-deploy` helper, stages and checksums
+the versioned release, swaps it atomically, restarts, runs health and prompt
+smoke checks, and rolls back to the local bundle on failure. The
+[coordinator](skills/goaster-coordinator/SKILL.md) sequences these stages and
+invalidates approvals when identity, SHA, path, or host changes.
+
 ## Environment variables
 
 When setup needs environment variables, GoAster explains each one's purpose and
@@ -421,7 +447,12 @@ needed because you create the project yourself in OVHcloud Manager. See the
 After configuring the keys through local `/env` and authenticating, GoAster
 will verify your active project with read-only checks. Do not enter a project
 ID on the Create API Keys screen. Never paste keys into chat or include them
-in screenshots.
+in screenshots. These three provisioning rows do not grant snapshot or backup
+access. The optional backup path needs a separate project-scoped rights
+extension, with exact method/path and permission verification against current
+official OVH documentation or the project UI before use. Do not guess those
+unverified paths, and approve its cost, retention, deletion, and any
+secret-inclusive backup separately.
 
 **End-to-end:** Start in local GoAster chat and sign in to OVHcloud directly on
 its website. Enter the generated OVH API key values and Telegram bot token only

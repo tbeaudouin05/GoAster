@@ -198,6 +198,32 @@ verification workflow above; `POST /cloud/project/*` is for later
 project-scoped provisioning operations. The user does not enter a project ID
 on the Create API Keys screen.
 
+### Optional project-scoped backup extension
+
+The three rows above remain the current provisioning scope. They are enough
+for project discovery and the approved project-scoped provisioning flow; they
+do not grant snapshot or backup access. The new GoAster backup workflow treats
+snapshot/backup access as a separate, project-scoped extension beyond those
+provisioning rights.
+
+Before using that optional extension, verify the current OVH account endpoint,
+project UI, and official OVH documentation for the exact method/path rows and
+permission names needed by the selected backup or snapshot operation. This
+skill intentionally does not publish unverified backup endpoint paths. Do not
+copy a guessed path, assume that a similarly named permission is equivalent,
+or broaden the credential to account-wide access. The verification should
+cover only the categories required for the approved operation: reading
+available backup/snapshot capabilities and state, creating the selected
+backup, checking completion and restore readiness, restoring or attaching it,
+and deleting or changing retention when explicitly included.
+
+The user must separately approve the exact project, resource, operation, cost,
+retention, deletion behavior, and whether secret-inclusive data is included.
+The current provisioning approval and the three rows above do not approve this
+extension. If exact rights or paths cannot be verified at execution time, do
+not use the optional OVH backup path; keep the mandatory server-local rollback
+bundle and report that the extension was not authorized.
+
 ### Public price estimate
 
 Before requesting approval to create any server or other OVH resource,

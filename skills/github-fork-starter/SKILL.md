@@ -5,6 +5,10 @@ description: Safely guide creation of a user-approved fork of tbeaudouin05/GoAst
 
 # GitHub fork starter
 
+Use the canonical [github-cli skill](../github-cli/SKILL.md) for authentication,
+host checks, read-only discovery, and safe GitHub actions. This workflow is the
+fork-specific procedure built on that shared contract.
+
 Prepare a user's fork of `tbeaudouin05/GoAster` for future development when
 asked in ordinary language. End after a dedicated branch is verified; do not
 commit, push, reset, deploy, or change application files.
@@ -12,7 +16,8 @@ commit, push, reset, deploy, or change application files.
 ## Boundaries and authentication
 
 - Never write to the upstream repository's contents, refs, settings, or
-  access. GitHub's `POST /repos/tbeaudouin05/GoAster/forks` requests creation
+  access. All later GoAster work belongs in the user's own approved fork.
+  GitHub's `POST /repos/tbeaudouin05/GoAster/forks` requests creation
   of a separate fork; it does not modify upstream contents. This specific
   request is allowed only for the explicitly approved fork. All branch writes
   must target that fork's exact `owner/name`.
