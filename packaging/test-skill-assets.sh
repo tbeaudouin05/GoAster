@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 . "$script_dir/assets.sh"
 
-expected_starter_skills='background-command-administration bitwarden-secrets-manager github-cli github-fork-starter goaster-backup goaster-build-test goaster-coordinator goaster-deploy goaster-fork goaster-source internet-fetch model-administration ovh-remote ovh project-memory self-improvement-memory-consolidation telegram-group-privacy'
+expected_starter_skills='background-command-administration bitwarden-secrets-manager github-cli github-fork-starter goaster-backup goaster-build-test goaster-coordinator goaster-deploy goaster-fork goaster-source internet-fetch model-administration ovh-remote ovh project-memory ripgrep-search self-improvement-memory-consolidation telegram-group-privacy'
 if [ "$starter_skills" != "$expected_starter_skills" ]; then
 	printf 'starter skill allowlist changed unexpectedly\nexpected: %s\nactual: %s\n' \
 		"$expected_starter_skills" "$starter_skills" >&2
