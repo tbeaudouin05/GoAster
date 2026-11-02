@@ -21,14 +21,14 @@ func TestDetachedProcessCannotStartProtectedLogin(t *testing.T) {
 		if _, err := syscall.Setsid(); err != nil {
 			t.Fatal(err)
 		}
-		tool := newRemoteLoginTool(newProtectedLoginHandoffWithFallback(openControllingTerminal,
+		tool := newProcessHandoffTool(newProtectedProcessHandoffWithFallback(openControllingTerminal,
 			func() (io.ReadWriteCloser, error) { return openInheritedTerminal(os.Stdin, os.Stdout) },
 			func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
 				t.Fatal("detached process started SSH")
 				return nil
 			}))
-		result, err := tool.Handler(context.Background(), `{"target":"root@host.example","key":"/tmp/key"}`)
-		if err != nil || result != remoteLoginToolNoTerminal {
+		result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"root@host.example","key":"/tmp/key"}`)
+		if err != nil || result != processHandoffToolNoTerminal {
 			t.Fatalf("result = %q, error = %v", result, err)
 		}
 		return
@@ -38,14 +38,14 @@ func TestDetachedProcessCannotStartProtectedLogin(t *testing.T) {
 			t.Fatal(err)
 		}
 		calls := 0
-		tool := newRemoteLoginTool(newProtectedLoginHandoffWithFallback(openControllingTerminal,
+		tool := newProcessHandoffTool(newProtectedProcessHandoffWithFallback(openControllingTerminal,
 			func() (io.ReadWriteCloser, error) { return openInheritedTerminal(os.Stdin, os.Stdout) },
 			func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
 				calls++
 				return nil
 			}))
-		result, err := tool.Handler(context.Background(), `{"target":"root@host.example","key":"/tmp/key"}`)
-		if err != nil || result != remoteLoginToolSucceeded || calls != 2 {
+		result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"root@host.example","key":"/tmp/key"}`)
+		if err != nil || result != processHandoffToolSucceeded || calls != 2 {
 			t.Fatalf("PTY handoff result = %q, error = %v, SSH calls = %d", result, err, calls)
 		}
 		return

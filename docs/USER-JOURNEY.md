@@ -245,22 +245,30 @@ the command finish, then verify the session with
 `gh auth status --hostname github.com` and the account with
 `gh api --hostname github.com user --jq '.login'`. Continue only when that
 login is the account the user intends to use. Do not enter the code on the
-user's behalf or ask them to send it back. The separate OpenAI `remote_login`
-flow is unchanged.
+user's behalf or ask them to send it back. The separate profile-based
+`process_handoff` flow is unchanged.
 
 ## 5. Complete the remote agent login
 
 The remote agent starts without a ChatGPT subscription credential. After its
 approved installation and agent service setup, GoAster automatically invokes
-the existing SSH-backed login flow through the `remote_login` handoff, targeting
+the existing SSH-backed login flow through the generic `process_handoff` tool
+with its fixed `openai` profile, targeting
 `root`, the account that runs both remote GoAster services. The normal path must not create or use a separate unprivileged runtime
 account. After the exact host and local key are approved in chat, the handoff displays them in the local terminal and
 requires the administrator to type `YES` before connecting. It then attaches
 the terminal directly to the SSH login. The administrator does not type the
-login command as part of the normal path. `remote_login` is an internal tool;
-the underlying `goaster remote-login` command is for exceptional manual use.
+login command as part of the normal path. `process_handoff` is an internal
+tool; the underlying `goaster remote-login` command is for exceptional manual use.
 Users do not normally type either name. GoAster waits for the administrator
 to approve the OpenAI device authorization before it continues onboarding.
+
+The chat tool accepts only fixed profiles and does not accept an executable,
+command string, shell fragment, or arbitrary argument list. Its current
+allowlist permits the `openai` profile in protected `interactive` mode only;
+the reserved `background` mode is rejected until a supervised process manager
+exists. The tool returns only a generic status to chat, while the administrator
+terminal receives the interactive login URL, device code, and process output.
 
 The flow requires explicit target and key inputs, launches OpenSSH directly
 outside model `shell_execute`, and inherits the local terminal's input and

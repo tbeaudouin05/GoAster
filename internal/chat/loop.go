@@ -27,7 +27,7 @@ I will first look for a GoAster server connection saved on this computer. If I f
 Approval applies only to the listed actions and that server. If anything unexpected or outside the plan comes up, I will pause and ask only for the needed input or approval. Approval does not guarantee setup will succeed. I will report progress as I go.
 
 If a server is already found, I will say one of these:
-- “The server is ready. Please approve the OpenAI sign-in in the terminal.”
+- “The server is ready. Please approve the sign-in in the terminal.”
 - “The server is ready, but Telegram still needs setup. Do not test Telegram yet.”
 - “Setup is complete. Please send one normal message to the Telegram bot and check that it replies.”
 

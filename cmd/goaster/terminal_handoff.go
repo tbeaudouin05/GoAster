@@ -29,14 +29,30 @@ func openControllingTerminal() (io.ReadWriteCloser, error) {
 	}
 }
 
-func newProtectedLoginHandoff(open controllingTerminalOpener, sshRun sshRunner) remoteLoginHandoff {
-	return newProtectedLoginHandoffWithFallback(open, nil, sshRun)
+func newProtectedProcessHandoff(open controllingTerminalOpener, sshRun sshRunner) processHandoff {
+	return newProtectedProcessHandoffWithFallback(open, nil, sshRun)
 }
 
-func newProtectedLoginHandoffWithFallback(open, fallback controllingTerminalOpener, sshRun sshRunner) remoteLoginHandoff {
-	return func(ctx context.Context, options remoteLoginOptions) string {
-		if ctx == nil || ctx.Err() != nil || sshRun == nil {
-			return remoteLoginToolFailed
+func newProtectedProcessHandoffWithFallback(open, fallback controllingTerminalOpener, sshRun sshRunner) processHandoff {
+	return func(ctx context.Context, request processHandoffRequest) string {
+		if ctx == nil || ctx.Err() != nil {
+			return processHandoffToolFailed
+		}
+		profile, ok := processHandoffProfileFor(request.Profile)
+		if !ok || validateProcessHandoffRequest(request) != nil {
+			return processHandoffToolInvalid
+		}
+		if request.Mode == processHandoffModeBackground {
+			if profile.background == nil {
+				return processHandoffToolInvalid
+			}
+			if err := profile.background(ctx, request); err != nil {
+				return processHandoffToolFailed
+			}
+			return processHandoffToolSucceeded
+		}
+		if request.Mode != processHandoffModeInteractive || profile.interactive == nil || sshRun == nil {
+			return processHandoffToolFailed
 		}
 		var terminal io.ReadWriteCloser
 		var err error
@@ -49,10 +65,10 @@ func newProtectedLoginHandoffWithFallback(open, fallback controllingTerminalOpen
 			}
 		}
 		if err != nil || terminal == nil {
-			return remoteLoginToolNoTerminal
+			return processHandoffToolNoTerminal
 		}
 		defer terminal.Close()
-		return approveRemoteLogin(ctx, options, terminal, sshRun)
+		return approveProcessHandoff(ctx, request, terminal, profile.interactive, sshRun)
 	}
 }
 
@@ -99,44 +115,55 @@ func openInheritedTerminal(input io.Reader, output io.Writer) (io.ReadWriteClose
 	return inheritedTerminal{input: input, output: output}, nil
 }
 
-// The explicit CLI command uses its configured controlling-terminal opener
-// without adding the model tool's separate approval prompt.
+// The compatibility CLI command uses its configured controlling-terminal
+// opener without adding the model tool's separate approval prompt.
 func runRemoteLoginOnTerminal(ctx context.Context, options remoteLoginOptions, open controllingTerminalOpener, sshRun sshRunner) error {
+	if open == nil {
+		return errors.New(processHandoffToolNoTerminal)
+	}
 	terminal, err := open()
 	if err != nil || terminal == nil {
-		return errors.New(remoteLoginToolNoTerminal)
+		return errors.New(processHandoffToolNoTerminal)
 	}
 	defer terminal.Close()
-	return runRemoteLoginWith(ctx, options, terminal, terminal, terminal, sshRun)
+	request := processHandoffRequest{
+		Profile:        processHandoffProfileOpenAI,
+		Mode:           processHandoffModeInteractive,
+		Target:         options.Target,
+		IdentityFile:   options.IdentityFile,
+		KnownHostsFile: options.KnownHostsFile,
+		Port:           options.Port,
+	}
+	return runOpenAIInteractiveProcessHandoff(ctx, request, terminal, sshRun)
 }
 
-func approveRemoteLogin(ctx context.Context, options remoteLoginOptions, terminal io.ReadWriter, sshRun sshRunner) string {
+func approveProcessHandoff(ctx context.Context, request processHandoffRequest, terminal io.ReadWriter, run processHandoffInteractiveRunner, sshRun sshRunner) string {
 	output, errorOutput := io.Writer(terminal), io.Writer(terminal)
 	approvalInput := chat.NewTerminalInput(terminal)
 	knownHosts := "default known_hosts file"
-	if options.KnownHostsFile != "" {
-		knownHosts = strconv.Quote(options.KnownHostsFile)
+	if request.KnownHostsFile != "" {
+		knownHosts = strconv.Quote(request.KnownHostsFile)
 	}
 
 	if _, err := fmt.Fprintf(output,
-		"\nRemote login approval required.\nTarget: %q\nSSH port: %d\nLocal SSH key: %s\nKnown-hosts file: %s\nHost-key verification: strict; an unknown or changed key will stop the connection.\nType YES to start the interactive login and health check: ",
-		options.Target, options.Port, strconv.Quote(options.IdentityFile), knownHosts); err != nil {
-		return remoteLoginToolFailed
+		"\nProtected process handoff approval required.\nProfile: %q\nTarget: %q\nSSH port: %d\nLocal SSH key: %s\nKnown-hosts file: %s\nHost-key verification: strict; an unknown or changed key will stop the connection.\nType YES to start the interactive handoff and verification: ",
+		request.Profile, request.Target, request.Port, strconv.Quote(request.IdentityFile), knownHosts); err != nil {
+		return processHandoffToolFailed
 	}
 	if flusher, ok := output.(interface{ Flush() error }); ok {
 		if err := flusher.Flush(); err != nil {
-			return remoteLoginToolFailed
+			return processHandoffToolFailed
 		}
 	}
 	answer, completed, err := approvalInput.ReadLine(4096)
 	if err != nil || !completed || !strings.EqualFold(strings.TrimSpace(answer), "yes") {
-		fmt.Fprintln(output, "\nRemote login canceled; no connection was made.")
-		return remoteLoginToolDeclined
+		fmt.Fprintln(output, "\nProcess handoff canceled; no connection was made.")
+		return processHandoffToolDeclined
 	}
 
-	if err := runRemoteLoginWith(ctx, options, terminal, output, errorOutput, sshRun); err != nil {
-		fmt.Fprintf(errorOutput, "Remote login did not complete: %v. Review the local terminal output before continuing.\n", err)
-		return remoteLoginToolFailed
+	if err := run(ctx, request, terminal, sshRun); err != nil {
+		fmt.Fprintf(errorOutput, "Process handoff did not complete: %v. Review the local terminal output before continuing.\n", err)
+		return processHandoffToolFailed
 	}
-	return remoteLoginToolSucceeded
+	return processHandoffToolSucceeded
 }

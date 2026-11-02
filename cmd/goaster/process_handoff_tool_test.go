@@ -43,7 +43,7 @@ func (writer channelWriter) String() string {
 	return strings.Join(parts, "")
 }
 
-func TestRemoteLoginToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *testing.T) {
+func TestProcessHandoffToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *testing.T) {
 	home := t.TempDir()
 	sshDirectory := filepath.Join(home, ".ssh")
 	if err := os.Mkdir(sshDirectory, 0700); err != nil {
@@ -76,25 +76,25 @@ func TestRemoteLoginToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *test
 		}
 		return nil
 	}
-	if err := registerRemoteLoginTool(registrar, newProtectedLoginHandoff(testTerminalOpener(input, output), runner)); err != nil {
-		t.Fatalf("register remote login tool: %v", err)
+	if err := registerProcessHandoffTool(registrar, newProtectedProcessHandoff(testTerminalOpener(input, output), runner)); err != nil {
+		t.Fatalf("register process handoff tool: %v", err)
 	}
-	if registered.Name != remoteLoginToolName || registered.Handler == nil {
+	if registered.Name != processHandoffToolName || registered.Handler == nil {
 		t.Fatalf("registered tool = %+v", registered)
 	}
-	if !strings.Contains(registered.Description, "internal tool") || !strings.Contains(registered.Description, "do not ask the user to type its name or the goaster remote-login command") {
+	if !strings.Contains(registered.Description, "internal profile-based process handoff") || !strings.Contains(registered.Description, "do not ask the user to type its name or the goaster remote-login command") {
 		t.Fatalf("tool description does not explain the internal handoff: %q", registered.Description)
 	}
 	if registered.Parameters["additionalProperties"] != false {
 		t.Fatalf("tool schema allows extra arguments: %+v", registered.Parameters)
 	}
 
-	result, err := registered.Handler(context.Background(), `{"target":"goaster@host.example","key":"~/.ssh/goaster-ovh","known_hosts":"~/.ssh/verified_hosts","port":2222}`)
+	result, err := registered.Handler(context.Background(), `{"profile":"openai","mode":"interactive","target":"goaster@host.example","key":"~/.ssh/goaster-ovh","known_hosts":"~/.ssh/verified_hosts","port":2222}`)
 	if err != nil {
-		t.Fatalf("remote_login handler: %v", err)
+		t.Fatalf("process_handoff handler: %v", err)
 	}
-	if result != remoteLoginToolSucceeded {
-		t.Fatalf("tool result = %q, want %q", result, remoteLoginToolSucceeded)
+	if result != processHandoffToolSucceeded {
+		t.Fatalf("tool result = %q, want %q", result, processHandoffToolSucceeded)
 	}
 	if strings.Contains(result, "DEVICE-CODE-MUST-STAY-LOCAL") {
 		t.Fatalf("tool result relayed terminal output: %q", result)
@@ -136,28 +136,28 @@ func TestRemoteLoginToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *test
 	}
 }
 
-func TestRemoteLoginToolDeclineAndInvalidArgumentsDoNotConnect(t *testing.T) {
+func TestProcessHandoffToolDeclineAndInvalidArgumentsDoNotConnect(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		input     string
 		arguments string
 		want      string
 	}{
-		{name: "declined", input: "no\n", arguments: `{"target":"goaster@host.example","key":"/tmp/key"}`, want: remoteLoginToolDeclined},
-		{name: "missing enter", input: "YES", arguments: `{"target":"goaster@host.example","key":"/tmp/key"}`, want: remoteLoginToolDeclined},
-		{name: "unknown argument", input: "YES\n", arguments: `{"target":"goaster@host.example","key":"/tmp/key","command":"anything"}`, want: remoteLoginToolInvalid},
-		{name: "invalid port", input: "YES\n", arguments: `{"target":"goaster@host.example","key":"/tmp/key","port":0}`, want: remoteLoginToolInvalid},
+		{name: "declined", input: "no\n", arguments: `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key"}`, want: processHandoffToolDeclined},
+		{name: "missing enter", input: "YES", arguments: `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key"}`, want: processHandoffToolDeclined},
+		{name: "unknown argument", input: "YES\n", arguments: `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key","command":"anything"}`, want: processHandoffToolInvalid},
+		{name: "invalid port", input: "YES\n", arguments: `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key","port":0}`, want: processHandoffToolInvalid},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
-			tool := newRemoteLoginTool(newProtectedLoginHandoff(testTerminalOpener(strings.NewReader(test.input), io.Discard),
+			tool := newProcessHandoffTool(newProtectedProcessHandoff(testTerminalOpener(strings.NewReader(test.input), io.Discard),
 				func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
 					calls++
 					return nil
 				}))
 			result, err := tool.Handler(context.Background(), test.arguments)
 			if err != nil {
-				t.Fatalf("remote_login handler: %v", err)
+				t.Fatalf("process_handoff handler: %v", err)
 			}
 			if result != test.want {
 				t.Fatalf("tool result = %q, want %q", result, test.want)
@@ -169,11 +169,11 @@ func TestRemoteLoginToolDeclineAndInvalidArgumentsDoNotConnect(t *testing.T) {
 	}
 }
 
-func TestRemoteLoginToolReturnsOnlyGenericFailureStatus(t *testing.T) {
+func TestProcessHandoffToolReturnsOnlyGenericFailureStatus(t *testing.T) {
 	secret := "DEVICE-CODE-OR-SSH-OUTPUT"
 	calls := 0
 	output := newChannelWriter()
-	tool := newRemoteLoginTool(newProtectedLoginHandoff(testTerminalOpener(strings.NewReader("YES\n"), output),
+	tool := newProcessHandoffTool(newProtectedProcessHandoff(testTerminalOpener(strings.NewReader("YES\n"), output),
 		func(_ context.Context, _ []string, _ io.Reader, gotOutput, _ io.Writer) error {
 			calls++
 			if calls == 1 {
@@ -182,11 +182,11 @@ func TestRemoteLoginToolReturnsOnlyGenericFailureStatus(t *testing.T) {
 			}
 			return errors.New(secret)
 		}))
-	result, err := tool.Handler(context.Background(), `{"target":"goaster@host.example","key":"/tmp/key"}`)
+	result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key"}`)
 	if err != nil {
-		t.Fatalf("remote_login handler: %v", err)
+		t.Fatalf("process_handoff handler: %v", err)
 	}
-	if result != remoteLoginToolFailed || strings.Contains(result, secret) {
+	if result != processHandoffToolFailed || strings.Contains(result, secret) {
 		t.Fatalf("tool result = %q, want generic failure without terminal output", result)
 	}
 	if calls != 2 {
@@ -195,5 +195,28 @@ func TestRemoteLoginToolReturnsOnlyGenericFailureStatus(t *testing.T) {
 	localOutput := output.String()
 	if strings.Count(localOutput, secret) != 1 || !strings.Contains(localOutput, "Review the local terminal output") {
 		t.Fatalf("local terminal output = %q", localOutput)
+	}
+}
+
+func TestProcessHandoffToolRejectsUnknownProfilesAndBackgroundMode(t *testing.T) {
+	calls := 0
+	tool := newProcessHandoffTool(func(context.Context, processHandoffRequest) string {
+		calls++
+		return processHandoffToolSucceeded
+	})
+	for _, arguments := range []string{
+		`{"profile":"unknown","mode":"interactive","target":"root@host.example","key":"/tmp/key"}`,
+		`{"profile":"openai","mode":"background","target":"root@host.example","key":"/tmp/key"}`,
+	} {
+		result, err := tool.Handler(context.Background(), arguments)
+		if err != nil {
+			t.Fatalf("process_handoff handler: %v", err)
+		}
+		if result != processHandoffToolInvalid {
+			t.Fatalf("arguments %s returned %q, want %q", arguments, result, processHandoffToolInvalid)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("handoff calls = %d, want none for disallowed requests", calls)
 	}
 }

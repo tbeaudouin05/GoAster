@@ -28,12 +28,12 @@ func testTerminalOpener(input io.Reader, output io.Writer) controllingTerminalOp
 	}
 }
 
-func TestProtectedHandoffSelectsOnlyControllingTerminal(t *testing.T) {
+func TestProtectedProcessHandoffSelectsOnlyControllingTerminal(t *testing.T) {
 	output := newChannelWriter()
 	closed := make(chan bool, 1)
 	opened, calls := 0, 0
 	terminal := testTerminal{Reader: strings.NewReader("YES\n"), Writer: output, closed: closed}
-	handoff := newProtectedLoginHandoffWithFallback(func() (io.ReadWriteCloser, error) {
+	handoff := newProtectedProcessHandoffWithFallback(func() (io.ReadWriteCloser, error) {
 		opened++
 		return terminal, nil
 	}, func() (io.ReadWriteCloser, error) {
@@ -50,8 +50,8 @@ func TestProtectedHandoffSelectsOnlyControllingTerminal(t *testing.T) {
 		fmt.Fprintln(stderr, "PRIVATE-SSH-OUTPUT")
 		return nil
 	})
-	result, err := newRemoteLoginTool(handoff).Handler(context.Background(), `{"target":"root@host.example","key":"/tmp/key"}`)
-	if err != nil || result != remoteLoginToolSucceeded || strings.Contains(result, "PRIVATE") {
+	result, err := newProcessHandoffTool(handoff).Handler(context.Background(), `{"profile":"openai","target":"root@host.example","key":"/tmp/key"}`)
+	if err != nil || result != processHandoffToolSucceeded || strings.Contains(result, "PRIVATE") {
 		t.Fatalf("result = %q, error = %v", result, err)
 	}
 	if opened != 1 || calls != 2 || len(closed) != 1 {
@@ -59,19 +59,19 @@ func TestProtectedHandoffSelectsOnlyControllingTerminal(t *testing.T) {
 	}
 }
 
-func TestProtectedHandoffNoTerminalFailsWithoutSSH(t *testing.T) {
+func TestProtectedProcessHandoffNoTerminalFailsWithoutSSH(t *testing.T) {
 	for _, open := range []controllingTerminalOpener{
 		nil,
 		func() (io.ReadWriteCloser, error) { return nil, errors.New("SECRET-TERMINAL-DETAIL") },
 		func() (io.ReadWriteCloser, error) { return nil, nil },
 	} {
-		tool := newRemoteLoginTool(newProtectedLoginHandoff(open,
+		tool := newProcessHandoffTool(newProtectedProcessHandoff(open,
 			func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
 				t.Fatal("SSH started without a controlling terminal")
 				return nil
 			}))
-		result, err := tool.Handler(context.Background(), `{"target":"root@host.example","key":"/tmp/key"}`)
-		if err != nil || result != remoteLoginToolNoTerminal || strings.Contains(result, "SECRET") {
+		result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"root@host.example","key":"/tmp/key"}`)
+		if err != nil || result != processHandoffToolNoTerminal || strings.Contains(result, "SECRET") {
 			t.Fatalf("result = %q, error = %v", result, err)
 		}
 	}
@@ -84,7 +84,7 @@ func TestRemoteLoginCommandNoTerminalReturnsGenericError(t *testing.T) {
 			t.Fatal("SSH started without a controlling terminal")
 			return nil
 		})
-	if err == nil || err.Error() != remoteLoginToolNoTerminal {
+	if err == nil || err.Error() != processHandoffToolNoTerminal {
 		t.Fatalf("error = %v, want generic terminal failure", err)
 	}
 }

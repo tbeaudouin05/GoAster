@@ -30,5 +30,6 @@ GitHub's upstream forks endpoint requests creation of a separate approved fork a
 GoAster's root-run unrestricted shell can access locally stored `gh`
 credentials. Do not describe those credentials as inaccessible to the agent or
 model; the web login flow does not create a credential sandbox. GoAster's
-existing `remote_login` remains the separate OpenAI-specific login flow and is
-unchanged.
+profile-based `process_handoff` remains the separate OpenAI interactive login
+flow; only its fixed `openai` profile is available through the current chat
+tool, and no command or executable string may be supplied by the model.

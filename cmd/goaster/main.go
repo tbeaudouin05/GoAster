@@ -64,8 +64,8 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 	toolTerminalFallback := func() (io.ReadWriteCloser, error) {
 		return openInheritedTerminal(input, output)
 	}
-	if err := registerRemoteLoginTool(codexProvider, newProtectedLoginHandoffWithFallback(openControllingTerminal, toolTerminalFallback, sshRun)); err != nil {
-		return fmt.Errorf("register remote login tool: %w", err)
+	if err := registerProcessHandoffTool(codexProvider, newProtectedProcessHandoffWithFallback(openControllingTerminal, toolTerminalFallback, sshRun)); err != nil {
+		return fmt.Errorf("register process handoff tool: %w", err)
 	}
 	registry, err := chat.NewModelRegistry("")
 	if err != nil {

@@ -331,7 +331,8 @@ If `gh` displays an official GitHub URL and one-time code, relay only that URL
 and code to the user. The user completes authentication in the browser. Let the
 command finish, then verify the session and account with the commands above.
 Do not enter the code for the user or ask them to send it back. Report only the
-verified host and login. The separate OpenAI `remote_login` flow is unchanged.
+verified host and login. The separate profile-based `process_handoff` flow is
+unchanged.
 
 ## OVH provisioning and remote access
 
@@ -409,8 +410,8 @@ chat or include them in screenshots. For a new host, GoAster provisions
 the OVH resource with explicit approval and then bootstraps it over SSH; for
 an existing host, it starts with SSH bootstrap.
 After remote bootstrap and agent service setup, GoAster itself automatically
-starts the existing SSH-backed remote OpenAI login as `root` through its
-`remote_login` handoff. The remote agent and Telegram adapter intentionally
+starts the existing SSH-backed remote OpenAI login as `root` through the fixed
+`openai` profile in its generic `process_handoff` handoff. The remote agent and Telegram adapter intentionally
 run as root so GoAster can fully self-manage its own server. After the exact
 host and local key
 are approved in chat, the handoff displays them in the local terminal and
@@ -420,10 +421,20 @@ approves the OpenAI device authorization in a browser, and completes the
 existing `/healthz` check before continuing onboarding; that check may refresh
 and write the remote credential. The
 administrator must approve both the host contact and device authorization;
-GoAster cannot approve them on their behalf. `remote_login` is an internal
-tool and `goaster remote-login` is an internal command for exceptional use;
+GoAster cannot approve them on their behalf. `process_handoff` is an internal
+tool and `goaster remote-login` is a compatibility command for exceptional use;
 users do not normally type either one. Keep local OpenAI credentials on
 the local machine; remote credentials are stored separately on the host.
+
+The model-facing handoff is generic but intentionally profile-based. Its fixed
+allowlist currently contains only the `openai` profile, and the current chat
+tool permits only its protected `interactive` mode. `background` is reserved
+for a future supervised process manager and is rejected by the current chat
+tool. Profiles select fixed local executables and operations; the model cannot
+provide an executable, command string, shell fragment, or arbitrary argument
+list, and this change does not add a background-command tool. The handoff
+returns only a generic status to the model while interactive input and output
+remain attached to the protected administrator terminal.
 
 The local package does not need Go to bootstrap the remote agent: the SSH skill
 verifies or installs pinned Go 1.27.3 on the existing Linux host, clones the
@@ -475,7 +486,7 @@ fresh live OS check. The observed root SSH forced-command redirect to `ubuntu`
 is an account policy; it does not identify or change the OS image.
 
 After the remote agent is installed and root SSH is ready, GoAster's internal
-`remote_login` handoff invokes the protected login flow using `root` as the
+`process_handoff` handoff invokes the protected `openai` profile using `root` as the
 SSH target. The normal onboarding path must not create or use a separate
 unprivileged GoAster runtime account. The underlying `goaster remote-login`
 command is for exceptional manual use, not a normal onboarding step.
@@ -484,7 +495,7 @@ The protected flow requires an approved SSH target and local key, invokes OpenSS
 directly through the local CLI's protected controlling-terminal handoff, and
 does not pass through the model's `shell_execute` tool. The explicit command
 uses only the current process's `/dev/tty` on supported Unix systems. The
-`remote_login` model handoff also tries `/dev/tty` first; if no controlling
+`process_handoff` model handoff also tries `/dev/tty` first; if no controlling
 terminal is available, it uses inherited stdin and stdout only when both are
 the same actual terminal device. Pipes, detached processes without terminal
 stdio, and unrelated devices fail before connecting with a generic

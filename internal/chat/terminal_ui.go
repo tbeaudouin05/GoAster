@@ -209,8 +209,8 @@ func terminalToolCallStatus(name string) string {
 		activity = "running a command"
 	case "cron":
 		activity = "managing scheduled jobs"
-	case "remote_login":
-		activity = "starting remote login approval"
+	case "process_handoff":
+		activity = "starting protected process handoff"
 	}
 	return "Tool " + name + ": " + activity
 }

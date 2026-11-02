@@ -1,6 +1,6 @@
 ---
 name: ovh-remote
-description: Bootstrap and operate an existing OVHcloud host over SSH through GoAster's shell_execute, then orchestrate the approved interactive OpenAI login through GoAster's local remote_login handoff.
+description: Bootstrap and operate an existing OVHcloud host over SSH through GoAster's shell_execute, then orchestrate the approved interactive OpenAI login through GoAster's local profile-based process_handoff.
 ---
 
 # Existing OVH remote SSH
@@ -14,12 +14,16 @@ workflow does not provision, resize, delete, or otherwise manage OVH
 resources through the OVH API. Use the host's OpenSSH client through GoAster's
 `shell_execute` tool for non-interactive bootstrap and verification. After
 bootstrap and agent service setup, the onboarder invokes GoAster's dedicated
-`remote_login` tool. This is an internal handoff using the SSH-backed
-`goaster remote-login` implementation with the administrator's terminal
-attached. The command is for exceptional manual use; users should not normally
-type either name. Never run that login through `shell_execute`, capture its
-output for chat, or ask the administrator to type the command during normal
-onboarding.
+`process_handoff` tool with the fixed `openai` profile and `interactive` mode.
+This is an internal handoff using the SSH-backed `goaster remote-login`
+implementation with the administrator's terminal attached. The command is for
+exceptional manual use; users should not normally type either name. Never run
+that login through `shell_execute`, capture its output for chat, or ask the
+administrator to type the command during normal onboarding. The handoff has a
+fixed profile allowlist: do not provide an executable, command string, shell
+fragment, or arbitrary process arguments. Its reserved `background` mode is
+not available through the chat tool; future background work must be supervised
+by a fixed local process manager.
 
 ## Required remote privilege model
 
@@ -195,9 +199,9 @@ OVHcloud Manager for this new-server flow.
 
 After that first connection, use the same target-specific file and
 `StrictHostKeyChecking=yes` with `UpdateHostKeys=no` for every SSH command,
-including bootstrap stages and the `remote_login` handoff. Set
+including bootstrap stages and the `process_handoff` handoff. Set
 `GlobalKnownHostsFile=none` with this explicit file so no other known-hosts
-source can authorize a changed key. Pass the file in `remote_login`'s optional
+source can authorize a changed key. Pass the file in `process_handoff`'s optional
 `known_hosts` field so the protected login uses the same entry and the saved
 connection record retains its path. Never use `accept-new` again for this
 target. If the first attempt fails, inspect the OVH instance, exact IP, and
@@ -296,7 +300,7 @@ Start or restart the existing, reviewed GoAster agent service and, if Telegram
 setup is included, its existing Telegram service when needed, in the planned
 order.
 
-Remote OpenAI sign-in handoff (if required): Start the protected sign-in
+Protected sign-in process handoff (if required): Start the fixed OpenAI-profile
 handoff for this host, wait for the administrator to complete browser
 authorization, and check readiness; that check may refresh the credential.
 
@@ -342,8 +346,8 @@ administrator's browser/device authorization. Keep both safeguards.
 ## Orchestrate the interactive remote login
 
 After the agent is installed and the root account is ready for SSH, the
-onboarder must use the dedicated `remote_login` tool with `root` as the SSH
-target. Keep the administrator's terminal attached while they complete OpenAI
+onboarder must use the dedicated `process_handoff` tool with profile `openai`,
+mode `interactive`, and `root` as the SSH target. Keep the administrator's terminal attached while they complete OpenAI
 device authorization. The administrator must approve the authorization in the
 browser; the onboarder waits for the interactive login to finish before
 continuing. That approval is required before the separate remote root
@@ -357,8 +361,9 @@ account as part of onboarding. If root SSH is unavailable, stop and report the
 blocker; do not weaken SSH or silently substitute another account.
 
 Before using the tool, confirm internally that the exact target and local key
-are those covered by the approved routine checklist. Then call `remote_login`
-with that confirmed target and approved local key; do not request a second
+are those covered by the approved routine checklist. Then call
+`process_handoff` with `profile: "openai"`, `mode: "interactive"`, that
+confirmed target, and the approved local key; do not request a second
 chat approval for this listed handoff. The tool prints the target, key path,
 port, and strict host-key policy in the local terminal and requires the
 administrator to type `YES` there before connecting. It opens `/dev/tty` when
@@ -369,7 +374,7 @@ If approval is declined or no protected terminal is available, stop without
 connecting.
 
 For reference, the underlying exceptional-use command has this shape. The
-onboarder invokes `remote_login` itself during normal onboarding; do not ask
+onboarder invokes `process_handoff` itself during normal onboarding; do not ask
 the user to type this command:
 
 ```text
@@ -720,7 +725,8 @@ device code, login output, OAuth token, or saved credential file through
 GoAster or Telegram chat.
 
 After installation and agent service setup, the onboarder invokes the local
-OpenAI remote login flow with `remote_login`; the administrator does not type
+OpenAI remote login flow with `process_handoff` using profile `openai` and
+mode `interactive`; the administrator does not type
 the command during normal onboarding. The onboarder waits for the
 administrator's approval and the command's health check to return
 `ok` before continuing with Telegram setup. The login writes root's `/root/.goaster/agent-auth.json` with `0600`
@@ -770,7 +776,7 @@ Waiting for sign-in
 
 I found your server.
 
-Next: Approve the OpenAI sign-in in the terminal.
+Next: Approve the sign-in in the terminal.
 
 Waiting for Telegram pairing
 
