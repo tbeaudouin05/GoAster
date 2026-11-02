@@ -6,3 +6,8 @@ import _ "embed"
 //
 //go:embed openai-models.json
 var OpenAIModels []byte
+
+// BackgroundCommands is the initial empty background-command allowlist.
+//
+//go:embed background-commands.json
+var BackgroundCommands []byte

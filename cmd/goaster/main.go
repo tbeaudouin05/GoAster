@@ -10,6 +10,7 @@ import (
 
 	"goaster/internal/artefacts"
 	"goaster/internal/chat"
+	"goaster/internal/command"
 	"goaster/internal/localenv"
 	"goaster/internal/scheduler"
 )
@@ -66,6 +67,16 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 	}
 	if err := registerProcessHandoffTool(codexProvider, newProtectedProcessHandoffWithFallback(openControllingTerminal, toolTerminalFallback, sshRun)); err != nil {
 		return fmt.Errorf("register process handoff tool: %w", err)
+	}
+	backgroundManager, err := command.NewBackgroundCommandManager()
+	if err != nil {
+		return err
+	}
+	stopSignalHandler := backgroundManager.CloseOnSignal()
+	defer stopSignalHandler()
+	defer backgroundManager.Close()
+	if err := chat.RegisterBackgroundCommandTool(codexProvider, backgroundManager); err != nil {
+		return fmt.Errorf("register background command tool: %w", err)
 	}
 	registry, err := chat.NewModelRegistry("")
 	if err != nil {

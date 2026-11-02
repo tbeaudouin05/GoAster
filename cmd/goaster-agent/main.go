@@ -19,6 +19,7 @@ import (
 	"goaster/internal/artefacts"
 	"goaster/internal/attachment"
 	"goaster/internal/chat"
+	"goaster/internal/command"
 )
 
 const maxChatEnvelopeBytes int64 = 1 << 20
@@ -75,6 +76,16 @@ func serve(store chat.CredentialStore) error {
 		return fmt.Errorf("install starter skills: %w", err)
 	}
 	provider := chat.NewCodexProvider(store)
+	backgroundManager, err := command.NewBackgroundCommandManager()
+	if err != nil {
+		return fmt.Errorf("initialize background command manager: %w", err)
+	}
+	stopSignalHandler := backgroundManager.CloseOnSignal()
+	defer stopSignalHandler()
+	defer backgroundManager.Close()
+	if err := chat.RegisterBackgroundCommandTool(provider, backgroundManager); err != nil {
+		return fmt.Errorf("register background command tool: %w", err)
+	}
 	controlSecret := strings.TrimSpace(os.Getenv(githubAuthControlSecretEnv))
 	if strings.ContainsAny(controlSecret, "\r\n") {
 		controlSecret = ""

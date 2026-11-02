@@ -9,8 +9,10 @@ search and returns search-result titles, URLs, and snippets. The built-in
 readable content from public HTTP or HTTPS URLs with response and redirect limits.
 The built-in `shell_execute` tool runs commands through the platform's native
 shell and returns stdout, stderr, and the exit code; it accepts an optional
-working directory and bounded timeout in milliseconds. GoAster has no provider,
-API-key, or web-search flag configuration.
+working directory and bounded timeout in milliseconds. The separate
+`background_command` tool manages named local commands from a private allowlist
+and keeps their sessions only for the lifetime of the GoAster process. GoAster
+has no provider, API-key, or web-search flag configuration.
 
 The [internet-fetch skill](skills/internet-fetch/SKILL.md) guides normal
 retrieval first, bounded retries, and a one-request IPv4 check for suspicious
@@ -189,7 +191,8 @@ runtime state under `~/.goaster/artefacts`:
     │   └── projects/
     │       └── <project-name>.md
     ├── config/
-    │   └── openai-models.json
+    │   ├── openai-models.json
+    │   └── background-commands.json
     └── state/
         ├── sessions/
         │   └── session.json
@@ -216,6 +219,23 @@ GoAster uses this artefact layout directly. Credentials and secret
 integration settings remain separate in the private files at the top level of
 `~/.goaster`; they are never copied into skills, memory, configuration, or
 session state.
+
+`artefacts/config/background-commands.json` is an optional private JSON
+allowlist with version `1` and named command entries. Each entry has a unique
+lowercase name, an absolute executable path, an array of exact arguments, and
+an optional description and working directory. GoAster starts the executable
+directly; it does not interpret the arguments as shell text. A missing file is
+initialized from the embedded empty template, just as the model configuration
+uses an embedded default.
+The `background_command` tool accepts a name to start a command and runtime
+session IDs to inspect its status or bounded output, or stop it. It never
+accepts model-supplied executables, shell text, arguments, or working
+directories. The file is reloaded when commands are listed or started. Sessions
+remain in memory, are stopped on normal shutdown, interrupt, or termination,
+and are not restored after restart. Each process reads the configuration in its
+runtime user's home; sessions are local to that process. Use the
+[background-command-administration skill](skills/background-command-administration/SKILL.md)
+to maintain the local allowlist.
 
 Each skill directory contains a small `META.md` with only `name:` and
 `description:` lines, a workflow in `SKILL.md`, and its authorization rules
@@ -427,14 +447,14 @@ users do not normally type either one. Keep local OpenAI credentials on
 the local machine; remote credentials are stored separately on the host.
 
 The model-facing handoff is generic but intentionally profile-based. Its fixed
-allowlist currently contains only the `openai` profile, and the current chat
-tool permits only its protected `interactive` mode. `background` is reserved
-for a future supervised process manager and is rejected by the current chat
-tool. Profiles select fixed local executables and operations; the model cannot
-provide an executable, command string, shell fragment, or arbitrary argument
-list, and this change does not add a background-command tool. The handoff
-returns only a generic status to the model while interactive input and output
-remain attached to the protected administrator terminal.
+allowlist contains only the `openai` profile, and the `process_handoff` chat
+tool permits only its protected `interactive` mode. Background mode remains
+rejected by that handoff. The separate local `background_command` tool starts
+only names from `background-commands.json`; it does not expand the handoff's
+profile list or accept model-provided executable names, command strings, shell
+fragments, or arbitrary arguments. The interactive handoff returns only a
+generic status to the model while its input and output remain attached to the
+protected administrator terminal.
 
 The local package does not need Go to bootstrap the remote agent: the SSH skill
 verifies or installs pinned Go 1.27.3 on the existing Linux host, clones the
