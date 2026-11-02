@@ -102,6 +102,7 @@ func Execute(ctx context.Context, req Request) (Result, error) {
 	}
 
 	cmd := shellCommand(executionCtx, req.Command)
+	cmd.Env = EnvironmentWithoutGitHubTokenOverrides()
 	cleanup := configureCommand(cmd)
 	if req.Dir != "" {
 		cmd.Dir = req.Dir
@@ -136,6 +137,28 @@ func Execute(ctx context.Context, req Request) (Result, error) {
 		return result, nil
 	}
 	return result, errors.New("command execution failed")
+}
+
+// EnvironmentWithoutGitHubTokenOverrides returns the inherited environment
+// without variables that make gh prefer an environment token over its stored
+// credential. Agent shell commands and GitHub credential operations use the
+// same filtered environment.
+func EnvironmentWithoutGitHubTokenOverrides() []string {
+	blocked := map[string]bool{
+		"GH_TOKEN":                true,
+		"GITHUB_TOKEN":            true,
+		"GH_ENTERPRISE_TOKEN":     true,
+		"GITHUB_ENTERPRISE_TOKEN": true,
+	}
+	environment := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && blocked[strings.ToUpper(name)] {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	return environment
 }
 
 func resolveWorkingDirectory(path string) (string, error) {

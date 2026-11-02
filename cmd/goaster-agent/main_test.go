@@ -29,6 +29,24 @@ type fakeProvider struct{ err error }
 
 func readyAuth(context.Context) error { return nil }
 
+const testGitHubAuthControlSecret = "test-control-secret"
+
+func handler(provider chat.Provider, checkAuth func(context.Context) error) http.Handler {
+	return handlerWithMemory(provider, nil, checkAuth)
+}
+
+func handlerWithMemory(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error) http.Handler {
+	return handlerWithMemoryAndRegistry(provider, memory, checkAuth, chat.ModelRegistry{})
+}
+
+func handlerWithMemoryAndRegistry(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error, registry chat.ModelRegistry) http.Handler {
+	return handlerWithMemoryAndRegistryAndGitHubAuth(provider, memory, checkAuth, registry, githubAuthManager{})
+}
+
+func handlerWithMemoryAndRegistryAndGitHubAuth(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error, registry chat.ModelRegistry, githubAuth githubAuthManager) http.Handler {
+	return handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider, memory, checkAuth, registry, githubAuth, testGitHubAuthControlSecret)
+}
+
 func testAgentStore(t *testing.T) (string, chat.CredentialStore) {
 	t.Helper()
 	home := t.TempDir()
@@ -141,6 +159,7 @@ func postChat(t testing.TB, h http.Handler, chatID int64, message string) *httpt
 	}
 	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", strings.NewReader(string(body)))
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(githubAuthControlHeader, testGitHubAuthControlSecret)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
@@ -158,6 +177,7 @@ func postChatWithAttachments(t testing.TB, h http.Handler, chatID int64, message
 	}
 	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", strings.NewReader(string(body)))
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(githubAuthControlHeader, testGitHubAuthControlSecret)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
@@ -183,6 +203,9 @@ func TestAgentLoopbackHandler(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(tc.method, "http://"+tc.host+tc.path, strings.NewReader(tc.body))
 			r.Header.Set("Content-Type", tc.contentType)
+			if tc.path == "/chat" {
+				r.Header.Set(githubAuthControlHeader, testGitHubAuthControlSecret)
+			}
 			w := httptest.NewRecorder()
 			handler(tc.provider, readyAuth).ServeHTTP(w, r)
 			if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.want) {
@@ -207,6 +230,99 @@ func TestAgentLoopbackHandler(t *testing.T) {
 	}
 	if checks != 1 {
 		t.Fatalf("readiness authentication checks = %d, want 1", checks)
+	}
+}
+
+func TestAgentGitHubControlEndpointsRequireDeploymentSecret(t *testing.T) {
+	var authorized []int64
+	var canceled []int64
+	var reconciled []int64
+	manager := githubAuthManager{
+		authorizeFunc: func(_ context.Context, chatID int64) string {
+			authorized = append(authorized, chatID)
+			return githubAuthAuthorizationGranted
+		},
+		cancelFunc: func(_ context.Context, chatID int64) string {
+			canceled = append(canceled, chatID)
+			return githubAuthCancellationPending
+		},
+		reconcileFunc: func(_ context.Context, chatID int64) string {
+			reconciled = append(reconciled, chatID)
+			return githubAuthReconciled
+		},
+	}
+	h := handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(fakeProvider{}, nil, readyAuth, chat.ModelRegistry{}, manager, "control-secret")
+	post := func(path, secret, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765"+path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		if secret != "" {
+			r.Header.Set(githubAuthControlHeader, secret)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+
+	for _, secret := range []string{"", "wrong-secret"} {
+		for _, path := range []string{"/auth/github/authorize", "/auth/github/cancel", "/auth/github/reconcile"} {
+			response := post(path, secret, `{"chat_id":999}`)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("%s without the deployment secret status = %d, body = %q", path, response.Code, response.Body.String())
+			}
+		}
+	}
+	if len(authorized) != 0 || len(canceled) != 0 || len(reconciled) != 0 {
+		t.Fatalf("unauthenticated control calls reached the manager: authorized=%v canceled=%v reconciled=%v", authorized, canceled, reconciled)
+	}
+
+	if response := post("/auth/github/authorize", "control-secret", `{"chat_id":42}`); response.Code != http.StatusOK {
+		t.Fatalf("authenticated authorization status = %d, body = %q", response.Code, response.Body.String())
+	}
+	if response := post("/auth/github/cancel", "control-secret", `{"chat_id":42}`); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "cancellation was requested") {
+		t.Fatalf("authenticated cancellation status = %d, body = %q", response.Code, response.Body.String())
+	}
+	if response := post("/auth/github/reconcile", "control-secret", `{"chat_id":42}`); response.Code != http.StatusOK {
+		t.Fatalf("authenticated reconciliation status = %d, body = %q", response.Code, response.Body.String())
+	}
+	if !reflect.DeepEqual(authorized, []int64{42}) || !reflect.DeepEqual(canceled, []int64{42}) || !reflect.DeepEqual(reconciled, []int64{42}) {
+		t.Fatalf("authenticated control calls = authorized %v canceled %v reconciled %v", authorized, canceled, reconciled)
+	}
+}
+
+func TestAgentChatRequiresDeploymentSecretBeforeUsingForgedChatID(t *testing.T) {
+	providerCalls := 0
+	authEvents := 0
+	provider := inspectingProvider(func(ctx context.Context, _ string) (string, error) {
+		providerCalls++
+		if observer := chat.AuthHandoffObserverFromContext(ctx); observer != nil {
+			authEvents++
+			observer(chat.AuthHandoffNotice{Provider: "github", Status: "started"})
+		}
+		return "unexpected", nil
+	})
+	h := handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider, nil, readyAuth, chat.ModelRegistry{}, githubAuthManager{}, "control-secret")
+	post := func(secret string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", strings.NewReader(`{"chat_id":999,"message":"continue"}`))
+		request.Header.Set("Content-Type", "application/json")
+		if secret != "" {
+			request.Header.Set(githubAuthControlHeader, secret)
+		}
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, request)
+		return response
+	}
+	for _, secret := range []string{"", "wrong-secret"} {
+		if response := post(secret); response.Code != http.StatusUnauthorized {
+			t.Fatalf("forged chat_id with secret %q status = %d, body = %q", secret, response.Code, response.Body.String())
+		}
+	}
+	if providerCalls != 0 || authEvents != 0 {
+		t.Fatalf("unauthenticated forged chat_id reached provider/events: calls=%d events=%d", providerCalls, authEvents)
+	}
+	if response := post("control-secret"); response.Code != http.StatusOK {
+		t.Fatalf("authenticated chat status = %d, body = %q", response.Code, response.Body.String())
 	}
 }
 
@@ -446,6 +562,7 @@ func TestAgentRejectsUntrustedAttachmentMetadata(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", strings.NewReader(body))
 			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set(githubAuthControlHeader, testGitHubAuthControlSecret)
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, r)
 			if w.Code != http.StatusBadRequest {
@@ -474,6 +591,7 @@ func TestAgentAttachmentAndEnvelopeSizeLimits(t *testing.T) {
 	body := `{"chat_id":1,"message":"` + strings.Repeat("x", int(maxChatEnvelopeBytes)) + `"}`
 	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(githubAuthControlHeader, testGitHubAuthControlSecret)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusBadRequest {
@@ -534,6 +652,7 @@ func TestAgentKeepsAttachmentUntilCanceledTurnReturns(t *testing.T) {
 	defer cancel()
 	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", bytes.NewReader(body)).WithContext(ctx)
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(githubAuthControlHeader, testGitHubAuthControlSecret)
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		w := httptest.NewRecorder()

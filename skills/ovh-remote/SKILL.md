@@ -650,8 +650,25 @@ For a fresh systemd agent unit, include these service settings:
 ```ini
 [Service]
 User=root
+EnvironmentFile=/etc/goaster/github-auth.env
 ExecStart=/usr/bin/env HOME=/root GOASTER_STARTER_DIR=/usr/local/share/goaster/skills /usr/local/bin/goaster-agent
 ```
+
+The same root-controlled `EnvironmentFile` must be present in the
+`goaster-telegram` unit. It contains the public OAuth client ID and one shared,
+high-entropy internal control secret, for example:
+
+```text
+GOASTER_GITHUB_CLIENT_ID=<public GitHub OAuth client ID>
+GOASTER_GITHUB_AUTH_CONTROL_SECRET=<deployment-generated random secret>
+```
+
+Create and protect this file through the deployment system with root ownership
+and mode `0600`; do not put either value in an `ExecStart` command line. The
+agent rejects `/auth/github/authorize` and `/auth/github/cancel` without the
+secret header, and the Telegram adapter sends that header only after the
+paired user authorizes from the private chat. An arbitrary `chat_id` is not a
+control credential.
 
 The explicit assignment binds both starter skills and default memory to the
 reviewed installation, even if `/usr/local/bin/skills` exists or the service
@@ -678,6 +695,12 @@ before starting the Telegram adapter. Configure its systemd unit as
 Use the Telegram token/pairing flow below; include it in the routine checklist
 only when the token was already supplied through local `/env`. This bootstrap
 does not add an agent self-update command or behavior.
+
+The GitHub handoff does not sandbox credentials from the root-run agent. The
+existing unrestricted root shell can access locally stored `gh` credentials;
+do not claim that the installed GitHub token is inaccessible to the agent or
+model. The handoff only keeps device instructions and credentials out of
+ordinary model messages and Telegram progress output.
 
 ## Telegram setup
 

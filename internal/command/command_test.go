@@ -41,6 +41,25 @@ func TestExecuteCapturesStderrAndNonzeroExit(t *testing.T) {
 	}
 }
 
+func TestExecuteDoesNotInheritGitHubTokenOverrides(t *testing.T) {
+	const secret = "environment-token-must-not-reach-agent-shell"
+	t.Setenv("GH_TOKEN", secret)
+	t.Setenv("GITHUB_TOKEN", secret)
+	t.Setenv("GH_ENTERPRISE_TOKEN", secret)
+	t.Setenv("GITHUB_ENTERPRISE_TOKEN", secret)
+
+	if runtime.GOOS == "windows" {
+		t.Skip("shell environment assertion uses POSIX parameter expansion")
+	}
+	result, err := Execute(context.Background(), Request{Command: `printf '%s|%s|%s|%s' "${GH_TOKEN-unset}" "${GITHUB_TOKEN-unset}" "${GH_ENTERPRISE_TOKEN-unset}" "${GITHUB_ENTERPRISE_TOKEN-unset}"`})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got, want := result.Stdout, "unset|unset|unset|unset"; got != want {
+		t.Fatalf("filtered GitHub token environment = %q, want %q", got, want)
+	}
+}
+
 func TestExecuteWorkingDirectory(t *testing.T) {
 	dir := t.TempDir()
 	result, err := Execute(context.Background(), Request{Command: workingDirectoryCommand(), Dir: dir})
