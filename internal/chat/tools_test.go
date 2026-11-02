@@ -199,8 +199,8 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 		}
 		switch backendRequests.Add(1) {
 		case 1:
-			if len(request.Tools) != 5 {
-				t.Errorf("tools = %+v, want four built-ins and one optional tool", request.Tools)
+			if len(request.Tools) != 6 {
+				t.Errorf("tools = %+v, want five built-ins and one optional tool", request.Tools)
 			}
 			var skillTool *codexTool
 			for i := range request.Tools {

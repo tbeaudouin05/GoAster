@@ -201,7 +201,8 @@ func TestSelectedSkillCountsTowardCompaction(t *testing.T) {
 	}
 	session := NewSession(Config{Model: "gpt-test"}, provider)
 	session.selectedSkills = selected
-	session.history = historyWithTokens(summarizeTokens - base - (withSkill-base)/2)
+	historyTokens := summarizeTokens - withSkill
+	session.history = append(historyWithTokens(historyTokens), numberedHistory(5)...)
 	if _, err := session.Reply(context.Background(), "continue"); err != nil {
 		t.Fatal(err)
 	}

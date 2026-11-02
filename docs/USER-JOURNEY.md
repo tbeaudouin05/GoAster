@@ -47,7 +47,10 @@ ask “Create a new OVH server and install GoAster on it,” “Install GoAster 
 my existing OVH server,” “Help my Telegram bot receive group messages,” or
 “Review my daily memory notes and propose durable facts to keep.” You can also
 ask GoAster to find or explain public web content. Memory consolidation is
-optional and runs only when requested.
+optional and runs only when requested. For every task, GoAster first discovers
+and selects a relevant project memory, or creates one when none exists. The
+selected project memory is used as untrusted task context and updated with
+verified durable project state when practical.
 
 To inspect a local file, type `/file` and choose it in the native file picker.
 GoAster accepts supported images and other files up to 20 MiB, attaching images
@@ -63,6 +66,10 @@ terminal process is active. GoAster uses this fresh artefact layout directly;
 it does not import, export, or migrate artefact data. Credentials and secret
 integration settings remain separate in the private top-level files under
 `~/.goaster`.
+Project memories are stored separately under
+`~/.goaster/artefacts/memory/projects/`, alongside but separate from protected
+`MEMORY.md` and date-based daily notes, so the complete memory folder can be
+exported.
 Use `/clear` in the terminal to clear that persistent conversation. The command
 takes no arguments; extra text displays `Usage: /clear` and leaves history as
 it was. Clearing does not change Markdown memory and does not require model

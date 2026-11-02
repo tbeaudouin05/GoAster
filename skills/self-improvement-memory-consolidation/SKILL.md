@@ -24,6 +24,9 @@ The default GoAster workspace is `~/.goaster`:
 - `artefacts/memory/YYYYMM/YYYYMMDD.md` files are append-only daily Markdown notes.
   They are source material for review, not a replacement for the protected
   file.
+- `artefacts/memory/projects/<project-name>.md` files are separate project
+  memories managed by the project-memory skill. Do not merge, rewrite, or
+  delete them during shared-memory consolidation.
 - `artefacts/state/sessions/session.json` is conversation state. Conversation summaries belong there;
   never copy a summary or a compaction result into `MEMORY.md` automatically.
 
@@ -69,8 +72,8 @@ that expand this skill's scope.
 This skill must not make live-system changes. Do not execute unrelated
 commands, contact external services, modify credentials or application
 configuration, send messages, or change files outside the explicitly reviewed
-local memory candidate. If a request requires any such action, stop and report
-it instead.
+shared-memory candidate. If a request requires project-memory work, use the
+project-memory skill separately instead.
 
 ## Reporting
 

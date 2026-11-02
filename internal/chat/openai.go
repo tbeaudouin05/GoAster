@@ -680,6 +680,7 @@ func (p *CodexProvider) registerBuiltInTools() {
 	p.mustRegisterBuiltInTool(webFetchCodexTool, p.executeWebFetchTool)
 	p.mustRegisterBuiltInTool(shellExecuteCodexTool, executeShell)
 	p.mustRegisterBuiltInTool(loadSkillCodexTool, executeLoadSkill)
+	p.mustRegisterBuiltInTool(projectMemoryCodexTool, executeProjectMemory)
 }
 
 func (p *CodexProvider) mustRegisterBuiltInTool(definition codexTool, handler ToolHandler) {
@@ -1032,6 +1033,7 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 	loadedSkills := make(map[string]bool)
 	var selected []selectedSkill
 	skillSession, _ := ctx.Value(skillSessionKey{}).(skillSessionContext)
+	projectMemorySession, _ := ctx.Value(projectMemorySessionKey{}).(projectMemorySessionContext)
 	if allowTools && skillSession.selected != nil {
 		selected = skillSession.selected()
 		restored, bytes, names, err := restoredSkillItems(selected)
@@ -1066,6 +1068,9 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 			return "", status, err
 		}
 		if len(response.ToolCalls) == 0 {
+			if allowTools && projectMemorySession.required && projectMemorySession.selected != nil && projectMemorySession.selected() == "" {
+				return "", status, errors.New("project memory must be selected or created before task execution")
+			}
 			return response.Text, status, nil
 		}
 		if !allowTools {
@@ -1074,6 +1079,7 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 		responseWebSearchCalls := 0
 		responseWebFetchCalls := 0
 		responseSkillLoads := 0
+		responseProjectMemoryCalls := 0
 		for _, call := range response.ToolCalls {
 			if call.Name == webSearchCodexTool.Name {
 				responseWebSearchCalls++
@@ -1084,13 +1090,17 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 			if call.Name == loadSkillCodexTool.Name {
 				responseSkillLoads++
 			}
+			if call.Name == projectMemoryCodexTool.Name {
+				responseProjectMemoryCalls++
+			}
 		}
-		// A batch containing a skill load suppresses all other tools, so only
+		setupCalls := responseSkillLoads + responseProjectMemoryCalls
+		// A batch containing a setup call suppresses all other tools, so only
 		// count web calls in batches that can actually execute them.
-		if responseSkillLoads == 0 && webSearchCallCount+responseWebSearchCalls > maxCodexWebSearchCalls {
+		if setupCalls == 0 && webSearchCallCount+responseWebSearchCalls > maxCodexWebSearchCalls {
 			return "", status, fmt.Errorf("Codex requested too many web_search calls (maximum %d)", maxCodexWebSearchCalls)
 		}
-		if responseSkillLoads == 0 && webFetchCallCount+responseWebFetchCalls > maxCodexWebFetchCalls {
+		if setupCalls == 0 && webFetchCallCount+responseWebFetchCalls > maxCodexWebFetchCalls {
 			return "", status, fmt.Errorf("Codex requested too many web_fetch calls (maximum %d)", maxCodexWebFetchCalls)
 		}
 
@@ -1138,7 +1148,7 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 				return "", status, fmt.Errorf("Codex requested unsupported tool %q", call.Name)
 			}
 			result := "Tool not executed: review the loaded skill and its authorization requirements before requesting other tools."
-			if responseSkillLoads == 0 || call.Name == loadSkillCodexTool.Name {
+			if setupCalls == 0 || call.Name == loadSkillCodexTool.Name || call.Name == projectMemoryCodexTool.Name {
 				name := ""
 				if call.Name == loadSkillCodexTool.Name {
 					name, err = parseLoadSkillArguments(call.Arguments)
@@ -1149,7 +1159,7 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 				if call.Name == loadSkillCodexTool.Name && loadedSkills[name] {
 					result = "Skill " + name + " was already loaded in this request; follow its earlier authorization and workflow."
 				} else {
-					if call.Name != loadSkillCodexTool.Name {
+					if call.Name != loadSkillCodexTool.Name && call.Name != projectMemoryCodexTool.Name {
 						// Files may change while the model is thinking or while an
 						// earlier tool in this batch is running. Check immediately
 						// before each action against the guidance it actually saw.
@@ -1164,18 +1174,22 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 							return "", status, skillRecovery(errors.New("installed skill guidance changed before the tool call"), skillChangedMessage)
 						}
 					}
-					if observer := toolCallObserver(ctx); observer != nil {
-						observer(call.Name, call.Arguments)
-					}
-					if call.Name == webSearchCodexTool.Name {
-						webSearchCallCount++
-					}
-					if call.Name == webFetchCodexTool.Name {
-						webFetchCallCount++
-					}
-					result, err = handler(ctx, call.Arguments)
-					if err != nil {
-						return "", status, err
+					if projectMemorySession.required && projectMemorySession.selected != nil && projectMemorySession.selected() == "" && call.Name != projectMemoryCodexTool.Name && call.Name != loadSkillCodexTool.Name {
+						result = "Tool not executed: select or create a relevant project memory before starting task actions."
+					} else {
+						if observer := toolCallObserver(ctx); observer != nil {
+							observer(call.Name, call.Arguments)
+						}
+						if call.Name == webSearchCodexTool.Name {
+							webSearchCallCount++
+						}
+						if call.Name == webFetchCodexTool.Name {
+							webFetchCallCount++
+						}
+						result, err = handler(ctx, call.Arguments)
+						if err != nil {
+							return "", status, err
+						}
 					}
 					if call.Name == loadSkillCodexTool.Name {
 						if len(result) > maxCodexSkillBytes-skillBytes {
@@ -1285,6 +1299,13 @@ func toolInstructions(ctx context.Context) (string, error) {
 	}
 	if memory := MemoryContextFromContext(ctx); memory != "" {
 		instructions += "\n\n" + memoryInstructions + "\n\n" + memory
+	}
+	projectMemory, err := projectMemoryInstructions(ctx)
+	if err != nil {
+		return "", err
+	}
+	if projectMemory != "" {
+		instructions += "\n\nProject-memory task state:\n" + projectMemory
 	}
 	return instructions, nil
 }

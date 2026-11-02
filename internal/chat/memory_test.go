@@ -312,3 +312,141 @@ func TestConversationSummarizationDoesNotWriteProtectedMemory(t *testing.T) {
 		t.Fatal("protected memory and session paths overlap")
 	}
 }
+
+func TestProjectMemoryUsesExportablePrivateLayout(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	store, err := NewMemoryStoreWithError(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDirectory := filepath.Join(workspace, artefactsDirectoryName, memoryDirectoryName, projectMemoryDirectoryName)
+	if got := ProjectMemoryDirectory(workspace); got != wantDirectory {
+		t.Fatalf("project memory directory = %q, want %q", got, wantDirectory)
+	}
+	wantPath := filepath.Join(wantDirectory, "goaster.md")
+	if got := ProjectMemoryPath(workspace, "goaster"); got != wantPath {
+		t.Fatalf("project memory path = %q, want %q", got, wantPath)
+	}
+	if got := ProjectMemoryPath(workspace, "../outside"); got != "" {
+		t.Fatalf("invalid project memory path = %q", got)
+	}
+	if filepath.Clean(wantPath) == filepath.Clean(store.MemoryPath()) || filepath.Dir(wantPath) == filepath.Dir(store.DailyNotePath(time.Now())) {
+		t.Fatal("project memory overlaps protected or daily memory")
+	}
+	info, err := os.Stat(wantDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != memoryDirectoryMode {
+		t.Fatalf("project memory directory permissions = %04o, want %04o", info.Mode().Perm(), memoryDirectoryMode)
+	}
+
+	if err := CreateProjectMemory(workspace, "goaster", "# GoAster\n\nKeep this context."); err != nil {
+		t.Fatal(err)
+	}
+	names, err := DiscoverProjectMemories(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(names, []string{"goaster"}) {
+		t.Fatalf("project memories = %#v, want [goaster]", names)
+	}
+	content, err := ReadProjectMemory(workspace, "goaster")
+	if err != nil || content != "# GoAster\n\nKeep this context." {
+		t.Fatalf("project memory content = %q, error = %v", content, err)
+	}
+	fileInfo, err := os.Stat(wantPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileInfo.Mode().Perm() != memoryFileMode {
+		t.Fatalf("project memory permissions = %04o, want %04o", fileInfo.Mode().Perm(), memoryFileMode)
+	}
+	if temporary, err := filepath.Glob(filepath.Join(wantDirectory, ".*.tmp")); err != nil || len(temporary) != 0 {
+		t.Fatalf("temporary project memory files = %v, error = %v", temporary, err)
+	}
+}
+
+func TestProjectMemoryCreationAndPersistenceErrorsAreBounded(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	store := NewMemoryStore(workspace)
+	if err := CreateProjectMemory(workspace, "demo", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateProjectMemory(workspace, "demo", "replacement"); err == nil {
+		t.Fatal("duplicate project memory creation succeeded")
+	}
+	if err := CreateProjectMemory(workspace, "too-large", strings.Repeat("x", maxProjectMemoryBytes+1)); err == nil {
+		t.Fatal("oversized project memory creation succeeded")
+	}
+	if err := writeProjectMemory(store.memoryDir, "missing", "content", false, nil); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing project memory update = %v", err)
+	}
+
+	syncFailure := errors.New("simulated project directory sync failure")
+	store.syncDirectory = func(string) error { return syncFailure }
+	if err := writeProjectMemory(store.memoryDir, "demo", "updated", false, store.syncDirectory); !errors.Is(err, syncFailure) || !strings.Contains(err.Error(), "was replaced") {
+		t.Fatalf("project memory sync failure = %v", err)
+	}
+	content, err := ReadProjectMemory(workspace, "demo")
+	if err != nil || content != "updated" {
+		t.Fatalf("replacement after sync failure = %q, error = %v", content, err)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), memoryFileMode); err != nil {
+		t.Fatal(err)
+	}
+	link := ProjectMemoryPath(workspace, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	if _, err := ReadProjectMemory(workspace, "link"); err == nil {
+		t.Fatal("symlinked project memory was read")
+	}
+	if _, err := DiscoverProjectMemories(workspace); err == nil {
+		t.Fatal("discovery accepted a symlinked project memory")
+	}
+}
+
+func TestSelectedProjectMemoryPersistsAndReachesTheProvider(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	memory := NewMemoryStore(workspace)
+	if err := CreateProjectMemory(workspace, "demo", "durable project constraint"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "session.json")
+	provider := &memoryContextProvider{}
+	session, err := NewSessionWithStoreAndMemory(Config{Model: "primary"}, provider, NewSessionStoreAt(path), memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := session.store.saveStateWithProjectMemory("", nil, nil, "demo", session.storeVersion, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.storeVersion = version
+	session.selectedProjectMemory = "demo"
+
+	restarted, err := NewSessionWithStoreAndMemory(Config{Model: "primary"}, provider, NewSessionStoreAt(path), memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.selectedProjectMemory != "demo" {
+		t.Fatalf("selected project memory after restart = %q", restarted.selectedProjectMemory)
+	}
+	if _, err := restarted.Reply(context.Background(), "continue"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := provider.snapshot()
+	if !strings.Contains(got, "Selected Project Memory") || !strings.Contains(got, "durable project constraint") {
+		t.Fatalf("provider project memory context = %q", got)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), `"selected_project_memory": "demo"`) {
+		t.Fatalf("saved selection missing: %s", saved)
+	}
+}

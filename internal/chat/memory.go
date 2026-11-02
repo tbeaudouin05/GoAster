@@ -4,33 +4,43 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"goaster/internal/filesync"
 )
 
 const (
-	artefactsDirectoryName = "artefacts"
-	memoryDirectoryName    = "memory"
-	memoryFilename         = "MEMORY.md"
-	recentMemoryDays       = 3
-	memoryDirectoryMode    = 0700
-	memoryFileMode         = 0600
+	artefactsDirectoryName     = "artefacts"
+	memoryDirectoryName        = "memory"
+	memoryFilename             = "MEMORY.md"
+	projectMemoryDirectoryName = "projects"
+	projectMemoryExtension     = ".md"
+	recentMemoryDays           = 3
+	memoryDirectoryMode        = 0700
+	memoryFileMode             = 0600
+	maxProjectMemoryBytes      = 128 << 10
+	maxProjectMemories         = 64
 )
+
+var projectMemoryMu sync.Mutex
 
 // MemoryStore manages the Markdown memory files kept under GoAster's artefacts
 // root. MEMORY.md is deliberately read-only to the running chat session;
-// durable-memory edits are an explicit, user-reviewed maintenance operation.
-// Daily notes are append-only from GoAster's perspective.
+// shared durable-memory edits are an explicit, user-reviewed maintenance
+// operation. Daily notes are append-only from GoAster's perspective. Project
+// memories are managed separately by the project-memory workflow.
 //
 // The layout is:
 //
 //	<workspace>/artefacts/memory/MEMORY.md
 //	<workspace>/artefacts/memory/YYYYMM/YYYYMMDD.md
+//	<workspace>/artefacts/memory/projects/<project>.md
 type MemoryStore struct {
 	workspace  string
 	memoryDir  string
@@ -86,7 +96,87 @@ func newMemoryStore(workspace string) (*MemoryStore, error) {
 		store.initErr = err
 		return store, err
 	}
+	if err := ensurePrivateDirectory(projectMemoryDirectory(store.memoryDir), "project memory directory"); err != nil {
+		store.initErr = err
+		return store, err
+	}
 	return store, nil
+}
+
+// ProjectMemoryDirectory returns the project-memory directory for a GoAster
+// workspace. Project memories stay below the same memory folder as MEMORY.md
+// and daily notes so exporting that folder includes the complete memory set.
+func ProjectMemoryDirectory(workspace string) string {
+	memoryDir := projectMemoryWorkspaceDirectory(workspace)
+	if memoryDir == "" {
+		return ""
+	}
+	return projectMemoryDirectory(memoryDir)
+}
+
+func projectMemoryWorkspaceDirectory(workspace string) string {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		workspace = filepath.Join(home, sessionDirectoryName)
+	}
+	return filepath.Join(filepath.Clean(workspace), artefactsDirectoryName, memoryDirectoryName)
+}
+
+// ProjectMemoryPath returns the private Markdown path for a valid project
+// memory name. An empty result means the workspace or name is invalid.
+func ProjectMemoryPath(workspace, name string) string {
+	directory := ProjectMemoryDirectory(workspace)
+	if directory == "" {
+		return ""
+	}
+	return projectMemoryPath(directory, name)
+}
+
+// DiscoverProjectMemories returns valid project-memory names in stable order.
+// Missing project-memory directories are treated as an empty collection.
+func DiscoverProjectMemories(workspace string) ([]string, error) {
+	directory := projectMemoryWorkspaceDirectory(workspace)
+	if directory == "" {
+		return nil, errors.New("project memory directory is unavailable")
+	}
+	return discoverProjectMemories(directory)
+}
+
+// ReadProjectMemory reads one bounded project-memory file.
+func ReadProjectMemory(workspace, name string) (string, error) {
+	directory := projectMemoryWorkspaceDirectory(workspace)
+	if directory == "" {
+		return "", errors.New("project memory directory is unavailable")
+	}
+	data, err := readProjectMemory(directory, name)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// CreateProjectMemory creates a new bounded project-memory file. Empty
+// content receives the standard project-memory template.
+func CreateProjectMemory(workspace, name, content string) error {
+	directory := projectMemoryWorkspaceDirectory(workspace)
+	if directory == "" {
+		return errors.New("project memory directory is unavailable")
+	}
+	return writeProjectMemory(directory, name, content, true, nil)
+}
+
+// WriteProjectMemory atomically replaces one existing bounded project-memory
+// file and keeps the file private.
+func WriteProjectMemory(workspace, name, content string) error {
+	directory := projectMemoryWorkspaceDirectory(workspace)
+	if directory == "" {
+		return errors.New("project memory directory is unavailable")
+	}
+	return writeProjectMemory(directory, name, content, false, nil)
 }
 
 // WorkspacePath returns the root directory used by this store.
@@ -283,6 +373,285 @@ func MemoryContextFromContext(ctx context.Context) string {
 		return memory
 	}
 	return ""
+}
+
+func projectMemoryDirectory(memoryDir string) string {
+	if strings.TrimSpace(memoryDir) == "" {
+		return ""
+	}
+	return filepath.Join(memoryDir, projectMemoryDirectoryName)
+}
+
+func validProjectMemoryName(name string) bool {
+	name = strings.TrimSpace(name)
+	if len(name) == 0 || len(name) > 80 || name[0] == '-' || name[len(name)-1] == '-' {
+		return false
+	}
+	for _, character := range name {
+		if !(character >= 'a' && character <= 'z') &&
+			!(character >= '0' && character <= '9') && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func projectMemoryPath(directory, name string) string {
+	name = strings.TrimSpace(name)
+	if directory == "" || !validProjectMemoryName(name) {
+		return ""
+	}
+	return filepath.Join(directory, name+projectMemoryExtension)
+}
+
+func discoverProjectMemories(memoryDir string) ([]string, error) {
+	directory := projectMemoryDirectory(memoryDir)
+	if directory == "" {
+		return nil, errors.New("project memory directory is empty")
+	}
+	if err := validateProjectMemoryParents(memoryDir); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect project memory directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("project memory directory must be a real directory: %s", directory)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, fmt.Errorf("read project memory directory: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		path := filepath.Join(directory, entry.Name())
+		entryInfo, err := os.Lstat(path)
+		if err != nil {
+			return nil, fmt.Errorf("inspect project memory entry: %w", err)
+		}
+		if entryInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("project memory entry must not be a symbolic link: %s", entry.Name())
+		}
+		if strings.HasPrefix(entry.Name(), ".") {
+			if !entryInfo.IsDir() && !entryInfo.Mode().IsRegular() {
+				return nil, fmt.Errorf("project memory temporary entry is not regular: %s", entry.Name())
+			}
+			continue
+		}
+		if !entryInfo.Mode().IsRegular() {
+			return nil, fmt.Errorf("project memory entry must be a regular file: %s", entry.Name())
+		}
+		if !strings.HasSuffix(entry.Name(), projectMemoryExtension) {
+			return nil, fmt.Errorf("project memory file must use the %s extension: %s", projectMemoryExtension, entry.Name())
+		}
+		name := strings.TrimSuffix(entry.Name(), projectMemoryExtension)
+		if !validProjectMemoryName(name) {
+			return nil, fmt.Errorf("invalid project memory name: %s", name)
+		}
+		if len(names) >= maxProjectMemories {
+			return nil, fmt.Errorf("too many project memories")
+		}
+		if _, err := readProjectMemoryFile(path); err != nil {
+			return nil, fmt.Errorf("read project memory %s: %w", name, err)
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func readProjectMemory(memoryDir, name string) ([]byte, error) {
+	if err := validateProjectMemoryParents(memoryDir); err != nil {
+		return nil, err
+	}
+	path := projectMemoryPath(projectMemoryDirectory(memoryDir), name)
+	if path == "" {
+		return nil, errors.New("invalid project memory name")
+	}
+	return readProjectMemoryFile(path)
+}
+
+func validateProjectMemoryParents(memoryDir string) error {
+	if strings.TrimSpace(memoryDir) == "" {
+		return errors.New("project memory directory is empty")
+	}
+	for _, directory := range []string{filepath.Dir(filepath.Dir(memoryDir)), filepath.Dir(memoryDir), memoryDir} {
+		info, err := os.Lstat(directory)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect project memory parent: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("project memory parent must be a real directory: %s", directory)
+		}
+	}
+	return nil
+}
+
+func readProjectMemoryFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("project memory file must not be a symbolic link: %s", filepath.Base(path))
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("project memory file must be a regular file: %s", filepath.Base(path))
+	}
+	if info.Size() > maxProjectMemoryBytes {
+		return nil, fmt.Errorf("project memory file exceeds %d bytes", maxProjectMemoryBytes)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened project memory file: %w", err)
+	}
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect project memory file: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(openedInfo, pathInfo) {
+		return nil, errors.New("project memory file changed while it was opened")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxProjectMemoryBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read project memory file: %w", err)
+	}
+	if len(data) > maxProjectMemoryBytes {
+		return nil, fmt.Errorf("project memory file exceeds %d bytes", maxProjectMemoryBytes)
+	}
+	if !utf8.Valid(data) {
+		return nil, errors.New("project memory file must contain valid UTF-8")
+	}
+	return data, nil
+}
+
+func writeProjectMemory(memoryDir, name, content string, createOnly bool, syncDirectory func(string) error) error {
+	path := projectMemoryPath(projectMemoryDirectory(memoryDir), name)
+	if path == "" {
+		return errors.New("invalid project memory name")
+	}
+	if !utf8.ValidString(content) {
+		return errors.New("project memory content must contain valid UTF-8")
+	}
+	if createOnly && strings.TrimSpace(content) == "" {
+		content = projectMemoryTemplate(name)
+	}
+	if len(content) > maxProjectMemoryBytes {
+		return fmt.Errorf("project memory content exceeds %d bytes", maxProjectMemoryBytes)
+	}
+	if err := ensureMemoryWorkspace(filepath.Dir(filepath.Dir(memoryDir))); err != nil {
+		return err
+	}
+	if err := ensurePrivateDirectory(filepath.Dir(memoryDir), "artefacts directory"); err != nil {
+		return err
+	}
+	if err := ensurePrivateDirectory(memoryDir, "memory directory"); err != nil {
+		return err
+	}
+	directory := projectMemoryDirectory(memoryDir)
+	if err := ensurePrivateDirectory(directory, "project memory directory"); err != nil {
+		return err
+	}
+
+	projectMemoryMu.Lock()
+	defer projectMemoryMu.Unlock()
+	info, err := os.Lstat(path)
+	if createOnly {
+		if err == nil {
+			return fmt.Errorf("project memory %q already exists", name)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect project memory %q: %w", name, err)
+		}
+	} else {
+		if err != nil {
+			return fmt.Errorf("inspect project memory %q: %w", name, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("project memory file must be a regular file: %s", filepath.Base(path))
+		}
+	}
+
+	temporary, err := os.CreateTemp(directory, "."+name+"-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary project memory: %w", err)
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(memoryFileMode); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("restrict temporary project memory: %w", err)
+	}
+	data := []byte(content)
+	n, err := temporary.Write(data)
+	if err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write project memory: %w", err)
+	}
+	if n != len(data) {
+		_ = temporary.Close()
+		return errors.New("write project memory: incomplete write")
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("sync project memory: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary project memory: %w", err)
+	}
+	if err := os.Rename(temporaryName, path); err != nil {
+		return fmt.Errorf("replace project memory: %w", err)
+	}
+	if err := os.Chmod(path, memoryFileMode); err != nil {
+		return fmt.Errorf("restrict project memory: %w", err)
+	}
+	if syncDirectory == nil {
+		syncDirectory = syncMemoryDirectory
+	}
+	if err := syncDirectory(directory); err != nil {
+		return fmt.Errorf("sync project memory directory: %w; the project memory was replaced, so check its contents before retrying", err)
+	}
+	return nil
+}
+
+func projectMemoryTemplate(name string) string {
+	return "# Project Memory: " + name + "\n\n" +
+		"## Project\n\n" +
+		"Describe the project, its purpose, and stable boundaries.\n\n" +
+		"## Current State\n\n" +
+		"Record verified status, active work, and important unfinished items.\n\n" +
+		"## Decisions and Constraints\n\n" +
+		"Record durable decisions, conventions, and constraints.\n\n" +
+		"## Lessons\n\n" +
+		"Record verified lessons that will help with future work.\n"
+}
+
+func projectMemoryStatus(memoryDir, selected string) (string, error) {
+	if selected != "" {
+		if _, err := readProjectMemory(memoryDir, selected); err != nil {
+			return "", fmt.Errorf("read selected project memory %q: %w", selected, err)
+		}
+		return "A project memory is selected: " + selected + ". Use its bounded content as context and update it when the task is complete.", nil
+	}
+	names, err := discoverProjectMemories(memoryDir)
+	if err != nil {
+		return "", err
+	}
+	if len(names) == 0 {
+		return "No project memory is selected and none exists. Before any task action, create a relevant project memory with project_memory, then use it.", nil
+	}
+	return "No project memory is selected. Before any task action, choose the relevant name with project_memory select; if none matches, create a new project memory. Available names: " + strings.Join(names, ", "), nil
 }
 
 type memoryContextKey struct{}

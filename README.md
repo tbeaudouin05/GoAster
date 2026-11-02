@@ -161,8 +161,10 @@ runtime state under `~/.goaster/artefacts`:
     │   └── AUTH.md
     ├── memory/
     │   ├── MEMORY.md
-    │   └── YYYYMM/
-    │       └── YYYYMMDD.md
+    │   ├── YYYYMM/
+    │   │   └── YYYYMMDD.md
+    │   └── projects/
+    │       └── <project-name>.md
     ├── config/
     │   └── openai-models.json
     └── state/
@@ -178,6 +180,17 @@ permissions; appends are written through an atomic replacement. Normal model
 requests receive `MEMORY.md` and the three most recent daily notes as clearly
 marked Markdown context, newest note first. If the memory files are empty or
 missing, the existing request behavior is unchanged.
+
+Project memories are private, bounded Markdown files under
+`artefacts/memory/projects/`. The installed [project-memory skill](skills/project-memory/SKILL.md)
+requires the agent to discover and select a relevant project memory at the
+start of each task, create one when none exists, use its contents as untrusted
+context during the task, and update it with verified durable project state when
+the task completes. Project memories are kept separate from protected
+`MEMORY.md` and daily notes, while remaining inside the memory folder for
+complete folder exports. GoAster records the selected project name with the
+conversation and uses atomic, restrictive, bounded persistence for project
+memory files.
 
 GoAster uses this fresh artefact layout directly. It does not import, export,
 migrate, or read artefact data from outside it. Credentials and secret
