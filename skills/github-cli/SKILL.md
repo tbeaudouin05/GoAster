@@ -2,7 +2,7 @@
 
 Use this skill before any workflow that authenticates to GitHub or changes a
 repository. It is the shared safety and authentication contract for
-`github-fork-starter`, `goaster-fork`, and later user-owned source work.
+`goaster-fork` and later user-owned source work.
 
 ## Authentication
 

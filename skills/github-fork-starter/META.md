@@ -1,2 +1,0 @@
-name: github-fork-starter
-description: Safely guide creation of a user-approved GoAster fork with the standard goaster-customizations and goaster-contributions branches while keeping upstream read-only; use the canonical github-cli skill for GitHub safety. Use an existing authenticated gh session; if login is needed, use GoAster's allowlisted secure GitHub handoff in the paired private Telegram chat. The root shell can access locally stored gh credentials.

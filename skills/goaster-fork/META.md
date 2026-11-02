@@ -1,2 +1,2 @@
 name: goaster-fork
-description: Prepare and verify a user-owned GoAster fork with the standard goaster-customizations and goaster-contributions branches while keeping upstream read-only.
+description: Prepare and verify a public user-owned GoAster fork and its standard branches under the generic GitHub safety contract in github-cli.

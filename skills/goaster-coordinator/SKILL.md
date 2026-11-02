@@ -10,8 +10,8 @@ fork -> source -> build/test -> local backup -> optional OVH backup -> deploy ->
 
 ## Stage gates
 
-1. **Fork** — Run `goaster-fork`, using `github-cli` and
-   `github-fork-starter`. Verify the user's authenticated account, public fork,
+1. **Fork** — Run `goaster-fork` with the generic safety contract in
+   `github-cli`. Verify the user's authenticated account, public fork,
    `goaster-customizations` branch, manifest-only `goaster-contributions`
    branch, and exact SHAs. Keep upstream read-only.
 2. **Source** — Run `goaster-source`. Confirm the fork checkout, branch, exact
