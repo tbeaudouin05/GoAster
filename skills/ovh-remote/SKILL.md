@@ -159,13 +159,20 @@ reported active at creation. This is creation-time provisioning evidence, not a
 fresh live OS verification. The observed root SSH forced-command redirect to
 `ubuntu` is an account policy, separate from the operating system image.
 
-On this OVH host, a connection requested as `root` may be redirected by the
-account's forced-command policy to the `ubuntu` account. This is expected
-account policy, not evidence of the wrong OS. Root-run installation requirements
-still apply where relevant. Do not misdiagnose the redirect as the wrong OS or
-silently weaken SSH checks to work around it. If required root SSH command
-execution is unavailable, stop and report the blocker rather than silently
-substituting another account.
+Every GoAster installation and bootstrap operation must run as `root`. The SSH
+target must be `root@SERVER`, and `root@SERVER` must execute as `root`. Before
+any installation or bootstrap action, perform an explicit read-only root
+identity/privilege check in that session: run `id -u` and `id -un`, and require
+`id -u` to return `0` and `id -un` to return `root`. If root SSH is redirected
+to `ubuntu` by the OVH forced-command/account policy, stop all installation and
+bootstrap work immediately. Do not continue as `ubuntu`, use `sudo` from that
+session, or silently substitute another account. Before doing anything else,
+use OVH Manager/console/recovery access or another approved administrative path
+to inspect the root account's SSH authorization and forced-command/account
+policy, remove or correct the redirect to `ubuntu`, and update/fix the policy
+so root connections execute as `root`. Reconnect specifically to
+`root@SERVER` and repeat the explicit `id -u`/`id -un` check; continue only
+after it confirms effective UID `0` and user `root`.
 
 ### First SSH contact for a newly provisioned OVH instance
 
@@ -515,16 +522,18 @@ it, while pinning the Go toolchain:
   - Linux amd64: `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`
   - Linux arm64: `a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49`
 
-Before proposing a bootstrap, use read-only checks to confirm the host is
-Linux, its architecture is `x86_64` or `aarch64`, the SSH deployment user's
-home directory and available disk space, and whether `git`, `curl`, `tar`,
-`awk`, `sha256sum`, and `sudo` are available. Check whether the Go toolchain path,
-source directory `$HOME/src/GoAster`, build staging directory
+Before proposing a bootstrap, after the explicit root identity/privilege check
+above, use read-only checks to confirm the host is Linux, its architecture is
+`x86_64` or `aarch64`, the root SSH account's `/root` home directory and
+available disk space, and whether `git`, `curl`, `tar`, `awk`, and `sha256sum`
+are available. Run the entire bootstrap, including every mutating stage and
+final binary installation, in the verified `root@SERVER` session with
+`HOME=/root`; do not use `sudo` or another login account. Check whether the Go
+toolchain path, source directory `$HOME/src/GoAster`, build staging directory
 `$HOME/.cache/goaster-build`, or either target binary already exists. If a
-requirement is missing, a path
-conflicts, or an existing install would be replaced, stop and report what
-needs inspection or separate approval; do not install prerequisites or
-overwrite files automatically.
+requirement is missing, a path conflicts, or an existing install would be
+replaced, stop and report what needs inspection or separate approval; do not
+install prerequisites or overwrite files automatically.
 
 Use separate temporary host scripts for each mutating stage. Each local SSH
 wrapper must use `set -eu`, avoid shell tracing, and trap cleanup of its
@@ -532,13 +541,15 @@ temporary wrapper on success and failure. Remote scripts must fail on errors
 and clean temporary archives. Before each stage, review the exact script,
 target, files/directories and privilege level affected in the operator
 workflow. Run a stage without another chat approval only when its action and
-target are covered by the approved routine checklist. The SSH user's home
-holds a user-scoped Go toolchain
+target are covered by the approved routine checklist. The root SSH account's
+home holds a root-scoped Go toolchain
 when needed, the `main` branch checkout, and Go's module/build cache. The Go
 archive is about 64–67 MB, plus repository/module downloads and extracted
 toolchain/build-cache space; these host file operations have no OVH resource
-cost. If `sudo -n` is unavailable for the final binary installation, stop; do
-not put a sudo password in a script, command, or chat.
+cost. The root session must perform the final binary installation directly; if
+it cannot write a required protected destination, stop and inspect the cause.
+Do not use an alternate account or put a sudo password in a script, command,
+or chat.
 
 The agent also needs the starter files from that same reviewed checkout. Install
 the checkout's intended tracked regular starter files, including `MEMORY.md`, at
@@ -687,7 +698,7 @@ outputs. On build failure, keep it for inspection and report its path; do not
 retry blindly. After an approved installation, compare each installed file
 with its build output and verify root ownership and mode `0755`, then include
 removal of that exact staging directory in the reviewed install script. Keep
-the verified source checkout and user-scoped Go toolchain on the host. Report
+the verified source checkout and root-scoped Go toolchain on the host. Report
 the captured `SOURCE_COMMIT`, Go version, and binary paths without including
 environment values or secret-bearing output.
 

@@ -363,13 +363,20 @@ That is creation-time provisioning evidence, not a fresh live OS verification.
 The observed root SSH forced-command redirect to `ubuntu` is an SSH account
 policy, separate from the OS image.
 
-On this OVH host, a connection requested as `root` may be redirected by the
-account's forced-command policy to the `ubuntu` account. This is expected
-account policy, not evidence of the wrong OS. Root-run installation requirements
-still apply where relevant. Do not misdiagnose the redirect as the wrong OS or
-silently weaken SSH checks to work around it. If required root SSH command
-execution is unavailable, stop and report the blocker rather than silently
-substituting another account.
+Every GoAster installation and bootstrap operation must run as `root`. The SSH
+target must be `root@SERVER`, and `root@SERVER` must execute as `root`. Before
+any installation or bootstrap action, perform an explicit read-only root
+identity/privilege check in that session: run `id -u` and `id -un`, and require
+`id -u` to return `0` and `id -un` to return `root`. If root SSH is redirected
+to `ubuntu` by the OVH forced-command/account policy, stop all installation and
+bootstrap work immediately. Do not continue as `ubuntu`, use `sudo` from that
+session, or silently substitute another account. Before doing anything else,
+use OVH Manager/console/recovery access or another approved administrative path
+to inspect the root account's SSH authorization and forced-command/account
+policy, remove or correct the redirect to `ubuntu`, and update/fix the policy
+so root connections execute as `root`. Reconnect specifically to
+`root@SERVER` and repeat the explicit `id -u`/`id -un` check; continue only
+after it confirms effective UID `0` and user `root`.
 
 ### If the administrator changes computers
 
