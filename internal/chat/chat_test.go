@@ -976,19 +976,6 @@ func TestOVHRootSSHRedirectDocumentationContract(t *testing.T) {
 
 func TestOVHRemoteNewInstanceTrustInstructionCanonicalContract(t *testing.T) {
 	remoteSkill := readRepositorySkill(t, "ovh-remote")
-	internetFetch := strings.Join(strings.Fields(readRepositorySkill(t, "internet-fetch")), " ")
-	for _, requirement := range []string{
-		"Do not force an address family before this attempt.",
-		"Use targeted IPv4 fallback only for a suspicious endpoint",
-		"After the normal request and any allowed transient retries, make at most one IPv4-only probe for the same exact hostname and URL.",
-		"Use a per-request option such as `curl -4` when an authorized, suitable client is available.",
-		"IPv4 selection must apply only to this one request.",
-		"Never change system or application network settings, resolver configuration, environment defaults, or client-wide defaults to force IPv4.",
-	} {
-		if !strings.Contains(internetFetch, requirement) {
-			t.Errorf("internet-fetch skill missing targeted IPv4 requirement %q", requirement)
-		}
-	}
 	// § stands in for a Markdown backtick inside these Go raw-string fixtures.
 	const trustScopeTemplate = `Pre-existing hosts, saved targets outside the same successful provisioning flow, and hosts whose provenance is unclear must have an already trusted §known_hosts§ entry. If such a host has no trusted entry, obtain and compare its host-key fingerprint through a trusted channel and get explicit approval before connecting. Never use trust-on-first-use for a pre-existing target, an unrelated target, or a target whose provenance is unclear. The exact instance created and verified in the same provisioning flow uses the automatic first-contact procedure below.`
 	trustScope := strings.ReplaceAll(trustScopeTemplate, "§", "`")
@@ -1079,34 +1066,60 @@ any unresolved mismatch.`
 	if got != want {
 		t.Fatal("OVH remote skill's new-instance trust instructions drifted from the canonical contract")
 	}
+}
+
+func TestInternetFetchNetworkPolicyContract(t *testing.T) {
+	internetFetch := strings.Join(strings.Fields(readRepositorySkill(t, "internet-fetch")), " ")
+	remoteSkillDocument := readRepositorySkill(t, "ovh-remote")
+	for _, requirement := range []string{
+		"### Apply an explicit address-family requirement first",
+		"from the first request and on every request in its approved redirect chain; this takes precedence over normal-first retrieval and diagnostic fallback.",
+		"For the official pinned Go archive bootstrap in the OVH remote skill, use per-request IPv4 from the initial archive request through each validated HTTPS redirect and any separately retrieved official checksum.",
+		"Never make a dual-stack first request or switch a redirected request to a default client for this workaround.",
+		"Keep the existing timeout, retry, redirect, destination, credential, and integrity safeguards.",
+		"### Make the normal request first when no address-family requirement applies",
+		"Do not force an address family for this generic first attempt.",
+		"### Use targeted IPv4 fallback only for a suspicious endpoint when no requirement applies",
+		"at most twice after the initial attempt",
+		"After the normal request and any allowed transient retries, make at most one IPv4-only probe for the same exact hostname and URL.",
+		"Use a per-request option such as `curl -4` when an authorized, suitable client is available.",
+		"IPv4 selection must apply only to this one request.",
+		"Never change system or application network settings, resolver configuration, environment defaults, or client-wide defaults to force IPv4.",
+		"Limit redirects to five and allow only HTTP or HTTPS.",
+		"validate a new host as a public endpoint before requesting it",
+		"never forward credentials, cookies, or other authorization across hosts",
+	} {
+		if !strings.Contains(internetFetch, requirement) {
+			t.Errorf("internet-fetch skill missing network policy requirement %q", requirement)
+		}
+	}
 
 	const downloadStart = "Inside the reviewed host script, map `uname -m`"
-	downloadStartIndex := strings.Index(remoteSkill, downloadStart)
+	downloadStartIndex := strings.Index(remoteSkillDocument, downloadStart)
 	if downloadStartIndex < 0 {
 		t.Fatalf("OVH remote skill is missing %q", downloadStart)
 	}
-	downloadEndIndex := strings.Index(remoteSkill[downloadStartIndex:], "\n\nWhen installing Go,")
+	downloadEndIndex := strings.Index(remoteSkillDocument[downloadStartIndex:], "\n\nWhen installing Go,")
 	if downloadEndIndex < 0 {
 		t.Fatal("OVH remote skill's Go download instruction has no clear end")
 	}
-	download := strings.Join(strings.Fields(remoteSkill[downloadStartIndex:downloadStartIndex+downloadEndIndex]), " ")
+	download := strings.Join(strings.Fields(remoteSkillDocument[downloadStartIndex:downloadStartIndex+downloadEndIndex]), " ")
 	for _, requirement := range []string{
-		"GoAster must use a per-request IPv4 option (`curl --ipv4`) for this archive download.",
+		"GoAster must use the explicit per-request IPv4 option (`curl --ipv4`) from the first archive request through every request in its approved redirect chain.",
+		"Use the same option for any separately retrieved official checksum and each request in its redirect chain.",
+		"Never make a dual-stack first request or switch a redirected archive or checksum request to a default client or normal-first probe.",
 		"Keep the `go.dev` hostname rather than replacing it with an IP so TLS SNI, certificate validation, and virtual hosting remain intact.",
-		"Follow only validated HTTPS redirects.",
+		"Validate each redirect destination as public before requesting it; allow only HTTPS, never downgrade, and limit each chain to five redirects.",
+		"Never forward credentials to a different host.",
+		"sha256sum --check --status",
+		"before extraction",
+		"stop without extracting or building",
+		"get approval for any retry",
+		"Keep the internet-fetch skill's finite timeout and retry limits; each approved retry must again use per-request IPv4 from its first request through each validated redirect.",
 		"do not change system or application network settings, resolver configuration, or client-wide defaults.",
 	} {
 		if !strings.Contains(download, requirement) {
 			t.Errorf("OVH remote Go download instruction missing requirement %q", requirement)
-		}
-	}
-	for _, outdated := range []string{
-		"Do not force an address family",
-		"Do not force IPv4",
-		"without forcing IPv4",
-	} {
-		if strings.Contains(download, outdated) {
-			t.Errorf("OVH remote Go download instruction still has obsolete no-force wording %q", outdated)
 		}
 	}
 }

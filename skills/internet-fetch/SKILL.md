@@ -13,16 +13,33 @@ command.
 
 ## Retrieval workflow
 
-### Make the normal request first
+### Apply an explicit address-family requirement first
 
-Use the ordinary, approved retrieval tool with the exact URL from the most
+Before using the generic workflow below, check whether the endpoint or task
+has an explicit address-family requirement. If one applies, use that family
+from the first request and on every request in its approved redirect chain;
+this takes precedence over normal-first retrieval and diagnostic fallback.
+For the official pinned Go archive bootstrap in the OVH remote skill, use
+per-request IPv4 from the initial archive request through each validated HTTPS
+redirect and any separately retrieved official checksum. Never make a
+dual-stack first request or switch a redirected request to a default client
+for this workaround. Keep the existing timeout, retry, redirect, destination,
+credential, and integrity safeguards. Validate redirect destinations as
+public before requesting them, preserve the hostname and TLS checks, do not
+downgrade HTTPS, and never forward credentials across hosts.
+
+### Make the normal request first when no address-family requirement applies
+
+When no endpoint-specific or task-required address-family selection applies,
+use the ordinary, approved retrieval tool with the exact URL from the most
 authoritative source available. Preserve the original hostname, path, query,
 and HTTPS certificate checks. Record the requested URL, final URL, status,
 error, and whether the body is complete and plausible. A timeout, connection
 reset, incomplete body, or HTTP error is not a successful retrieval.
 
-Do not force an address family before this attempt. A normal request provides
-the baseline for deciding whether a later result differs by network path.
+Do not force an address family for this generic first attempt. A normal
+request provides the baseline for deciding whether a later result differs by
+network path.
 
 ### Retry only transient failures, within a fixed limit
 
@@ -37,10 +54,11 @@ Do not repeat stable 400, 401, 403, or 404 responses just to get a different
 answer. A 404 may be genuine; use the endpoint-specific checks below only when
 there is concrete evidence that the response is anomalous.
 
-### Use targeted IPv4 fallback only for a suspicious endpoint
+### Use targeted IPv4 fallback only for a suspicious endpoint when no requirement applies
 
-Consider one IPv4-only request when the exact public endpoint has evidence of
-a path-specific anomaly, for example:
+When no endpoint-specific or task-required address-family selection applies,
+consider one IPv4-only request only when the exact public endpoint has
+evidence of a path-specific anomaly, for example:
 
 - an official index or manifest lists the exact resource, but its URL returns
   an unexpected 404 or an implausible response;
@@ -77,10 +95,10 @@ unrelated host merely because the original URL redirected there.
 
 Keep a finite total timeout and a finite connection timeout; never wait
 indefinitely. Limit redirects to five and allow only HTTP or HTTPS. Do not
-follow an HTTPS-to-HTTP downgrade. Inspect the final URL and status. If a
-redirect changes host, validate the destination as a public endpoint and
-handle it as a separate request; never forward credentials, cookies, or other
-authorization across hosts. Do not use a redirect option that forwards
+follow an HTTPS-to-HTTP downgrade. Inspect each redirect target and validate a
+new host as a public endpoint before requesting it. If a redirect changes
+host, handle it as a separate request; never forward credentials, cookies, or
+other authorization across hosts. Do not use a redirect option that forwards
 credentials to another host. Redact sensitive query values from reports.
 
 A timeout, DNS failure, TLS error, reset, truncated body, or malformed response
