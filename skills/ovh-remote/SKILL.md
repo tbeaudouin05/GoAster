@@ -166,12 +166,14 @@ identity/privilege check in that session: run `id -u` and `id -un`, and require
 `id -u` to return `0` and `id -un` to return `root`. If root SSH is redirected
 to `ubuntu` by the OVH forced-command/account policy, stop all installation and
 bootstrap work immediately. Do not continue as `ubuntu`, use `sudo` from that
-session, or silently substitute another account. Before doing anything else,
-use OVH Manager/console/recovery access or another approved administrative path
-to inspect the root account's SSH authorization and forced-command/account
-policy, remove or correct the redirect to `ubuntu`, and update/fix the policy
-so root connections execute as `root`. Reconnect specifically to
-`root@SERVER` and repeat the explicit `id -u`/`id -un` check; continue only
+session, or silently substitute another account. GoAster must use its approved
+programmatic OVH administrative/recovery path to inspect and repair the root
+account's SSH authorization and forced-command/account policy, including
+removing or correcting the redirect to `ubuntu` so root connections execute as
+`root`; the user must not be asked to perform this remediation manually. If
+that approved programmatic remediation path is unavailable or fails, stop and
+report the failure clearly. After a successful repair, reconnect specifically
+to `root@SERVER` and repeat the explicit `id -u`/`id -un` check; continue only
 after it confirms effective UID `0` and user `root`.
 
 ### First SSH contact for a newly provisioned OVH instance

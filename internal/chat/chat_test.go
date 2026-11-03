@@ -958,7 +958,8 @@ func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
 }
 
 func TestOVHRootSSHRedirectDocumentationContract(t *testing.T) {
-	const contract = "Every GoAster installation and bootstrap operation must run as `root`. The SSH target must be `root@SERVER`, and `root@SERVER` must execute as `root`. Before any installation or bootstrap action, perform an explicit read-only root identity/privilege check in that session: run `id -u` and `id -un`, and require `id -u` to return `0` and `id -un` to return `root`. If root SSH is redirected to `ubuntu` by the OVH forced-command/account policy, stop all installation and bootstrap work immediately. Do not continue as `ubuntu`, use `sudo` from that session, or silently substitute another account. Before doing anything else, use OVH Manager/console/recovery access or another approved administrative path to inspect the root account's SSH authorization and forced-command/account policy, remove or correct the redirect to `ubuntu`, and update/fix the policy so root connections execute as `root`. Reconnect specifically to `root@SERVER` and repeat the explicit `id -u`/`id -un` check; continue only after it confirms effective UID `0` and user `root`."
+	const contract = "Every GoAster installation and bootstrap operation must run as `root`. The SSH target must be `root@SERVER`, and `root@SERVER` must execute as `root`. Before any installation or bootstrap action, perform an explicit read-only root identity/privilege check in that session: run `id -u` and `id -un`, and require `id -u` to return `0` and `id -un` to return `root`. If root SSH is redirected to `ubuntu` by the OVH forced-command/account policy, stop all installation and bootstrap work immediately. Do not continue as `ubuntu`, use `sudo` from that session, or silently substitute another account. GoAster must use its approved programmatic OVH administrative/recovery path to inspect and repair the root account's SSH authorization and forced-command/account policy, including removing or correcting the redirect to `ubuntu` so root connections execute as `root`; the user must not be asked to perform this remediation manually. If that approved programmatic remediation path is unavailable or fails, stop and report the failure clearly. After a successful repair, reconnect specifically to `root@SERVER` and repeat the explicit `id -u`/`id -un` check; continue only after it confirms effective UID `0` and user `root`."
+	const outdatedManualRemediation = "use OVH Manager/console/recovery access or another approved administrative path to inspect"
 	for _, path := range []string{
 		"skills/ovh-remote/SKILL.md",
 		"docs/USER-JOURNEY.md",
@@ -966,6 +967,9 @@ func TestOVHRootSSHRedirectDocumentationContract(t *testing.T) {
 		document := strings.Join(strings.Fields(readFixture(t, filepath.Join("..", "..", filepath.FromSlash(path)))), " ")
 		if !strings.Contains(document, contract) {
 			t.Errorf("%s is missing the OVH root SSH redirect guidance", path)
+		}
+		if strings.Contains(document, outdatedManualRemediation) {
+			t.Errorf("%s still assigns root SSH remediation to a manual administrative path", path)
 		}
 	}
 }
