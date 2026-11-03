@@ -363,6 +363,14 @@ That is creation-time provisioning evidence, not a fresh live OS verification.
 The observed root SSH forced-command redirect to `ubuntu` is an SSH account
 policy, separate from the OS image.
 
+On this OVH host, a connection requested as `root` may be redirected by the
+account's forced-command policy to the `ubuntu` account. This is expected
+account policy, not evidence of the wrong OS. Root-run installation requirements
+still apply where relevant. Do not misdiagnose the redirect as the wrong OS or
+silently weaken SSH checks to work around it. If required root SSH command
+execution is unavailable, stop and report the blocker rather than silently
+substituting another account.
+
 ### If the administrator changes computers
 
 The server keeps the SSH public key in its authorized keys; its matching

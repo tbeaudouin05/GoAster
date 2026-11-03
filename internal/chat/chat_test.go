@@ -957,6 +957,19 @@ func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
 	}
 }
 
+func TestOVHRootSSHRedirectDocumentationContract(t *testing.T) {
+	const contract = "On this OVH host, a connection requested as `root` may be redirected by the account's forced-command policy to the `ubuntu` account. This is expected account policy, not evidence of the wrong OS. Root-run installation requirements still apply where relevant. Do not misdiagnose the redirect as the wrong OS or silently weaken SSH checks to work around it. If required root SSH command execution is unavailable, stop and report the blocker rather than silently substituting another account."
+	for _, path := range []string{
+		"skills/ovh-remote/SKILL.md",
+		"docs/USER-JOURNEY.md",
+	} {
+		document := strings.Join(strings.Fields(readFixture(t, filepath.Join("..", "..", filepath.FromSlash(path)))), " ")
+		if !strings.Contains(document, contract) {
+			t.Errorf("%s is missing the OVH root SSH redirect guidance", path)
+		}
+	}
+}
+
 func TestOVHRemoteNewInstanceTrustInstructionCanonicalContract(t *testing.T) {
 	remoteSkill := readRepositorySkill(t, "ovh-remote")
 	internetFetch := strings.Join(strings.Fields(readRepositorySkill(t, "internet-fetch")), " ")
