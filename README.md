@@ -535,6 +535,19 @@ server's read-only liveness check uses `/livez`; it does not establish that the
 remote login is ready. Any `/healthz` readiness check must be included in the
 approved plan because it can refresh credentials.
 
+For the exact instance just created and verified in the same provisioning
+flow, GoAster carries forward the instance ID, current public IP, and approved
+SSH identity, then checks the ID and IP again through OVH before connecting.
+The first SSH contact automatically saves the host key in a unique
+target-specific `known_hosts` file using `StrictHostKeyChecking=accept-new`.
+All later connections, including the protected login, use that same file with
+`StrictHostKeyChecking=yes`. You will never be asked to retrieve, compare,
+approve, or paste an SSH host-key fingerprint for this newly created server.
+If the instance, IP, readiness, or approved key cannot be confirmed, GoAster
+stops without connecting. Pre-existing hosts and hosts of unclear provenance
+need an already trusted entry or fingerprint verification through a trusted
+channel and approval before connecting.
+
 The terminal and remote agent require **two independent OpenAI device logins**.
 The local terminal login described above stays local. Never copy or send its
 `auth.json`, a custom `-auth-file`, its OAuth tokens, or its saved session to the
@@ -586,9 +599,11 @@ saves device codes to chat or files. The model receives only a generic success,
 failure, decline, invalid-request, or terminal-unavailable status. It requires
 strict host-key verification, uses
 only the supplied key, and never accepts a password, token, or credential-file
-argument. The host must already have a trusted entry in the user's
-`known_hosts`; GoAster passes the approved file's path when it is not the
-default. Do not bypass a host-key mismatch or accept an unverified fingerprint.
+argument. The host must already have a trusted entry in a `known_hosts` file;
+for the new-server flow above, the first preflight saves it automatically and
+GoAster passes that target-specific file to the protected login. Existing or
+provenance-unclear hosts follow the trusted-channel process above when they have
+no trusted entry. Do not bypass a host-key mismatch.
 
 The interactive terminal displays the URL and one-time code for the
 administrator. The administrator opens the URL in a browser and approves the

@@ -21,8 +21,11 @@ resource; do not require a skill name or slash command. If the user wants to
 install GoAster on an existing host, follow the OVH remote SSH skill instead.
 If the intended starting point is unclear from the request and available
 context, clarify it before provisioning. For a requested new host and
-installation, proceed to the remote SSH workflow after provisioning and
-verification.
+installation, proceed directly to the remote SSH workflow after the successful
+create operation and verification, using the evidence from this same
+provisioning flow. Automatically trust the exact new instance on its first SSH
+contact as described in the handoff below; do not ask the user to retrieve,
+compare, approve, or paste its SSH host-key fingerprint.
 
 ## Run host commands
 
@@ -59,8 +62,8 @@ method, or network exposure during ordinary onboarding:
   access to the private-key file to the local account (use an owner-only ACL on
   Windows). Never ask the user to provide a key. Keep the private key on the
   host and never print, upload, or report it; only the public `.pub` key may
-  be sent to OVH. Report the key label, fingerprint, and local private-key
-  path so the identity can be used for SSH later.
+  be sent to OVH. Report the key label, public client-key fingerprint, and
+  local private-key path so the identity can be used for SSH later.
 - Inbound network: allow SSH (TCP 22) from unrestricted sources by default
   (`0.0.0.0/0`, and `::/0` when IPv6 rules apply). Do not require or ask for a
   trusted source IP. Keep application ports closed by default. If the selected
@@ -296,9 +299,9 @@ secret values belong only in the local `/env` flow.
    dedicated local Ed25519 keypair automatically. Use a restricted local
    private-key file and never display or send its contents; only use the `.pub`
    key for OVH. Do not overwrite an existing key. Report the safe key label,
-   fingerprint, and local key path. Generating the local key does not authorize
-   an OVH change; defer registering the public key in the project and creating
-   the instance until explicit approval.
+   public client-key fingerprint, and local key path. Generating the local key
+   does not authorize an OVH change; defer registering the public key in the
+   project and creating the instance until explicit approval.
 3. Before asking for approval to create a server or other OVH resource,
    complete the Public price estimate above. Present the exact proposed
    resource, assumptions, SSH rule, and brief estimate. If pricing is
@@ -316,10 +319,31 @@ secret values belong only in the local `/env` flow.
    Confirmation for one action does not authorize a different action.
 5. After the relevant confirmation, run the requested OVH API or installed
    client steps through `shell_execute`. Wait for the resource to become ready,
-   then verify its ID, state, address, and requested access or setup. Do not
-   retry an uncertain mutation blindly or delete a partially provisioned
-   resource without confirmation.
+   then verify its ID, state, address, and requested access or setup. Retain
+   the selected project, exact instance ID returned by the successful create
+   operation, current public IP returned and verified during provisioning, and
+   approved local SSH identity for the remote SSH handoff. Do not retry an
+   uncertain mutation blindly or delete a partially provisioned resource
+   without confirmation.
 6. Remove temporary scripts when finished. Do not install tools or add repository dependencies as part of provisioning without the user's approval.
+
+### Handoff after successful instance creation
+
+Whenever SSH contact is part of the requested provisioning flow for a newly
+created instance, pass the retained project, instance ID, current public IP,
+and approved local SSH identity directly to the OVH remote SSH workflow in
+this same provisioning flow. Before first SSH contact, that workflow checks
+the exact ID and current public IP again through the OVH API. For the matching,
+ready instance, it automatically records the
+first host key in a unique target-specific `known_hosts` file with
+`StrictHostKeyChecking=accept-new`; all later SSH connections use that same
+file with `StrictHostKeyChecking=yes`. Never ask the user to retrieve, compare,
+approve, or paste an SSH host-key fingerprint for this newly created server,
+including during the protected login. If the identity, IP, readiness, or
+approved key cannot be confirmed, stop without connecting or accepting a host
+key and report the uncertainty. Trusted-channel fingerprint verification is
+reserved for pre-existing hosts or hosts whose provenance is unclear when
+they lack an already trusted entry.
 
 ## Report
 

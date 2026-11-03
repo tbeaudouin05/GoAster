@@ -191,9 +191,14 @@ Before creation approval, give a brief broad estimate with its official source
 and any region, currency, or VAT context needed to interpret it. If pricing
 cannot be verified, say the cost is unknown and get the user's acknowledgment
 before requesting explicit approval. Apply the US$8/month ceiling when a
-price is known. GoAster then uses the remote SSH workflow to bootstrap the
-provisioned and verified resource. **Existing host path:** GoAster starts with
-the remote SSH workflow and skips provisioning.
+price is known. GoAster then carries the exact instance ID, current public IP,
+and approved SSH identity from the successful create operation into the remote
+SSH workflow. It automatically establishes trust for that newly created and
+verified instance during the same provisioning flow, without asking you to
+retrieve, compare, approve, or paste an SSH host-key fingerprint.
+
+**Existing host path:** GoAster starts with the remote SSH workflow and skips
+provisioning.
 
 ### Create API keys for a new resource
 
@@ -341,16 +346,22 @@ terminal receives the interactive login URL, device code, and process output.
 
 The flow requires explicit target and key inputs, launches OpenSSH directly
 outside model `shell_execute`, and inherits the local terminal's input and
-output. For a newly provisioned OVH host, the preceding bootstrap first checks
-the exact instance ID and expected public IP through the OVH API, then uses the
-approved client key for one read-only first connection with OpenSSH's
-`StrictHostKeyChecking=accept-new`. That connection saves the key in a
-target-specific `known_hosts` file; the protected login receives that same
-file. The login and all later connections use only that file, strict host-key
-checking, and disabled host-key updates, so a changed key is rejected.
-Existing hosts still need a trusted `known_hosts` entry or fingerprint
-verification through a trusted channel before connection. Do not use
-`ssh-keyscan` as an independent trust source.
+output. For the exact OVH instance created and verified in the same
+provisioning flow, the preceding bootstrap checks the instance ID and current
+public IP returned and verified by provisioning through the OVH API, then uses
+the approved client key for one read-only first connection with OpenSSH's
+`StrictHostKeyChecking=accept-new`. That connection automatically saves the
+host key in a unique target-specific `known_hosts` file; the protected login
+receives that same file. This is trust on first use: the OVH lookup confirms
+the target, not the SSH host key itself. The login and all later connections
+use only that file, `StrictHostKeyChecking=yes`, and disabled host-key updates,
+so a changed key is rejected. You are never asked to retrieve, compare,
+approve, or paste an SSH host-key fingerprint for this newly created server.
+If the instance, IP, readiness, or approved key cannot be confirmed, GoAster
+stops without connecting. Pre-existing hosts and hosts of unclear provenance
+need a trusted `known_hosts` entry or fingerprint verification through a
+trusted channel and approval before connection. Do not use `ssh-keyscan` as an
+independent trust source.
 
 For this host, Ubuntu 26.04 LTS was selected and reported active at creation.
 That is creation-time provisioning evidence, not a fresh live OS verification.
@@ -366,8 +377,10 @@ testing SSH from the new computer with strict host-key checking, and only then
 removing the old public key. Alternatively, securely transfer the existing
 private key. Never send it in chat or put it in the repository. Losing the only
 private key requires another existing access path or OVH console/recovery
-access. Keep host-key verification enabled on the new computer; use a trusted
-`known_hosts` entry or verify the fingerprint through a trusted channel.
+access. Keep host-key verification enabled on the new computer and transfer
+the trusted `known_hosts` entry securely. For a pre-existing host or a host
+of unclear provenance without a trusted entry, verify the fingerprint through
+a trusted channel and approve it before connecting.
 
 The terminal displays the URL and one-time code. The administrator opens the
 URL in a browser, signs in with the subscription account, and approves the

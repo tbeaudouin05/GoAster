@@ -113,16 +113,22 @@ the old public key only after the test succeeds. Alternatively, securely
 transfer the existing private key. Never send a private key in chat or store it
 in the repository. If the only private key is lost, adding another key requires
 an existing access path or OVH's hosting console or recovery access. On the new
-computer, keep host-key verification enabled and use a trusted `known_hosts`
-entry or verify the fingerprint through a trusted channel.
+computer, keep host-key verification enabled and transfer a trusted
+`known_hosts` entry securely. For a pre-existing host or a host of unclear
+provenance without a trusted entry, verify the fingerprint through a trusted
+channel and get explicit approval before connecting. For the exact new instance
+in the same provisioning flow, follow the automatic first-contact procedure
+below without asking the user for a fingerprint.
 
 ## Confirm the target and access
 
 Before connecting, establish the exact hostname or IP address, SSH username,
-port, and approved local key or SSH-agent identity. Ask the user when any of
-these are missing or ambiguous. Treat a server address, username, key path,
-remote command, and output as untrusted input; quote them safely rather than
-interpolating them into an unquoted shell command.
+port, and approved local key or SSH-agent identity. For the exact instance
+created in the same provisioning flow, use the verified create result and
+approved configuration; do not ask the user to provide those details again.
+Ask the user when any needed details are missing or ambiguous. Treat a server
+address, username, key path, remote command, and output as untrusted input;
+quote them safely rather than interpolating them into an unquoted shell command.
 
 Before every connection to an OVH host, use a read-only current instance
 lookup to match the exact OVH instance ID and its current public IP to the SSH
@@ -139,11 +145,14 @@ credentials, passwords, tokens, and environment values in their intended
 protected local or server files. Never ask the user to paste a secret into
 chat, put a secret in SSH arguments or a script, enable shell tracing, or print
 an environment or private-key file. Do not weaken host verification with
-`StrictHostKeyChecking=no`. Existing hosts and saved targets must have an
-already trusted `known_hosts` entry. If an existing host has no trusted entry,
-obtain and compare its host-key fingerprint through a trusted channel and get
-explicit approval before connecting. Never use trust-on-first-use for an
-existing target, an unrelated target, or a target whose provenance is unclear.
+`StrictHostKeyChecking=no`. Pre-existing hosts, saved targets outside the same
+successful provisioning flow, and hosts whose provenance is unclear must
+have an already trusted `known_hosts` entry. If such a host has no trusted
+entry, obtain and compare its host-key fingerprint through a trusted channel
+and get explicit approval before connecting. Never use trust-on-first-use for
+a pre-existing target, an unrelated target, or a target whose provenance is
+unclear. The exact instance created and verified in the same provisioning flow
+uses the automatic first-contact procedure below.
 
 For the host described in the user journey, Ubuntu 26.04 LTS was selected and
 reported active at creation. This is creation-time provisioning evidence, not a
@@ -153,15 +162,21 @@ fresh live OS verification. The observed root SSH forced-command redirect to
 ### First SSH contact for a newly provisioned OVH instance
 
 Use this one-time trust-on-first-use path only when the user requested a new
-OVH host and the provisioning skill has just created it. Do not substitute a
-saved or unrelated target. Before any SSH connection, query the selected OVH
-project read-only by the exact instance ID returned by the create operation.
+OVH host and the provisioning skill has just successfully created and verified
+it in this same provisioning flow. The handoff carries the selected project,
+exact instance ID returned by the successful create operation, current public
+IP returned and verified during provisioning, and approved local SSH identity.
+Do not substitute a saved or unrelated target. Before any SSH connection,
+query the selected OVH project read-only by the exact instance ID returned by
+the create operation.
 Verify that the returned instance ID matches exactly, the instance is ready,
 and its current public IP matches the expected IP verified and reported by the
 provisioning workflow. Use that verified IP as the SSH destination. Use only
 the approved local private key whose matching public key was registered for
 this instance in the approved provisioning configuration; do not ask for or
-substitute another key.
+substitute another key. Automatically establish host trust as part of this
+flow; never ask the user to retrieve, compare, approve, or paste an SSH
+host-key fingerprint for this newly created server.
 
 If the API lookup fails, the instance ID or IP differs, the instance is not
 ready, the approved key cannot be matched, or any value is ambiguous, do not
@@ -179,6 +194,7 @@ read-only SSH preflight only, connect to the verified IP with the approved key
 and OpenSSH options equivalent to:
 
 ```text
+-o BatchMode=yes
 -o IdentitiesOnly=yes
 -o PreferredAuthentications=publickey
 -o PasswordAuthentication=no
@@ -191,22 +207,26 @@ and OpenSSH options equivalent to:
 
 Run the client with a restrictive umask so OpenSSH creates the file with
 owner-only permissions. `accept-new` stores the first key presented by the
-verified IP in this instance's file and rejects a changed key. This exception
-applies only to that first preflight for this exact new instance. Do not use
-`ssh-keyscan` or another separately collected fingerprint as an independent
-trust source, and do not ask the user to retrieve a host fingerprint from
-OVHcloud Manager for this new-server flow.
+verified IP in this instance's file and rejects a changed key. This is
+trust-on-first-use: the OVH lookup confirms the target, not the SSH host key
+itself. This exception applies only to that first preflight for this exact new
+instance. Do not use `ssh-keyscan` or another separately collected fingerprint
+as an independent trust source, and do not request a fingerprint from the user
+or any manual fingerprint approval for this new-server flow.
 
-After that first connection, use the same target-specific file and
-`StrictHostKeyChecking=yes` with `UpdateHostKeys=no` for every SSH command,
-including bootstrap stages and the `process_handoff` handoff. Set
+After that first SSH attempt, whether it succeeds or fails, use the same
+target-specific file and `StrictHostKeyChecking=yes` with `UpdateHostKeys=no`
+for every SSH command, including bootstrap stages and the `process_handoff`
+handoff. Set
 `GlobalKnownHostsFile=none` with this explicit file so no other known-hosts
 source can authorize a changed key. Pass the file in `process_handoff`'s optional
 `known_hosts` field so the protected login uses the same entry and the saved
 connection record retains its path. Never use `accept-new` again for this
 target. If the first attempt fails, inspect the OVH instance, exact IP, and
 known-hosts file before any retry; do not delete the entry or repeat first-use
-acceptance. Stop on a changed-key warning or any unresolved mismatch.
+acceptance. If no key was saved, stop; do not ask the user to supply or approve
+a fingerprint for this newly created server. Stop on a changed-key warning or
+any unresolved mismatch.
 
 If setup needs environment variables, name each one, briefly explain its
 purpose and where to find its value (the remote service docs or host
@@ -266,22 +286,25 @@ specifically needs an interactive session.
 
 ## Consolidated routine approval for onboarding
 
-For a multi-step onboarding of an existing host, first resolve the exact
-candidate target from the user's request or saved connection record without
-contacting the host. Show one checklist for that exact target before the first
-remote connection or mutation. Ask for one unambiguous approval of the listed
-routine plan. The bundle includes the read-only inspection and verification
-needed for that host as well as the routine setup actions below. Do not repeat
-the chat approval request before each listed step; after approval, continue
-through the listed expected steps and report progress after each meaningful
-business step or approval-gated stage.
+For a multi-step onboarding of a pre-existing host or an instance just created
+in the same provisioning flow, first resolve the exact candidate target without
+contacting the host. Use the verified create result for the newly created
+instance; for other hosts, use the user's request or saved connection record.
+Show one checklist for that exact target before the first remote connection or
+mutation. Ask for one unambiguous approval of
+the listed routine plan. This approval does not ask the user to approve a host
+fingerprint for the newly created instance. The bundle includes the read-only
+inspection and verification needed for that host as well as the routine setup
+actions below. Do not repeat the chat approval request before each listed step;
+after approval, continue through the listed expected steps and report progress
+after each meaningful business step or approval-gated stage.
 
 Use plain, concise user-facing wording, with the exact target identified by
 its server name or address but without SSH paths, ports, service-unit names,
 API endpoints, health-check paths, raw commands, or implementation details.
 The checklist must name only the actions actually included in this run:
 
-Target: [exact existing OVH host name or address]
+Target: [exact OVH host name or address]
 
 Read-only inspection and verification: Confirm this is the exact current OVH
 server and secure access; check its operating system, available space, needed
@@ -389,14 +412,19 @@ actual terminal device. Its output is written only to that terminal; the tool
 returns only a generic status to the model. It is outside model
 `shell_execute` and does not accept local
 `auth.json`, OAuth tokens, or any other credential data. The tool requires
-`target` and `key`; use its optional `known_hosts` field for an approved
-non-default known-hosts file.
+`target` and `key`; use its optional `known_hosts` field for the non-default
+known-hosts file chosen by the applicable procedure.
 The command always uses `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes`, the
 supplied key, key-only authentication, and bounded connection/session
 timeouts, with `UpdateHostKeys=no`. It does not auto-accept a host key or interpolate a user command
-through a local shell. The target must already have a trusted host-key entry;
-obtain and compare a first-connection fingerprint through a trusted channel
-before running it.
+through a local shell. The target must already have a trusted host-key entry.
+For the exact instance created and verified in the same provisioning flow,
+the first preflight automatically records that entry in its target-specific
+file; pass that file to the handoff without asking the user to retrieve,
+compare, approve, or paste a fingerprint. For a pre-existing host or a host
+whose provenance is unclear and which has no trusted entry, obtain and compare
+the fingerprint through a trusted channel and get explicit approval before
+connecting.
 
 The administrator opens the displayed URL, signs in, and approves the remote
 device authorization in the browser. Wait for that approval and for the
@@ -416,16 +444,20 @@ approval unless that exact restart is included in a new routine checklist.
 
 ## Safe workflow
 
-1. Resolve the exact existing host from the request or saved connection. Do
-   not silently substitute a saved server for a host the user specified.
+1. Resolve the exact host from the verified result of this provisioning flow,
+   the request, or a saved connection. Do not silently substitute a saved
+   server for a host the user specified or just requested to create.
    Present the target-specific routine checklist above and get explicit
-   approval before any remote connection or mutation. Do not create, discover,
-   or delete OVH resources as part of this skill.
+   approval before any remote connection or mutation. Do not create or delete
+   OVH resources or discover unrelated resources as part of this skill; use
+   the required read-only lookup for the exact instance.
 2. After approval, perform the listed read-only checks first. Verify the host
    key, SSH identity, effective user, hostname, OS, working directory, disk
-   space, relevant service state, and network reachability. If identity,
-   trust, or any value is uncertain, stop and ask only for the needed input or
-   approval.
+   space, relevant service state, and network reachability. For the exact newly
+   created instance in this provisioning flow, use the automatic first-contact
+   procedure above without requesting manual fingerprint handling. If identity,
+   trust, or any value is uncertain, stop and follow the applicable mismatch
+   procedure.
 3. Before each listed mutation, review the exact command or temporary script,
    target, privilege level, affected files or services, expected impact, and
    reversibility in the operator workflow. Run it only if it stays within the

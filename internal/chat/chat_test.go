@@ -643,7 +643,7 @@ func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) 
 		"## Consolidated routine approval for onboarding",
 		"Show one checklist for that exact target before the first remote connection or mutation.",
 		"Ask for one unambiguous approval of the listed routine plan.",
-		"Target: [exact existing OVH host name or address]",
+		"Target: [exact OVH host name or address]",
 		"After the target-specific routine checklist is approved, perform the read-only liveness check",
 		"No server check runs merely because GoAster starts.",
 		"StrictHostKeyChecking=yes",
@@ -681,7 +681,7 @@ func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) 
 		}
 	}
 
-	checklistStart := strings.Index(remoteSkill, "Target: [exact existing OVH host name or address]")
+	checklistStart := strings.Index(remoteSkill, "Target: [exact OVH host name or address]")
 	if checklistStart < 0 {
 		t.Fatal("OVH remote approval policy is missing the target-specific checklist")
 	}
@@ -798,38 +798,111 @@ func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
 	remoteSkill := readRepositorySkill(t, "ovh-remote")
 	policy := strings.Join(strings.Fields(remoteSkill), " ")
 	for _, want := range []string{
-		"Existing hosts and saved targets must have an already trusted `known_hosts` entry.",
-		"Never use trust-on-first-use for an existing target, an unrelated target, or a target whose provenance is unclear.",
+		"Pre-existing hosts, saved targets outside the same successful provisioning flow, and hosts whose provenance is unclear must have an already trusted `known_hosts` entry.",
+		"If such a host has no trusted entry, obtain and compare its host-key fingerprint through a trusted channel and get explicit approval before connecting.",
+		"Never use trust-on-first-use for a pre-existing target, an unrelated target, or a target whose provenance is unclear.",
+		"provisioning skill has just successfully created and verified it in this same provisioning flow.",
+		"exact instance ID returned by the successful create operation, current public IP returned and verified during provisioning, and approved local SSH identity.",
 		"query the selected OVH project read-only by the exact instance ID returned by the create operation.",
 		"returned instance ID matches exactly",
+		"the instance is ready",
 		"current public IP matches the expected IP verified and reported by the provisioning workflow.",
 		"Use only the approved local private key whose matching public key was registered for this instance",
+		"never ask the user to retrieve, compare, approve, or paste an SSH host-key fingerprint for this newly created server.",
 		"If the API lookup fails, the instance ID or IP differs",
 		"do not connect or accept a host key.",
 		"unique target-specific file under the local `~/.ssh` directory",
+		"make sure this file does not already exist or resolve through a symlink.",
+		"-o BatchMode=yes",
 		"-o StrictHostKeyChecking=accept-new",
 		"-o UserKnownHostsFile=<target-specific-known_hosts-file>",
 		"-o GlobalKnownHostsFile=none",
 		"`accept-new` stores the first key presented by the verified IP in this instance's file and rejects a changed key.",
+		"This is trust-on-first-use: the OVH lookup confirms the target, not the SSH host key itself.",
 		"Do not use `ssh-keyscan` or another separately collected fingerprint as an independent trust source",
-		"do not ask the user to retrieve a host fingerprint from OVHcloud Manager for this new-server flow.",
+		"After that first SSH attempt, whether it succeeds or fails, use the same target-specific file",
 		"`StrictHostKeyChecking=yes` with `UpdateHostKeys=no` for every SSH command",
 		"Set `GlobalKnownHostsFile=none` with this explicit file so no other known-hosts source can authorize a changed key.",
 		"Pass the file in `process_handoff`'s optional `known_hosts` field",
 		"Never use `accept-new` again for this target.",
 		"If the first attempt fails, inspect the OVH instance, exact IP, and known-hosts file before any retry",
+		"If no key was saved, stop; do not ask the user to supply or approve a fingerprint for this newly created server.",
+		"the first preflight automatically records that entry in its target-specific file; pass that file to the handoff without asking the user to retrieve, compare, approve, or paste a fingerprint.",
+		"For a pre-existing host or a host whose provenance is unclear and which has no trusted entry, obtain and compare the fingerprint through a trusted channel and get explicit approval before connecting.",
 	} {
 		if !strings.Contains(policy, want) {
 			t.Errorf("OVH remote SSH policy missing first-contact trust safeguard %q", want)
 		}
 	}
-	if strings.Contains(policy, "For a first connection, obtain and compare the host-key fingerprint through a trusted channel") {
-		t.Fatal("OVH remote SSH policy still requires manual fingerprint verification for every first connection")
+	for _, outdated := range []string{
+		"For a first connection, obtain and compare the host-key fingerprint through a trusted channel",
+		"obtain and compare a first-connection fingerprint through a trusted channel before running it",
+	} {
+		if strings.Contains(policy, outdated) {
+			t.Errorf("OVH remote SSH policy still requires manual fingerprint verification for every first connection: %q", outdated)
+		}
 	}
 	instanceCheck := strings.Index(policy, "Before any SSH connection, query the selected OVH project read-only")
 	acceptNew := strings.Index(policy, "-o StrictHostKeyChecking=accept-new")
 	if instanceCheck < 0 || acceptNew <= instanceCheck {
 		t.Fatal("OVH instance and IP verification must precede first-use host-key acceptance")
+	}
+	for _, prerequisite := range []string{
+		"returned instance ID matches exactly",
+		"the instance is ready",
+		"current public IP matches the expected IP verified and reported by the provisioning workflow.",
+		"Use only the approved local private key whose matching public key was registered for this instance",
+		"do not connect or accept a host key.",
+		"make sure this file does not already exist or resolve through a symlink.",
+	} {
+		position := strings.Index(policy, prerequisite)
+		if position <= instanceCheck || position >= acceptNew {
+			t.Errorf("first-use host-key acceptance precedes prerequisite %q", prerequisite)
+		}
+	}
+	if strings.Count(policy, "-o StrictHostKeyChecking=accept-new") != 1 {
+		t.Error("OVH remote SSH policy must specify only one first-use acceptance command")
+	}
+
+	for path, requirements := range map[string][]string{
+		"skills/ovh/SKILL.md": {
+			"exact instance ID returned by the successful create operation, current public IP returned and verified during provisioning, and approved local SSH identity",
+			"Whenever SSH contact is part of the requested provisioning flow for a newly created instance",
+			"the OVH remote SSH workflow in this same provisioning flow.",
+			"automatically records the first host key in a unique target-specific `known_hosts` file with `StrictHostKeyChecking=accept-new`; all later SSH connections use that same file with `StrictHostKeyChecking=yes`.",
+			"Never ask the user to retrieve, compare, approve, or paste an SSH host-key fingerprint for this newly created server",
+			"Trusted-channel fingerprint verification is reserved for pre-existing hosts or hosts whose provenance is unclear when they lack an already trusted entry.",
+		},
+		"skills/ovh-remote/AUTH.md": {
+			"exact instance created and verified in the same provisioning flow",
+			"unique target-specific `known_hosts` file using `StrictHostKeyChecking=accept-new`; use that file with `StrictHostKeyChecking=yes` for all later connections.",
+			"Never ask the user to retrieve, compare, approve, or paste its SSH host-key fingerprint.",
+			"For pre-existing or provenance-unclear hosts, require an already trusted entry or trusted-channel fingerprint verification and approval before connecting.",
+		},
+		"README.md": {
+			"exact instance just created and verified in the same provisioning flow",
+			"unique target-specific `known_hosts` file using `StrictHostKeyChecking=accept-new`.",
+			"All later connections, including the protected login, use that same file with `StrictHostKeyChecking=yes`.",
+			"You will never be asked to retrieve, compare, approve, or paste an SSH host-key fingerprint for this newly created server.",
+			"Pre-existing hosts and hosts of unclear provenance need an already trusted entry or fingerprint verification through a trusted channel and approval before connecting.",
+		},
+		"docs/USER-JOURNEY.md": {
+			"automatically establishes trust for that newly created and verified instance during the same provisioning flow",
+			"`StrictHostKeyChecking=accept-new`",
+			"unique target-specific `known_hosts` file",
+			"This is trust on first use: the OVH lookup confirms the target, not the SSH host key itself.",
+			"`StrictHostKeyChecking=yes`",
+			"You are never asked to retrieve, compare, approve, or paste an SSH host-key fingerprint for this newly created server.",
+			"Pre-existing hosts and hosts of unclear provenance need a trusted `known_hosts` entry or fingerprint verification through a trusted channel and approval before connection.",
+		},
+	} {
+		content := readFixture(t, filepath.Join("..", "..", filepath.FromSlash(path)))
+		document := strings.Join(strings.Fields(content), " ")
+		for _, want := range requirements {
+			if !strings.Contains(document, want) {
+				t.Errorf("%s is missing the new-instance trust requirement %q", path, want)
+			}
+		}
 	}
 }
 
