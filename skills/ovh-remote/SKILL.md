@@ -414,10 +414,17 @@ returns only a generic status to the model. It is outside model
 `auth.json`, OAuth tokens, or any other credential data. The tool requires
 `target` and `key`; use its optional `known_hosts` field for the non-default
 known-hosts file chosen by the applicable procedure.
-The command always uses `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes`, the
-supplied key, key-only authentication, and bounded connection/session
-timeouts, with `UpdateHostKeys=no`. It does not auto-accept a host key or interpolate a user command
-through a local shell. The target must already have a trusted host-key entry.
+For the exact newly provisioned instance path, also include `provisioned_target`
+with the verified `instance_id` and `public_ip`; the local handoff derives the
+unique target-specific file and performs the one first-contact acceptance before
+the protected strict login. Omit that field for existing or provenance-unclear
+hosts.
+The protected login and health commands always use `StrictHostKeyChecking=yes`,
+`IdentitiesOnly=yes`, the supplied key, key-only authentication, and bounded
+connection/session timeouts, with `UpdateHostKeys=no`. They do not interpolate a
+user command through a local shell. Existing or provenance-unclear targets must
+already have a trusted host-key entry; only the verified new-instance path has
+the single automatic first-contact acceptance described above.
 For the exact instance created and verified in the same provisioning flow,
 the first preflight automatically records that entry in its target-specific
 file; pass that file to the handoff without asking the user to retrieve,

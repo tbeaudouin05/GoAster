@@ -143,11 +143,17 @@ func approveProcessHandoff(ctx context.Context, request processHandoffRequest, t
 	knownHosts := "default known_hosts file"
 	if request.KnownHostsFile != "" {
 		knownHosts = strconv.Quote(request.KnownHostsFile)
+	} else if !request.ProvisionedTarget.isZero() {
+		knownHosts = "automatic target-specific known_hosts file"
+	}
+	hostKeyPolicy := "strict; an unknown or changed key will stop the connection"
+	if !request.ProvisionedTarget.isZero() {
+		hostKeyPolicy = "one automatic first-contact acceptance, then strict; a changed key will stop the connection"
 	}
 
 	if _, err := fmt.Fprintf(output,
-		"\nProtected process handoff approval required.\nProfile: %q\nTarget: %q\nSSH port: %d\nLocal SSH key: %s\nKnown-hosts file: %s\nHost-key verification: strict; an unknown or changed key will stop the connection.\nType YES to start the interactive handoff and verification: ",
-		request.Profile, request.Target, request.Port, strconv.Quote(request.IdentityFile), knownHosts); err != nil {
+		"\nProtected process handoff approval required.\nProfile: %q\nTarget: %q\nSSH port: %d\nLocal SSH key: %s\nKnown-hosts file: %s\nHost-key verification: %s.\nType YES to start the interactive handoff and verification: ",
+		request.Profile, request.Target, request.Port, strconv.Quote(request.IdentityFile), knownHosts, hostKeyPolicy); err != nil {
 		return processHandoffToolFailed
 	}
 	if flusher, ok := output.(interface{ Flush() error }); ok {

@@ -337,6 +337,64 @@ func ensureRemoteTargetDirectory(home string) error {
 	return inspectRemoteTargetDirectory(home)
 }
 
+func prepareProvisionedRemoteTarget(options remoteLoginOptions) (remoteLoginOptions, bool, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return remoteLoginOptions{}, false, fmt.Errorf("find local home directory: %w", err)
+	}
+	if err := validateRemoteIdentityFile(options.IdentityFile); err != nil {
+		return remoteLoginOptions{}, false, err
+	}
+	if err := ensureRemoteTargetDirectory(home); err != nil {
+		return remoteLoginOptions{}, false, err
+	}
+	homePath, err := filepath.Abs(home)
+	if err != nil {
+		return remoteLoginOptions{}, false, errors.New("resolve local home directory")
+	}
+	knownHostsPath := filepath.Join(homePath, ".ssh", "goaster-ovh-"+options.ProvisionedTarget.InstanceID+".known_hosts")
+	if options.KnownHostsFile != "" {
+		suppliedPath, err := resolveLocalHomePath(options.KnownHostsFile, home, false)
+		if err != nil {
+			return remoteLoginOptions{}, false, fmt.Errorf("known_hosts path is invalid: %w", err)
+		}
+		if filepath.Clean(suppliedPath) != filepath.Clean(knownHostsPath) {
+			return remoteLoginOptions{}, false, errors.New("provisioned target must use its target-specific known_hosts file")
+		}
+	}
+
+	info, err := os.Lstat(knownHostsPath)
+	if errors.Is(err, os.ErrNotExist) {
+		file, createErr := os.OpenFile(knownHostsPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if createErr != nil {
+			return remoteLoginOptions{}, false, fmt.Errorf("create target-specific known_hosts file: %w", createErr)
+		}
+		if chmodErr := file.Chmod(0600); chmodErr != nil {
+			_ = file.Close()
+			return remoteLoginOptions{}, false, fmt.Errorf("restrict target-specific known_hosts file: %w", chmodErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			return remoteLoginOptions{}, false, fmt.Errorf("close target-specific known_hosts file: %w", closeErr)
+		}
+		options.KnownHostsFile = knownHostsPath
+		return options, true, nil
+	}
+	if err != nil {
+		return remoteLoginOptions{}, false, fmt.Errorf("inspect target-specific known_hosts file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return remoteLoginOptions{}, false, errors.New("target-specific known_hosts file must be a regular non-symlink file")
+	}
+	if info.Mode().Perm()&0077 != 0 {
+		return remoteLoginOptions{}, false, errors.New("target-specific known_hosts file permissions are too broad")
+	}
+	if info.Size() == 0 {
+		return remoteLoginOptions{}, false, errors.New("target-specific known_hosts file has no accepted host key")
+	}
+	options.KnownHostsFile = knownHostsPath
+	return options, false, nil
+}
+
 func inspectRemoteTargetDirectory(home string) error {
 	homePath, err := filepath.Abs(home)
 	if err != nil {

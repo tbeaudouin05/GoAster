@@ -220,3 +220,78 @@ func TestProcessHandoffToolRejectsUnknownProfilesAndBackgroundMode(t *testing.T)
 		t.Fatalf("handoff calls = %d, want none for disallowed requests", calls)
 	}
 }
+
+func TestProcessHandoffParsesVerifiedProvisionedTargetIdentity(t *testing.T) {
+	request, err := parseProcessHandoffToolRequest(`{"profile":"openai","target":"root@203.0.113.10","key":"/tmp/key","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`)
+	if err != nil {
+		t.Fatalf("parse provisioned process handoff: %v", err)
+	}
+	if !request.HasProvisionedTarget {
+		t.Fatal("provisioned target was not marked as present")
+	}
+	want := remoteProvisionedTarget{InstanceID: "instance-123", PublicIP: "203.0.113.10"}
+	if request.ProvisionedTarget != want {
+		t.Fatalf("provisioned target = %+v, want %+v", request.ProvisionedTarget, want)
+	}
+	if request.remoteLoginOptions().ProvisionedTarget != want {
+		t.Fatalf("remote login options lost provisioned target: %+v", request.remoteLoginOptions().ProvisionedTarget)
+	}
+
+	for _, arguments := range []string{
+		`{"profile":"openai","target":"root@203.0.113.11","key":"/tmp/key","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`,
+		`{"profile":"openai","target":"root@203.0.113.10","key":"/tmp/key","provisioned_target":{"instance_id":"../../other","public_ip":"203.0.113.10"}}`,
+	} {
+		if _, err := parseProcessHandoffToolRequest(arguments); err == nil {
+			t.Fatalf("invalid provisioned target was accepted: %s", arguments)
+		}
+	}
+}
+
+func TestProcessHandoffRunsNewInstanceFirstContactBeforeStrictVerification(t *testing.T) {
+	home := t.TempDir()
+	sshDirectory := filepath.Join(home, ".ssh")
+	if err := os.Mkdir(sshDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	identityFile := filepath.Join(sshDirectory, "goaster-ovh")
+	if err := os.WriteFile(identityFile, []byte("TEST-PRIVATE-KEY"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	knownHostsFile := filepath.Join(sshDirectory, "goaster-ovh-instance-123.known_hosts")
+	var calls [][]string
+	runner := func(_ context.Context, arguments []string, _ io.Reader, _ io.Writer, _ io.Writer) error {
+		calls = append(calls, append([]string(nil), arguments...))
+		if len(calls) == 1 {
+			if err := os.WriteFile(knownHostsFile, []byte("203.0.113.10 ssh-ed25519 TEST-HOST-KEY\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	}
+	tool := newProcessHandoffTool(newProtectedProcessHandoff(testTerminalOpener(strings.NewReader("YES\n"), io.Discard), runner))
+	result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"root@203.0.113.10","key":"~/.ssh/goaster-ovh","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`)
+	if err != nil || result != processHandoffToolSucceeded {
+		t.Fatalf("process handoff result = %q, error = %v", result, err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("SSH calls = %d, want first contact, login, and health check", len(calls))
+	}
+	if !strings.Contains(strings.Join(calls[0], " "), "StrictHostKeyChecking=accept-new") {
+		t.Fatalf("first handoff SSH call did not accept the new host key: %s", strings.Join(calls[0], " "))
+	}
+	for _, call := range calls[1:] {
+		arguments := strings.Join(call, " ")
+		if !strings.Contains(arguments, "StrictHostKeyChecking=yes") || !strings.Contains(arguments, "UserKnownHostsFile="+knownHostsFile) {
+			t.Fatalf("protected handoff SSH call did not use strict verification and the accepted key: %s", arguments)
+		}
+	}
+	loaded, err := loadRemoteTargetRecord(home, identityFile)
+	if err != nil {
+		t.Fatalf("load handoff connection record: %v", err)
+	}
+	if loaded.KnownHosts != "~/.ssh/goaster-ovh-instance-123.known_hosts" {
+		t.Fatalf("handoff connection record known_hosts = %q", loaded.KnownHosts)
+	}
+}

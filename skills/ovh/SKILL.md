@@ -331,7 +331,9 @@ secret values belong only in the local `/env` flow.
 Whenever SSH contact is part of the requested provisioning flow for a newly
 created instance, pass the retained project, instance ID, current public IP,
 and approved local SSH identity directly to the OVH remote SSH workflow in
-this same provisioning flow. Before first SSH contact, that workflow checks
+this same provisioning flow. In the protected `process_handoff`, carry the
+verified instance ID and current public IP in `provisioned_target`; this field is
+omitted for existing or provenance-unclear hosts. Before first SSH contact, that workflow checks
 the exact ID and current public IP again through the OVH API. For the matching,
 ready instance, it automatically records the
 first host key in a unique target-specific `known_hosts` file with
