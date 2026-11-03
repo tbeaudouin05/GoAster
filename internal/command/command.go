@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -38,6 +39,9 @@ var ErrOutputLimit = errors.New("command output exceeded the limit")
 type Request struct {
 	Command string
 	Dir     string
+	// Env contains child-only environment overrides. GitHub token overrides
+	// remain excluded from command environments.
+	Env map[string]string
 	// Timeout controls one command execution. Zero uses DefaultTimeout.
 	Timeout time.Duration
 }
@@ -102,7 +106,7 @@ func Execute(ctx context.Context, req Request) (Result, error) {
 	}
 
 	cmd := shellCommand(executionCtx, req.Command)
-	cmd.Env = EnvironmentWithoutGitHubTokenOverrides()
+	cmd.Env = EnvironmentWithOverrides(req.Env)
 	cleanup := configureCommand(cmd)
 	if req.Dir != "" {
 		cmd.Dir = req.Dir
@@ -144,20 +148,37 @@ func Execute(ctx context.Context, req Request) (Result, error) {
 // credential. Agent shell commands and GitHub credential operations use the
 // same filtered environment.
 func EnvironmentWithoutGitHubTokenOverrides() []string {
+	return EnvironmentWithOverrides(nil)
+}
+
+// EnvironmentWithOverrides returns the inherited environment with explicit
+// child-only overrides, excluding GitHub token overrides from both sources.
+func EnvironmentWithOverrides(overrides map[string]string) []string {
 	blocked := map[string]bool{
 		"GH_TOKEN":                true,
 		"GITHUB_TOKEN":            true,
 		"GH_ENTERPRISE_TOKEN":     true,
 		"GITHUB_ENTERPRISE_TOKEN": true,
 	}
-	environment := make([]string, 0, len(os.Environ()))
+	values := make(map[string]string, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
-		name, _, ok := strings.Cut(entry, "=")
-		if ok && blocked[strings.ToUpper(name)] {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || blocked[strings.ToUpper(name)] {
 			continue
 		}
-		environment = append(environment, entry)
+		values[name] = value
 	}
+	for name, value := range overrides {
+		if blocked[strings.ToUpper(name)] {
+			continue
+		}
+		values[name] = value
+	}
+	environment := make([]string, 0, len(values))
+	for name, value := range values {
+		environment = append(environment, name+"="+value)
+	}
+	sort.Strings(environment)
 	return environment
 }
 

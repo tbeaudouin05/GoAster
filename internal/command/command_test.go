@@ -53,7 +53,15 @@ func TestExecuteDoesNotInheritGitHubTokenOverrides(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell environment assertion uses POSIX parameter expansion")
 	}
-	result, err := Execute(context.Background(), Request{Command: `printf '%s|%s|%s|%s' "${GH_TOKEN-unset}" "${GITHUB_TOKEN-unset}" "${GH_ENTERPRISE_TOKEN-unset}" "${GITHUB_ENTERPRISE_TOKEN-unset}"`})
+	result, err := Execute(context.Background(), Request{
+		Command: `printf '%s|%s|%s|%s' "${GH_TOKEN-unset}" "${GITHUB_TOKEN-unset}" "${GH_ENTERPRISE_TOKEN-unset}" "${GITHUB_ENTERPRISE_TOKEN-unset}"`,
+		Env: map[string]string{
+			"GH_TOKEN":                secret,
+			"GITHUB_TOKEN":            secret,
+			"GH_ENTERPRISE_TOKEN":     secret,
+			"GITHUB_ENTERPRISE_TOKEN": secret,
+		},
+	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}

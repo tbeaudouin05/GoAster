@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -944,11 +945,48 @@ func executeShell(ctx context.Context, arguments string) (string, error) {
 	if err != nil {
 		return formatShellExecuteResult(command.Result{ExitCode: -1}, &safeShellExecutionError{message: "malformed shell_execute arguments"}), nil
 	}
+	environment := shellEnvironmentFromContext(ctx)
+	request.Env = environment
 	result, err := command.Execute(ctx, request)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return "", ctxErr
 	}
+	result.Stdout = redactShellOutput(result.Stdout, environment)
+	result.Stderr = redactShellOutput(result.Stderr, environment)
 	return formatShellExecuteResult(result, err), nil
+}
+
+type shellEnvironmentContextKey struct{}
+
+// WithShellEnvironment makes local settings available only to shell_execute
+// child processes. Values are copied and are not added to model context.
+func WithShellEnvironment(ctx context.Context, values map[string]string) context.Context {
+	environment := make(map[string]string, len(values))
+	for name, value := range values {
+		environment[name] = value
+	}
+	return context.WithValue(ctx, shellEnvironmentContextKey{}, environment)
+}
+
+func shellEnvironmentFromContext(ctx context.Context) map[string]string {
+	environment, _ := ctx.Value(shellEnvironmentContextKey{}).(map[string]string)
+	return environment
+}
+
+func redactShellOutput(output string, environment map[string]string) string {
+	values := make([]string, 0, len(environment))
+	for _, value := range environment {
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	sort.Slice(values, func(i, j int) bool {
+		return len(values[i]) > len(values[j])
+	})
+	for _, value := range values {
+		output = strings.ReplaceAll(output, value, "[REDACTED]")
+	}
+	return output
 }
 
 func formatShellExecuteResult(result command.Result, executionErr error) string {

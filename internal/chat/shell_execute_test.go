@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"goaster/internal/command"
+	"goaster/internal/localenv"
 )
 
 func TestCodexProviderAdvertisesShellExecute(t *testing.T) {
@@ -155,6 +157,97 @@ func TestCodexProviderExecutesShellExecuteAndSendsFollowUp(t *testing.T) {
 	}
 	if got := backendRequests.Load(); got != 2 {
 		t.Fatalf("backend requests = %d, want 2", got)
+	}
+}
+
+func TestLoadedLocalEnvironmentReachesShellWithoutLeakingSecret(t *testing.T) {
+	const (
+		name   = "GOASTER_HANDOFF_SECRET"
+		secret = "saved-startup-secret-for-shell-child"
+	)
+	t.Setenv(name, "")
+
+	path := filepath.Join(t.TempDir(), "env")
+	savedStore := localenv.NewStoreAt(path)
+	if err := savedStore.Save(map[string]string{name: secret}); err != nil {
+		t.Fatal(err)
+	}
+	loadedStore := localenv.NewStoreAt(path)
+	if err := loadedStore.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	arguments, err := json.Marshal(map[string]string{"command": shellPrintEnvironmentCommand(name)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var backendRequests atomic.Int32
+	var sawRedactedChildOutput atomic.Bool
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read Codex request: %v", err)
+			return
+		}
+		if strings.Contains(string(body), secret) {
+			t.Error("Codex request contained a saved environment value")
+		}
+		var request codexRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Errorf("decode Codex request: %v", err)
+			return
+		}
+		if strings.Contains(request.Instructions, secret) {
+			t.Error("model instructions contained a saved environment value")
+		}
+		switch backendRequests.Add(1) {
+		case 1:
+			writeCodexFunctionCall(t, w, "call-shell-secret", "shell_execute", string(arguments))
+		case 2:
+			for _, item := range request.Input {
+				if item.Type != "function_call_output" {
+					continue
+				}
+				if strings.Contains(item.Output, secret) {
+					t.Error("shell result sent a saved environment value to the model")
+				}
+				if strings.Contains(item.Output, "[REDACTED]") {
+					sawRedactedChildOutput.Store(true)
+				}
+			}
+			fmt.Fprint(w, `{"output_text":"completed"}`)
+		default:
+			t.Errorf("unexpected backend request %d", backendRequests.Load())
+			fmt.Fprint(w, `{"output_text":"unexpected"}`)
+		}
+	}))
+	defer backend.Close()
+
+	provider := newShellTestProvider(t, backend)
+	session := NewSession(defaultConfig(t), provider)
+	var terminal strings.Builder
+	picker := EnvironmentFilePickerFunc(func() (string, error) {
+		return "", ErrEnvironmentFilePickerCanceled
+	})
+	if err := RunWithEnvStoreAndPicker(context.Background(), strings.NewReader("run check\n"), &terminal, session, loadedStore, picker); err != nil {
+		t.Fatal(err)
+	}
+	if got := backendRequests.Load(); got != 2 {
+		t.Fatalf("backend requests = %d, want 2", got)
+	}
+	if !sawRedactedChildOutput.Load() {
+		t.Error("shell child did not expose its saved environment value to the redaction boundary")
+	}
+	if strings.Contains(terminal.String(), secret) {
+		t.Error("terminal output contained a saved environment value")
+	}
+	if strings.Contains(session.summary, secret) {
+		t.Error("conversation summary contained a saved environment value")
+	}
+	for _, message := range session.history {
+		if strings.Contains(message.Content, secret) {
+			t.Error("conversation history contained a saved environment value")
+		}
 	}
 }
 
@@ -314,6 +407,13 @@ func shellOutputCommand() string {
 		return `Write-Output "stdout"; [Console]::Error.WriteLine("stderr"); Write-Output ("cwd=" + (Get-Location).Path); exit 7`
 	}
 	return `printf 'stdout\n'; printf 'stderr\n' >&2; printf 'cwd='; pwd; exit 7`
+}
+
+func shellPrintEnvironmentCommand(name string) string {
+	if runtime.GOOS == "windows" {
+		return "[Console]::Write($env:" + name + ")"
+	}
+	return "printf '%s' \"$" + name + "\""
 }
 
 func shellLoopCommand() string {

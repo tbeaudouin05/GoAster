@@ -88,6 +88,7 @@ type chatLoopSession interface {
 
 type environmentValueStore interface {
 	Save(map[string]string) error
+	Values() map[string]string
 }
 
 type terminalOutput interface {
@@ -126,7 +127,7 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 			continue
 		}
 		if IsClearCommand(message) {
-			reply, err := session.Reply(ctx, message)
+			reply, err := session.Reply(WithShellEnvironment(ctx, store.Values()), message)
 			if err != nil {
 				if ui.interactive {
 					ui.renderError(w, "Conversation command could not be completed.")
@@ -255,9 +256,9 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 		previousModel := session.modelStatus()
 		var reply string
 		var err error
-		requestContext := ctx
+		requestContext := WithShellEnvironment(ctx, store.Values())
 		if ui.interactive {
-			requestContext = WithToolCallObserver(ctx, func(name, _ string) {
+			requestContext = WithToolCallObserver(requestContext, func(name, _ string) {
 				ui.renderToolCall(w, name)
 				_ = w.Flush()
 			})

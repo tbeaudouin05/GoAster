@@ -45,7 +45,7 @@ func checkSkillPreflightFailureKeepsOneShot(t interface {
 		t.Fatal(err)
 	}
 	clock := time.Unix(1000, 0)
-	sched, err := scheduler.New(scheduler.Options{Path: filepath.Join(home, "jobs.json"), Now: func() time.Time { return clock }, Executor: scheduledExecutor(session)})
+	sched, err := scheduler.New(scheduler.Options{Path: filepath.Join(home, "jobs.json"), Now: func() time.Time { return clock }, Executor: scheduledExecutor(session, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestOneShotRetriesSessionContentionAndReloadsConversation(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := scheduledExecutor(owner)(canceled, "not started"); !errors.Is(err, scheduler.ErrRetry) {
+	if err := scheduledExecutor(owner, nil)(canceled, "not started"); !errors.Is(err, scheduler.ErrRetry) {
 		t.Fatalf("canceled before starting = %v", err)
 	}
 	externalProvider := &scheduledTestProvider{entered: make(chan struct{}), release: make(chan struct{})}
@@ -101,7 +101,7 @@ func TestOneShotRetriesSessionContentionAndReloadsConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	clock := time.Unix(1000, 0)
-	options := scheduler.Options{Path: jobPath, Now: func() time.Time { return clock }, Executor: scheduledExecutor(owner)}
+	options := scheduler.Options{Path: jobPath, Now: func() time.Time { return clock }, Executor: scheduledExecutor(owner, nil)}
 	sched, err := scheduler.New(options)
 	if err != nil {
 		t.Fatal(err)

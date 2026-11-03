@@ -88,7 +88,7 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 		return fmt.Errorf("initialize conversation session: %w", err)
 	}
 	cronScheduler, err := scheduler.New(scheduler.Options{
-		Executor: scheduledExecutor(session),
+		Executor: scheduledExecutor(session, environmentStore.Values()),
 	})
 	if err != nil {
 		return fmt.Errorf("initialize cron scheduler: %w", err)
@@ -103,9 +103,9 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 	return chat.RunWithEnvStore(ctx, terminalInput, output, session, environmentStore)
 }
 
-func scheduledExecutor(session *chat.Session) scheduler.Executor {
+func scheduledExecutor(session *chat.Session, environment map[string]string) scheduler.Executor {
 	return func(ctx context.Context, message string) error {
-		_, err := session.ReplyScheduled(ctx, message)
+		_, err := session.ReplyScheduled(chat.WithShellEnvironment(ctx, environment), message)
 		if errors.Is(err, chat.ErrSessionBusy) {
 			return scheduler.ErrRetry
 		}
