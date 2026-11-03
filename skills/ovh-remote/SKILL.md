@@ -633,9 +633,14 @@ system Go at `/root/.local/opt/go1.27.3`: download from
 `https://go.dev/dl/go1.27.3.linux-$arch.tar.gz`, verify it with
 `printf '%s  %s\n' "$go_sha256" "$archive" | sha256sum --check --status`
 before extraction, and stop if the destination already exists but is not that
-exact toolchain. Follow only validated HTTPS redirects. If download or checksum
-verification fails, stop without extracting or building, inspect the result,
-and get approval for any retry. Do not replace the host's system Go.
+exact toolchain. GoAster must use a per-request IPv4 option (`curl --ipv4`)
+for this archive download. Keep the `go.dev` hostname rather than replacing it
+with an IP so TLS SNI, certificate validation, and virtual hosting remain
+intact. Follow only validated HTTPS redirects. This is an endpoint-specific
+workaround; do not change system or application network settings, resolver
+configuration, or client-wide defaults. If download or checksum verification
+fails, stop without extracting or building, inspect the result, and get
+approval for any retry. Do not replace the host's system Go.
 Set `GOTOOLCHAIN=local` for builds so the Go command cannot silently select a
 different toolchain. If checksum verification fails, stop without extracting
 or building.
