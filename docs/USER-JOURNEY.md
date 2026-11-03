@@ -91,13 +91,14 @@ through GoAster's local environment-file flow, never in a chat message.
 Use `/get-env` to edit the current environment file or get a blank template
 containing `OVH_APPLICATION_KEY=`,
 `OVH_APPLICATION_SECRET=`, `OVH_CONSUMER_KEY=`, and `TELEGRAM_BOT_TOKEN=`. For
-OVH setup, the onboarding agent accepts the account/API region directly (for
-example, Canada), derives the canonical API endpoint, and verifies it through
-read-only project discovery. The Create API Keys page URL is optional and is
-not an environment-file entry. Fill in a blank template, then re-upload the
-completed file with `/env`. GoAster shows the variable names with their values
-masked and asks whether to save them. Confirm with `y` to store them in
-`~/.goaster/env` with `0600` file and
+OVH setup, the onboarding agent probes all supported account/API endpoints with
+the configured credentials through read-only `GET /cloud/project` discovery
+after `/env` completes. An account/API region already mentioned in the
+conversation or a recognizable Create API Keys page URL is only an optional
+probe-order hint; neither is requested. Fill in a blank template, then
+re-upload the completed file with `/env`. GoAster shows the variable names with
+their values masked and asks whether to save them. Confirm with `y` to store them
+in `~/.goaster/env` with `0600` file and
 `0700` directory permissions. The imported file replaces the previously saved
 set; canceling leaves it unchanged. The relevant skill explains what each
 setting is for and where to find it. Secret values are never printed in the
@@ -183,17 +184,20 @@ The installed OVH workflows cover different starting points:
 | “Create a new OVH server and install GoAster on it.” | The [provisioning workflow](../skills/ovh/SKILL.md) expects a user-created active project, then uses defaults for a GoAster remote agent, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, automatic generation of a dedicated local SSH key when needed, unrestricted SSH on TCP 22, and no other inbound application ports. It asks for the preferred deployment region only when genuinely unknown. Before creation approval, it checks current official OVH prices with `web_search` and `web_fetch` and gives a brief broad estimate. If price is unknown, it says so and gets the user's acknowledgment before requesting explicit approval. The US$8/month ceiling applies when a price is known. The [SSH workflow](../skills/ovh-remote/SKILL.md) then connects to that host and bootstraps GoAster. |
 | “Install GoAster on my existing OVH server.” | The [SSH workflow](../skills/ovh-remote/SKILL.md) checks and bootstraps that host. It does not create or manage OVH resources through the OVH API. |
 
-**New resource path:** use the account/API region already known from the
-conversation or, optionally, the Create API Keys URL; derive and verify the
-canonical account endpoint before project discovery. The account/API region is
-separate from the preferred Public Cloud deployment region. If the stated
-region fails with an endpoint or credential/discovery error, safely probe the
-other supported account regions with the same credentials and report the
-working region. If none works, give a clear setup error; the URL remains an
-optional way to disambiguate. Ask for the deployment region only when it is
-genuinely unknown. After read-only project, quota, image, flavor, network, SSH
-key, and existing-instance checks, GoAster must use `web_search` and `web_fetch`
-to check current official OVH prices for the selected region and options.
+**New resource path:** after credentials are available through `/env`, probe
+all supported account/API endpoints with the same restricted credentials and
+read-only `GET /cloud/project` discovery. Do not ask for the account/API region
+or the Create API Keys URL. If one or more probes succeed, select a successful
+endpoint, report the detected region, and ask only for a simple confirmation.
+If none succeeds, give a clear setup error; the URL may be supplied only
+optionally to disambiguate or diagnose the failure. An account/API region
+already present in the conversation or a recognizable URL may optimize probe
+order, but a failed hint must not prevent probing the other supported regions.
+The account/API region is separate from the preferred Public Cloud deployment
+region. Ask for the deployment region only when it is genuinely unknown. After
+read-only project, quota, image, flavor, network, SSH key, and existing-instance
+checks, GoAster must use `web_search` and `web_fetch` to check current official
+OVH prices for the selected region and options.
 Before creation approval, give a brief broad estimate with its official source
 and any region, currency, or VAT context needed to interpret it. If pricing
 cannot be verified, say the cost is unknown and get the user's acknowledgment
@@ -209,14 +213,16 @@ provisioning.
 
 ### Create API keys for a new resource
 
-Provide the OVHcloud account/API region in GoAster chat, such as `Canada`, so
-the onboarding agent can normalize it, derive the canonical API endpoint, and
-verify it with the configured credentials through the existing read-only
-project-discovery path. The exact Create API Keys page URL is optional. If you
-supply it, preserve its existing path; its hostname can be used to
-disambiguate the account region. The page URL is not a secret, but never paste
-API keys, passwords, or other secrets into chat; enter credentials only through
-GoAster's local `/env` flow. Use these mappings:
+You do not need to provide the OVHcloud account/API region or the Create API
+Keys page URL in GoAster chat. After credentials are available through the
+local `/env` flow, the onboarding agent probes every supported endpoint with
+the existing read-only project-discovery path and the same restricted rights.
+An account/API region or recognizable URL already present in the conversation
+may optimize probe order only; neither is requested. If a URL is supplied,
+preserve its existing path and use its hostname only as an optional hint. The
+page URL is not a secret, but never paste API keys, passwords, or other secrets
+into chat; enter credentials only through GoAster's local `/env` flow. Use
+these mappings:
 
 | Account region | Create API Keys URL examples | Canonical OVH API endpoint |
 | --- | --- | --- |
@@ -225,14 +231,13 @@ GoAster's local `/env` flow. Use these mappings:
 | United States | `https://auth.us.ovhcloud.com/api/createToken` or `https://api.us.ovhcloud.com/createToken/` | `https://api.us.ovhcloud.com` |
 
 For example, `Canada` and `https://auth.ca.ovhcloud.com/api/createToken` both
-map to `https://ca.api.ovh.com`. The endpoint is based on the OVHcloud account,
-not the instance's deployment region. If the stated region works, onboarding
-reports it and asks only for a simple confirmation. If it fails with an
-endpoint or credential/discovery error, onboarding tries the other supported
-regions safely and reports the working region. If none works, it gives a clear
-setup error and keeps the URL as an optional way to disambiguate. If neither a
-region nor a recognizable URL is available, confirm the account region before
-proceeding.
+identify the Canada endpoint, but neither is required as input. The endpoint is
+based on the OVHcloud account, not the instance's deployment region. If one or
+more probes work, onboarding reports the detected region and asks only for a
+simple confirmation. If an optional hint fails, onboarding continues with the
+other supported regions. If none works, it gives a clear setup error; the URL
+may be supplied only optionally to disambiguate or diagnose the failure. An
+unrecognized URL hostname is not a blocker and never causes a region question.
 
 Use these exact fields on the Create API Keys screen:
 
