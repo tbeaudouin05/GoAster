@@ -103,11 +103,18 @@ method, or network exposure during ordinary onboarding:
 The user may explicitly override any default. The OVH account/API region and
 endpoint are separate from the Public Cloud deployment region. Do not ask the
 user to name or supply the account/API region or to provide the Create API Keys
-URL. After the OVH credentials are available through the local `/env` flow,
+URL. Before probing any account/API endpoint, verify that all three required
+OVH credential values (`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, and
+`OVH_CONSUMER_KEY`) are available through the local `/env` flow. If any are
+missing, tell the user to configure the missing values through the local
+`/env` flow, then resume setup once they are available. While any required OVH
+credential is missing, do not ask for, request, or require the Create API Keys
+URL; it cannot replace the credentials or serve as a prerequisite for `/env`.
+After the OVH credentials are available through the local `/env` flow,
 proactively probe every supported account/API endpoint with the same
-credentials and the existing read-only `GET /cloud/project` discovery
-request. Use only the same restricted rights; do not add permissions or make
-a write request.
+credentials and the existing read-only `GET /cloud/project` discovery request.
+Use only the same restricted rights; do not add permissions or make a write
+request.
 
 A region mentioned in the conversation or a recognizable Create API Keys URL
 may be used only as an optional probe-order hint. Never request either hint.
