@@ -173,10 +173,11 @@ values before saving them locally.
 Type `/get-env` to edit the current environment file or get a blank template.
 If no environment file has been saved, GoAster creates a blank template with
 `OVH_APPLICATION_KEY=`, `OVH_APPLICATION_SECRET=`, `OVH_CONSUMER_KEY=`, and
-`TELEGRAM_BOT_TOKEN=`. For OVH setup, the onboarding agent derives the API
-endpoint from the Create API Keys page URL you share; you do not enter it in
-the environment file. Fill in the values, then re-upload the completed file
-with `/env`. The saved file is written with `0600` permissions.
+`TELEGRAM_BOT_TOKEN=`. For OVH setup, providing the account/API region (for
+example, Canada) is enough for onboarding to derive and verify the canonical
+API endpoint; the Create API Keys page URL is optional. You do not enter the
+endpoint in the environment file. Fill in the values, then re-upload the
+completed file with `/env`. The saved file is written with `0600` permissions.
 
 To inspect a local file, type `/file` in the terminal and choose it in the
 native file picker. Files up to 20 MiB are supported. PNG, JPEG, GIF, and WebP
@@ -442,13 +443,15 @@ GoAster will stop and ask you to finish creating the project or completing
 payment-method activation in OVHcloud Manager; it will not create a project
 through the API.
 
-While viewing OVHcloud's Create API Keys screen, paste its URL in GoAster chat
-so onboarding can identify the account region and choose the matching API
-endpoint. The page URL is not a secret; never paste API keys or other secrets
-in chat. This account/API region is separate from the Public Cloud deployment
-region. Ask for the preferred deployment region only when it is genuinely
-unknown. The [OVH provisioning skill](skills/ovh/SKILL.md#create-api-keys-screen)
-documents the Europe, Canada, and United States URL mappings.
+Provide the OVHcloud account/API region in GoAster chat (for example,
+`Canada`) so onboarding can derive the canonical endpoint and verify it with
+the configured credentials through read-only project discovery. The exact
+Create API Keys page URL is optional; if supplied, its existing path is
+preserved and its hostname can disambiguate the region. Never paste API keys
+or other secrets in chat. This account/API region is separate from the Public
+Cloud deployment region. Ask for the preferred deployment region only when it
+is genuinely unknown. The [OVH provisioning skill](skills/ovh/SKILL.md#create-api-keys-screen)
+documents the Europe, Canada, and United States mappings and fallback behavior.
 
 On the Create API Keys screen, use Application name/Script name `GoAster`,
 Description `GoAster server provisioning`, Validity `Unlimited`, and leave

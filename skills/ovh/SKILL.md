@@ -101,13 +101,35 @@ method, or network exposure during ordinary onboarding:
   Do not guess a price or stop solely because pricing could not be retrieved.
 
 The user may explicitly override any default. An OVH account/API region and
-endpoint are separate from the Public Cloud deployment region. Reuse the
-account endpoint already configured or identified from the Create API Keys
-page; do not ask for it again. Ask for the user's preferred deployment region
-only when it is genuinely unknown from the conversation, configuration, and
-project context, and only after they confirm which project to inspect. If it is
-known, continue without asking. Do not confuse a known account/API region with
-a deployment-region preference.
+endpoint are separate from the Public Cloud deployment region. A user-provided
+account/API region such as `Canada` is sufficient; do not require the exact
+Create API Keys URL when the region is known. Normalize the region by trimming
+whitespace, ignoring case, and accepting the common labels `Europe`/`EU`,
+`Canada`/`CA`, and `United States`/`US`/`USA`. Derive the canonical account
+endpoint from that normalized region.
+
+After the OVH credentials are available through the local `/env` flow,
+proactively probe the stated region with the existing read-only
+`GET /cloud/project` discovery path. Use the same configured credentials and
+the same restricted rights; do not add permissions or make a write request.
+If that probe succeeds, use the stated region, report it, and ask only for a
+simple confirmation of the account region before continuing with normal project
+selection. If it fails with an endpoint, credential, authentication, or
+discovery error, safely try each other supported account region with the same
+read-only probe. If another region succeeds, report the working region and ask
+for the same simple confirmation. If none succeeds, stop with a clear setup
+error explaining that no supported account endpoint accepted the configured
+credentials for read-only discovery; a Create API Keys URL may still be
+provided optionally to disambiguate the account region. Never print secrets or
+raw credential/error details.
+
+If a Create API Keys URL is supplied, preserve its existing path when retaining
+the URL and use its recognized hostname as an optional disambiguation signal;
+do not require or invent a different URL path. Ask for the user's preferred
+deployment region only when it is genuinely unknown from the conversation,
+configuration, and project context, and only after they confirm which project
+to inspect. If it is known, continue without asking. Do not confuse a known
+account/API region with a deployment-region preference.
 
 After the read-only checks, report the selected project and deployment region,
 all defaults or explicit preferences being applied, the proposed smallest
@@ -165,18 +187,22 @@ environment-file flow; never ask for or accept them in chat.
 For OVH and Telegram setup, the only environment values to ask the user to
 provide are `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`,
 `OVH_CONSUMER_KEY`, and `TELEGRAM_BOT_TOKEN`. The OVH API endpoint is derived
-agent-side from the Create API Keys page URL in the conversation.
+agent-side from the supplied account/API region or, when available, the Create
+API Keys page URL in the conversation. The URL is optional when the region is
+known.
 
 ### Create API Keys screen
 
-Before giving key-creation instructions, ask the user to paste the OVHcloud
-Create API Keys page URL they are currently viewing. The page URL is not a
-secret; do not ask the user to paste API keys, passwords, or other secrets in
-chat. Derive the OVH API endpoint from the URL's hostname and use it in OVH API
-requests. Never ask the user to supply the endpoint separately; if the URL is
-not in the conversation, ask for the Create API Keys page URL. The endpoint is
-based on the OVHcloud account, not the Public Cloud deployment region. Use the
-hostname to detect the account region and choose the canonical endpoint below.
+Before giving key-creation instructions, accept a stated OVHcloud account/API
+region such as `Canada`; the exact Create API Keys page URL is optional. The
+page URL is not a secret, but do not ask the user to paste API keys, passwords,
+or other secrets in chat. Derive the OVH API endpoint from the normalized
+region and use it in OVH API requests. Never ask the user to supply the
+endpoint separately. If the region is not known, optionally ask for the Create
+API Keys page URL they are viewing or ask them to name the account region. The
+endpoint is based on the OVHcloud account, not the Public Cloud deployment
+region. Use the hostname only when a URL is supplied to disambiguate the
+account region and choose the canonical endpoint below.
 
 | Account region | Create API Keys URL examples | Canonical OVH API endpoint |
 | --- | --- | --- |
@@ -184,13 +210,14 @@ hostname to detect the account region and choose the canonical endpoint below.
 | Canada | `https://auth.ca.ovhcloud.com/api/createToken` or `https://ca.api.ovh.com/createToken/` | `https://ca.api.ovh.com` |
 | United States | `https://auth.us.ovhcloud.com/api/createToken` or `https://api.us.ovhcloud.com/createToken/` | `https://api.us.ovhcloud.com` |
 
-For example, `https://auth.ca.ovhcloud.com/api/createToken` identifies the
-Canada account region and maps to `https://ca.api.ovh.com`. Ignore the URL path
-and query when matching a recognized hostname. If the hostname does not match
-one of the supported regions, ask the user to confirm their account region
-before proceeding; do not guess. The page may label the application-name field
-**Script name**. The user signs in directly on the OVHcloud page; do not send
-OVH login details through GoAster chat.
+For example, the normalized region `Canada` maps to
+`https://ca.api.ovh.com`, and `https://auth.ca.ovhcloud.com/api/createToken`
+identifies the same account region when supplied. Preserve the supplied URL
+path; it is optional and is not a reason to block onboarding. If the hostname
+does not match one of the supported regions, ask the user to confirm their
+account region before proceeding; do not guess. The page may label the
+application-name field **Script name**. The user signs in directly on the
+OVHcloud page; do not send OVH login details through GoAster chat.
 
 Tell the user to enter these values:
 
@@ -292,13 +319,25 @@ not select files containing API keys, application secrets, or other secret
 values. Do not transcribe, request, or use any secret that appears in a file;
 secret values belong only in the local `/env` flow.
 
-1. Derive the OVH account endpoint from the Create API Keys page URL in the
-   conversation using the hostname mapping above and use it for OVH API
-   requests. Retrieve the three OVH credentials from the local `/env`
-   environment file. If the URL is not in the conversation, ask for that page
-   URL; if any credential is unavailable locally, direct the user to configure
-   credentials through `/env`. Do not ask again for known account/API details.
-   Do not ask for a preferred deployment region before project selection is
+1. Normalize the stated OVH account/API region and derive its canonical
+   endpoint using the mapping above. If a Create API Keys page URL is supplied,
+   preserve its existing path and use its hostname only as an optional
+   disambiguation signal. Retrieve the three OVH credentials from the local
+   `/env` environment file. If any credential is unavailable locally, direct
+   the user to configure credentials through `/env`; do not ask for secrets in
+   chat. Once credentials are available, proactively use the existing
+   read-only `GET /cloud/project` discovery as the endpoint probe, trying the
+   stated region first. A successful stated-region probe selects that region;
+   report it and ask only for a simple confirmation before continuing. If it
+   fails with an endpoint, credential, authentication, or discovery error, try
+   the other supported regions safely with the same credentials and read-only
+   request. Report the first working region and ask for simple confirmation. If
+   no supported region works, stop with the clear setup error described above
+   and mention that the URL remains an optional way to disambiguate. Never
+   print secrets, raw errors, or credential material. Reuse the successful
+   discovery response for the project listing below rather than adding a new
+   or broader permission. Do not ask again for known account/API details. Do
+   not ask for a preferred deployment region before project selection is
    confirmed. Apply the normal resource defaults above for any choice the user
    has not explicitly overridden.
 2. Use `GET /cloud/project` to list Public Cloud projects. Do not check the
