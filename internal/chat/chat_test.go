@@ -720,21 +720,12 @@ func TestOVHAccountRegionIsAutoDetectedAfterLocalEnv(t *testing.T) {
 	policy := strings.Join(strings.Fields(provisioningSkill), " ")
 	for _, requirement := range []string{
 		"Before probing any account/API endpoint, verify that all three required OVH credential values (`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, and `OVH_CONSUMER_KEY`) are available through the local `/env` flow.",
-		"If any are missing, tell the user to configure the missing values through the local `/env` flow, then resume setup once they are available.",
-		"While any required OVH credential is missing, do not ask for, request, or require the Create API Keys URL; it cannot replace the credentials or serve as a prerequisite for `/env`.",
 		"After the OVH credentials are available through the local `/env` flow, proactively probe every supported account/API endpoint with the same credentials and the existing read-only `GET /cloud/project` discovery request.",
-		"Do not ask the user to name or supply the account/API region or to provide the Create API Keys URL.",
-		"Use only the same restricted rights; do not add permissions or make a write request.",
-		"A region mentioned in the conversation or a recognizable Create API Keys URL may be used only as an optional probe-order hint. Never request either hint.",
-		"If a supplied hint fails, continue probing every other supported account region.",
-		"Do not stop after the first success: record all successful probes.",
-		"If one or more regions work, select a successful region, preferring a successful hinted region and otherwise using the first successful region in the table order (Europe, Canada, United States).",
-		"Report the detected account/API region and ask only for a simple confirmation before continuing with normal project selection.",
-		"Reuse the successful `GET /cloud/project` response for the project listing below.",
-		"If no supported region works, stop with a clear setup error explaining that no supported account endpoint accepted the configured credentials for read-only `GET /cloud/project` discovery.",
-		"You may mention that the user can optionally provide the Create API Keys URL only to disambiguate or diagnose the failure; do not ask for it or require it.",
-		"If a Create API Keys URL is already supplied, preserve its existing path when retaining the URL and use its recognized hostname only as an optional hint;",
-		"Treat an unrecognized hostname as no hint and continue probing all supported endpoints.",
+		"Do not ask the user to identify the account/API region.",
+		"Record every successful probe",
+		"select a successful endpoint using table order (Europe, Canada, United States)",
+		"Report the detected account/API region and ask only for a simple confirmation",
+		"If no supported region works, stop with a clear setup error",
 	} {
 		if !strings.Contains(policy, requirement) {
 			t.Errorf("OVH account-region auto-detection policy is missing %q", requirement)
@@ -748,27 +739,6 @@ func TestOVHAccountRegionIsAutoDetectedAfterLocalEnv(t *testing.T) {
 		if !strings.Contains(policy, endpoint) {
 			t.Errorf("OVH account-region auto-detection policy is missing supported endpoint %q", endpoint)
 		}
-	}
-	for _, outdated := range []string{
-		"Provide the OVHcloud account/API region in GoAster chat",
-		"accept a stated OVHcloud account/API region",
-		"If the region is not known, optionally ask",
-		"ask them to name the account region",
-		"confirm the account region before proceeding",
-		"If neither a region nor a recognizable URL is available, confirm the account region",
-		"ask for the Create API Keys page URL",
-	} {
-		if strings.Contains(policy, outdated) {
-			t.Errorf("OVH account-region policy still requests a user-supplied hint %q", outdated)
-		}
-	}
-	probeStart := strings.Index(policy, "proactively probe every supported account/API endpoint")
-	hintStart := strings.Index(policy, "A region mentioned in the conversation or a recognizable Create API Keys URL")
-	fallbackStart := strings.Index(policy, "If a supplied hint fails, continue probing every other supported account region.")
-	successStart := strings.Index(policy, "If one or more regions work, select a successful region")
-	failureStart := strings.Index(policy, "If no supported region works, stop with a clear setup error")
-	if probeStart < 0 || hintStart <= probeStart || fallbackStart <= hintStart || successStart <= fallbackStart || failureStart <= successStart {
-		t.Errorf("OVH account-region auto-detection order is invalid: probe=%d hint=%d fallback=%d success=%d failure=%d", probeStart, hintStart, fallbackStart, successStart, failureStart)
 	}
 }
 

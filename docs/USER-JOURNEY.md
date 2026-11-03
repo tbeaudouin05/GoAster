@@ -93,9 +93,8 @@ containing `OVH_APPLICATION_KEY=`,
 `OVH_APPLICATION_SECRET=`, `OVH_CONSUMER_KEY=`, and `TELEGRAM_BOT_TOKEN=`. For
 OVH setup, the onboarding agent probes all supported account/API endpoints with
 the configured credentials through read-only `GET /cloud/project` discovery
-after `/env` completes. An account/API region already mentioned in the
-conversation or a recognizable Create API Keys page URL is only an optional
-probe-order hint; neither is requested. Fill in a blank template, then
+after `/env` completes. The account/API region is detected solely by probing all
+supported endpoints. Fill in a blank template, then
 re-upload the completed file with `/env`. GoAster shows the variable names with
 their values masked and asks whether to save them. Confirm with `y` to store them
 in `~/.goaster/env` with `0600` file and
@@ -186,15 +185,12 @@ The installed OVH workflows cover different starting points:
 
 **New resource path:** after credentials are available through `/env`, probe
 all supported account/API endpoints with the same restricted credentials and
-read-only `GET /cloud/project` discovery. Do not ask for the account/API region
-or the Create API Keys URL. If one or more probes succeed, select a successful
-endpoint, report the detected region, and ask only for a simple confirmation.
-If none succeeds, give a clear setup error; the URL may be supplied only
-optionally to disambiguate or diagnose the failure. An account/API region
-already present in the conversation or a recognizable URL may optimize probe
-order, but a failed hint must not prevent probing the other supported regions.
-The account/API region is separate from the preferred Public Cloud deployment
-region. Ask for the deployment region only when it is genuinely unknown. After
+read-only `GET /cloud/project` discovery. Do not ask for the account/API region.
+If one or more probes succeed, select a successful endpoint, report the detected
+region, and ask only for a simple confirmation. If none succeeds, give a clear
+setup error. The account/API region is separate from the preferred Public Cloud
+deployment region. Ask for the deployment region only when it is genuinely
+unknown. After
 read-only project, quota, image, flavor, network, SSH key, and existing-instance
 checks, GoAster must use `web_search` and `web_fetch` to check current official
 OVH prices for the selected region and options.
@@ -213,31 +209,11 @@ provisioning.
 
 ### Create API keys for a new resource
 
-You do not need to provide the OVHcloud account/API region or the Create API
-Keys page URL in GoAster chat. After credentials are available through the
-local `/env` flow, the onboarding agent probes every supported endpoint with
-the existing read-only project-discovery path and the same restricted rights.
-An account/API region or recognizable URL already present in the conversation
-may optimize probe order only; neither is requested. If a URL is supplied,
-preserve its existing path and use its hostname only as an optional hint. The
-page URL is not a secret, but never paste API keys, passwords, or other secrets
-into chat; enter credentials only through GoAster's local `/env` flow. Use
-these mappings:
-
-| Account region | Create API Keys URL examples | Canonical OVH API endpoint |
-| --- | --- | --- |
-| Europe | `https://auth.eu.ovhcloud.com/api/createToken` or `https://eu.api.ovh.com/createToken/` | `https://eu.api.ovh.com` |
-| Canada | `https://auth.ca.ovhcloud.com/api/createToken` or `https://ca.api.ovh.com/createToken/` | `https://ca.api.ovh.com` |
-| United States | `https://auth.us.ovhcloud.com/api/createToken` or `https://api.us.ovhcloud.com/createToken/` | `https://api.us.ovhcloud.com` |
-
-For example, `Canada` and `https://auth.ca.ovhcloud.com/api/createToken` both
-identify the Canada endpoint, but neither is required as input. The endpoint is
-based on the OVHcloud account, not the instance's deployment region. If one or
-more probes work, onboarding reports the detected region and asks only for a
-simple confirmation. If an optional hint fails, onboarding continues with the
-other supported regions. If none works, it gives a clear setup error; the URL
-may be supplied only optionally to disambiguate or diagnose the failure. An
-unrecognized URL hostname is not a blocker and never causes a region question.
+After credentials are available through the local `/env` flow, the onboarding
+agent probes every supported endpoint with the existing read-only
+project-discovery path and the same restricted rights. Never paste API keys,
+passwords, or other secrets into chat; enter credentials only through GoAster's
+local `/env` flow.
 
 Use these exact fields on the Create API Keys screen:
 
