@@ -22,16 +22,20 @@ GoAster masks values and saves confirmed settings locally.`
 
 const ovhOnboardingStart = `OVH setup has started.
 
-I will first look for a GoAster server connection saved on this computer. If I find one, I will include its exact address in the routine checklist and ask once for approval before contacting it. I will not create a second server.
+I can list your existing OVH servers using read-only checks. A missing GoAster connection record on this computer does not mean that no server exists. Would you like to connect to an existing server or create a new one?
+
+If you choose an existing server, I will list servers read-only and ask you to select the exact one before preparing a connection. If you choose a new server, I will show its exact configuration and cost before asking for your explicit approval to create it. Starting this screen does not create or change anything.
+
+For the server you select, I will include its exact address in the routine checklist and ask once for approval before contacting it. Selecting or checking an existing server never creates one.
 
 Approval applies only to the listed actions and that server. If anything unexpected or outside the plan comes up, I will pause and ask only for the needed input or approval. Approval does not guarantee setup will succeed. I will report progress as I go.
 
-If a server is already found, I will say one of these:
+If the selected server is ready, I will say one of these:
 - “The server is ready. Please approve the sign-in in the terminal.”
 - “The server is ready, but Telegram still needs setup. Do not test Telegram yet.”
 - “Setup is complete. Please send one normal message to the Telegram bot and check that it replies.”
 
-If no server is saved, I will guide you through creating one. Creating an OVH resource, making a change that could cost money, or making another high-impact change always needs separate explicit approval. Starting this screen does not create or change anything.`
+Creating an OVH resource, making a change that could cost money, or making another high-impact change always needs separate explicit approval.`
 
 const environmentFileCommand = "/env-file"
 const getEnvironmentFileCommand = "/get-env"

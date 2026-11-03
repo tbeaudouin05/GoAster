@@ -16,16 +16,35 @@ now and one clear next step. Do not repeat this purpose unless it is relevant
 or asked.
 
 This is an instruction skill for the GoAster agent, not executable code.
-Apply it when the user asks in ordinary language to provision a new OVH
-resource; do not require a skill name or slash command. If the user wants to
-install GoAster on an existing host, follow the OVH remote SSH skill instead.
-If the intended starting point is unclear from the request and available
-context, clarify it before provisioning. For a requested new host and
-installation, proceed directly to the remote SSH workflow after the successful
-create operation and verification, using the evidence from this same
-provisioning flow. Automatically trust the exact new instance on its first SSH
-contact as described in the handoff below; do not ask the user to retrieve,
-compare, approve, or paste its SSH host-key fingerprint.
+Apply it when the user asks in ordinary language for OVH setup; do not require
+a skill name or slash command. First follow the onboarding path selection
+below. For an existing server, follow the OVH remote SSH skill. For a newly
+created server and installation, proceed to that remote SSH workflow after
+successful creation and verification, using the evidence from this same
+provisioning flow. Automatically trust the exact new instance on its first
+SSH contact as described in the handoff below; do not ask the user to
+retrieve, compare, approve, or paste its SSH host-key fingerprint.
+
+## Select an onboarding path
+
+At the start of OVH onboarding, explain that GoAster can list existing OVH
+servers with read-only checks, then ask whether the user wants to connect to an
+existing server or create a new one. A missing GoAster connection record on
+this computer only means that no local record is available; it does not mean
+that no OVH server exists, express intent to create one, or authorize creation.
+
+If the user chooses an existing server, use read-only project discovery, wait
+for the user's project selection, and list that project's existing instances
+using read-only checks. Present the candidates and ask the user to select the
+exact server before following the OVH remote SSH skill. If no usable project
+or server is found, report that result and ask what the user wants to do next;
+do not switch to creating a server. The choice to list or connect to an
+existing server permits read-only discovery only.
+
+If the user chooses a new server, follow the provisioning workflow below. That
+choice does not approve creation: before any server or other OVH resource is
+created, present its exact configuration and price estimate and obtain the
+user's explicit approval for that creation.
 
 ## Run host commands
 

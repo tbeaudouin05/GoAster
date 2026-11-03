@@ -590,25 +590,43 @@ func TestLoopStartsOVHOnboardingWithBoundedRoutineApprovalGuidance(t *testing.T)
 	}
 	for _, want := range []string{
 		"OVH setup has started.",
-		"look for a GoAster server connection saved on this computer",
-		"If I find one, I will include its exact address in the routine checklist and ask once for approval before contacting it.",
-		"I will not create a second server.",
+		"I can list your existing OVH servers using read-only checks.",
+		"A missing GoAster connection record on this computer does not mean that no server exists.",
+		"Would you like to connect to an existing server or create a new one?",
+		"If you choose an existing server, I will list servers read-only and ask you to select the exact one before preparing a connection.",
+		"If you choose a new server, I will show its exact configuration and cost before asking for your explicit approval to create it.",
+		"Starting this screen does not create or change anything.",
+		"For the server you select, I will include its exact address in the routine checklist and ask once for approval before contacting it.",
+		"Selecting or checking an existing server never creates one.",
 		"Approval applies only to the listed actions and that server.",
 		"If anything unexpected or outside the plan comes up, I will pause and ask only for the needed input or approval.",
 		"Approval does not guarantee setup will succeed.",
 		"I will report progress as I go.",
+		"If the selected server is ready, I will say one of these:",
 		"The server is ready, but Telegram still needs setup. Do not test Telegram yet.",
 		"Setup is complete. Please send one normal message to the Telegram bot and check that it replies.",
-		"If no server is saved, I will guide you through creating one.",
 		"Creating an OVH resource, making a change that could cost money, or making another high-impact change always needs separate explicit approval.",
-		"Starting this screen does not create or change anything.",
 		"assistant [gpt-6.1-sol]> OVH skill response",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
 		}
 	}
+	orderedKickoffGuidance := []string{
+		"I can list your existing OVH servers using read-only checks.",
+		"Would you like to connect to an existing server or create a new one?",
+		"If you choose a new server, I will show its exact configuration and cost before asking for your explicit approval to create it.",
+	}
+	previousPosition := -1
+	for _, guidance := range orderedKickoffGuidance {
+		position := strings.Index(output.String(), guidance)
+		if position <= previousPosition {
+			t.Errorf("OVH kickoff guidance %q is out of order", guidance)
+		}
+		previousPosition = position
+	}
 	for _, outdated := range []string{
+		"If no server is saved, I will guide you through creating one.",
 		"one simple next step at a time",
 		"one approval at a time",
 		"approval before each routine step",
@@ -700,6 +718,22 @@ func TestOVHRemoteConsolidatedRoutineApprovalIsExplicitAndBounded(t *testing.T) 
 func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testing.T) {
 	provisioningSkill := readRepositorySkill(t, "ovh")
 	policy := strings.Join(strings.Fields(provisioningSkill), " ")
+	for _, requirement := range []string{
+		"At the start of OVH onboarding, explain that GoAster can list existing OVH servers with read-only checks, then ask whether the user wants to connect to an existing server or create a new one.",
+		"A missing GoAster connection record on this computer only means that no local record is available; it does not mean that no OVH server exists, express intent to create one, or authorize creation.",
+		"list that project's existing instances using read-only checks.",
+		"Present the candidates and ask the user to select the exact server before following the OVH remote SSH skill.",
+		"If no usable project or server is found, report that result and ask what the user wants to do next; do not switch to creating a server.",
+		"That choice does not approve creation",
+		"before any server or other OVH resource is created, present its exact configuration and price estimate and obtain the user's explicit approval for that creation.",
+	} {
+		if !strings.Contains(policy, requirement) {
+			t.Errorf("OVH onboarding path policy is missing %q", requirement)
+		}
+	}
+	if strings.Contains(policy, "If no server is saved, I will guide you through creating one.") {
+		t.Fatal("OVH onboarding policy still treats a missing saved server as a request to create one")
+	}
 	if !strings.Contains(policy, "an active project named `Production` remains usable even though its name differs from `GoAster`") {
 		t.Fatal("OVH project discovery policy does not cover a non-GoAster project name")
 	}
