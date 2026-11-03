@@ -906,6 +906,100 @@ func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
 	}
 }
 
+func TestOVHRemoteNewInstanceTrustInstructionCanonicalContract(t *testing.T) {
+	remoteSkill := readRepositorySkill(t, "ovh-remote")
+	// § stands in for a Markdown backtick inside these Go raw-string fixtures.
+	const trustScopeTemplate = `Pre-existing hosts, saved targets outside the same successful provisioning flow, and hosts whose provenance is unclear must have an already trusted §known_hosts§ entry. If such a host has no trusted entry, obtain and compare its host-key fingerprint through a trusted channel and get explicit approval before connecting. Never use trust-on-first-use for a pre-existing target, an unrelated target, or a target whose provenance is unclear. The exact instance created and verified in the same provisioning flow uses the automatic first-contact procedure below.`
+	trustScope := strings.ReplaceAll(trustScopeTemplate, "§", "`")
+	if !strings.Contains(strings.Join(strings.Fields(remoteSkill), " "), trustScope) {
+		t.Fatal("manual trusted-channel fingerprint verification must be scoped to pre-existing or provenance-unclear targets")
+	}
+
+	const heading = "### First SSH contact for a newly provisioned OVH instance"
+	start := strings.Index(remoteSkill, heading)
+	if start < 0 {
+		t.Fatalf("OVH remote skill is missing %q", heading)
+	}
+	sectionStart := start + len(heading)
+	sectionEnd := strings.Index(remoteSkill[sectionStart:], "\nIf setup needs environment variables,")
+	if sectionEnd < 0 {
+		t.Fatal("OVH remote skill's first-contact section has no clear end")
+	}
+	got := strings.Join(strings.Fields(remoteSkill[start:sectionStart+sectionEnd]), " ")
+	const wantTemplate = `### First SSH contact for a newly provisioned OVH instance
+
+Use this one-time trust-on-first-use path only when the user requested a new
+OVH host and the provisioning skill has just successfully created and verified
+it in this same provisioning flow. The handoff carries the selected project,
+exact instance ID returned by the successful create operation, current public
+IP returned and verified during provisioning, and approved local SSH identity.
+Do not substitute a saved or unrelated target. Before any SSH connection,
+query the selected OVH project read-only by the exact instance ID returned by
+the create operation.
+Verify that the returned instance ID matches exactly, the instance is ready,
+and its current public IP matches the expected IP verified and reported by the
+provisioning workflow. Use that verified IP as the SSH destination. Use only
+the approved local private key whose matching public key was registered for
+this instance in the approved provisioning configuration; do not ask for or
+substitute another key. Automatically establish host trust as part of this
+flow; never ask the user to retrieve, compare, approve, or paste an SSH
+host-key fingerprint for this newly created server.
+
+If the API lookup fails, the instance ID or IP differs, the instance is not
+ready, the approved key cannot be matched, or any value is ambiguous, do not
+connect or accept a host key. Follow the provisioning mismatch/error fallback:
+stop, report the discrepancy or uncertainty, and ask what the user wants to do
+next. A display name, region, or saved connection is not an instance-ID/IP
+match.
+
+For an exact match, use a unique target-specific file under the local
+§~/.ssh§ directory, with a safe filename derived from the instance ID (for
+example, §goaster-ovh-<instance-id>.known_hosts§). Keep §~/.ssh§ owner-only,
+and make sure this file does not already exist or resolve through a symlink.
+If it exists, stop and inspect it; do not clear or replace it. For the first
+read-only SSH preflight only, connect to the verified IP with the approved key
+and OpenSSH options equivalent to:
+
+§§§text
+-o BatchMode=yes
+-o IdentitiesOnly=yes
+-o PreferredAuthentications=publickey
+-o PasswordAuthentication=no
+-o KbdInteractiveAuthentication=no
+-o GlobalKnownHostsFile=none
+-o UserKnownHostsFile=<target-specific-known_hosts-file>
+-o StrictHostKeyChecking=accept-new
+-o UpdateHostKeys=no
+§§§
+
+Run the client with a restrictive umask so OpenSSH creates the file with
+owner-only permissions. §accept-new§ stores the first key presented by the
+verified IP in this instance's file and rejects a changed key. This is
+trust-on-first-use: the OVH lookup confirms the target, not the SSH host key
+itself. This exception applies only to that first preflight for this exact new
+instance. Do not use §ssh-keyscan§ or another separately collected fingerprint
+as an independent trust source, and do not request a fingerprint from the user
+or any manual fingerprint approval for this new-server flow.
+
+After that first SSH attempt, whether it succeeds or fails, use the same
+target-specific file and §StrictHostKeyChecking=yes§ with §UpdateHostKeys=no§
+for every SSH command, including bootstrap stages and the §process_handoff§
+handoff. Set
+§GlobalKnownHostsFile=none§ with this explicit file so no other known-hosts
+source can authorize a changed key. Pass the file in §process_handoff§'s optional
+§known_hosts§ field so the protected login uses the same entry and the saved
+connection record retains its path. Never use §accept-new§ again for this
+target. If the first attempt fails, inspect the OVH instance, exact IP, and
+known-hosts file before any retry; do not delete the entry or repeat first-use
+acceptance. If no key was saved, stop; do not ask the user to supply or approve
+a fingerprint for this newly created server. Stop on a changed-key warning or
+any unresolved mismatch.`
+	want := strings.Join(strings.Fields(strings.ReplaceAll(wantTemplate, "§", "`")), " ")
+	if got != want {
+		t.Fatal("OVH remote skill's new-instance trust instructions drifted from the canonical contract")
+	}
+}
+
 func TestOVHRemoteUserFacingOnboardingWording(t *testing.T) {
 	remoteSkill := readRepositorySkill(t, "ovh-remote")
 	const heading = "#### User-facing status and next action"
