@@ -21,6 +21,9 @@ const (
 	requestUncertaintyWarning     = "If an earlier attempt may have failed or been interrupted, it may have performed actions and its tool results may be unavailable. Before continuing or retrying, check whether any actions completed and verify external state."
 	requestHistoryWarning         = "Conversation history may omit failed or interrupted attempts, even after a restart. Do not assume that an omitted attempt performed no actions."
 	requestScheduledRepeatWarning = "Carry out explicitly scheduled normal repeats as requested; do not suppress them because previous scheduled runs occurred."
+	postToolAuthenticationWarning = "OpenAI authentication failed after a tool started. Actions may already have completed and tool results may be unavailable. Check and reconcile external state, then resolve OpenAI authentication before retrying."
+	interruptedActionWarning      = "Scheduled run was interrupted after a tool started. Actions may already have completed and tool results may be unavailable. Check and reconcile external state before retrying."
+	unknownActionWarning          = "Scheduled run was interrupted and its action status is unknown. Actions may already have completed and tool results may be unavailable. Check and reconcile external state before retrying."
 
 	requestFailureAuthentication     = "Authentication is required to continue. Check your OpenAI sign-in and account status."
 	requestFailureCredentialsMissing = "OpenAI credentials were not found. Restart GoAster to initiate sign-in."
@@ -34,6 +37,88 @@ const (
 	requestFailureDirectoryMode      = "The conversation directory permissions are too broad. Restrict access to the directory (mode 0700) before retrying."
 	requestFailureUnknown            = "The request failed for an unknown reason."
 )
+
+type postToolAuthenticationMarker struct{}
+
+func (postToolAuthenticationMarker) Error() string { return postToolAuthenticationWarning }
+
+type postToolParentCanceledMarker struct{}
+
+func (postToolParentCanceledMarker) Error() string { return "parent request canceled" }
+
+type postToolAuthenticationError struct {
+	cause     error
+	parentErr error
+}
+
+func (err postToolAuthenticationError) Error() string {
+	if err.parentErr != nil {
+		return err.parentErr.Error()
+	}
+	return postToolAuthenticationWarning
+}
+func (err postToolAuthenticationError) Unwrap() error { return err.cause }
+func (err postToolAuthenticationError) Is(target error) bool {
+	return target == (postToolAuthenticationMarker{}) || (target == (postToolParentCanceledMarker{}) && err.parentErr != nil)
+}
+
+// PostToolAuthenticationReviewMessage also identifies canceled requests so a
+// scheduled run can retain the uncertainty for manual review.
+func PostToolAuthenticationReviewMessage(err error) string {
+	if errors.Is(err, postToolAuthenticationMarker{}) {
+		return postToolAuthenticationWarning
+	}
+	return ""
+}
+
+// PostToolAuthenticationMessage returns fixed guidance for a live caller,
+// including when only the client's response body was canceled or timed out.
+func PostToolAuthenticationMessage(err error) string {
+	if errors.Is(err, postToolParentCanceledMarker{}) {
+		return ""
+	}
+	return PostToolAuthenticationReviewMessage(err)
+}
+
+type interruptedActionMarker struct{}
+
+func (interruptedActionMarker) Error() string { return interruptedActionWarning }
+
+type interruptedActionError struct{ cause error }
+
+func (interruptedActionError) Error() string        { return interruptedActionWarning }
+func (err interruptedActionError) Unwrap() error    { return err.cause }
+func (interruptedActionError) Is(target error) bool { return target == (interruptedActionMarker{}) }
+
+type unknownActionMarker struct{}
+
+func (unknownActionMarker) Error() string { return unknownActionWarning }
+
+type unknownActionError struct{ cause error }
+
+func (unknownActionError) Error() string        { return unknownActionWarning }
+func (err unknownActionError) Unwrap() error    { return err.cause }
+func (unknownActionError) Is(target error) bool { return target == (unknownActionMarker{}) }
+
+// ScheduledActionReviewMessage identifies interrupted scheduled runs and
+// post-tool authentication failures that must not be replayed automatically.
+func ScheduledActionReviewMessage(err error) string {
+	if message := PostToolAuthenticationReviewMessage(err); message != "" {
+		return message
+	}
+	if errors.Is(err, interruptedActionMarker{}) {
+		return interruptedActionWarning
+	}
+	if errors.Is(err, unknownActionMarker{}) {
+		return unknownActionWarning
+	}
+	return ""
+}
+
+// IsPostToolAuthenticationMessage validates guidance from the local agent.
+func IsPostToolAuthenticationMessage(message string) bool {
+	return message == postToolAuthenticationWarning
+}
 
 type insecurePermissionsError uint8
 
@@ -56,9 +141,9 @@ func (err insecurePermissionsError) Error() string {
 	}
 }
 
-// ErrSessionBusy is returned before a scheduled turn starts when it must be
-// deferred, such as lock contention or an unresolved recovery. Retrying cannot
-// repeat a tool action.
+// ErrSessionBusy means a scheduled turn must be deferred before any action
+// starts, such as during lock contention, recovery, or cancellation. Retrying
+// cannot repeat a tool action.
 var ErrSessionBusy = errors.New("conversation is busy")
 
 // ErrConversationRecovery requires an explicit acknowledgement before a
@@ -73,6 +158,9 @@ type ModelRequestError struct {
 }
 
 func (err ModelRequestError) Error() string {
+	if message := PostToolAuthenticationMessage(err.Err); message != "" {
+		return message
+	}
 	return fmt.Sprintf("model %s: %v", err.Model, err.Err)
 }
 
@@ -92,6 +180,9 @@ func (err safeRequestError) Unwrap() error {
 }
 
 func requestFailureDiagnostic(err error) string {
+	if message := PostToolAuthenticationMessage(err); message != "" {
+		return message
+	}
 	message := requestFailureUnknown
 	switch {
 	case errors.Is(err, errConversationStateChanged):
@@ -264,6 +355,7 @@ type Session struct {
 type ToolCallObserver func(name, arguments string)
 
 type toolCallObserverKey struct{}
+type toolActionStartedKey struct{}
 
 func WithToolCallObserver(ctx context.Context, observer ToolCallObserver) context.Context {
 	return context.WithValue(ctx, toolCallObserverKey{}, observer)
@@ -345,7 +437,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		if scheduled {
 			// No work has started, including when cancellation occurred while
 			// this turn waited for the session mutex.
-			return "", ErrSessionBusy
+			return "", errors.Join(ErrSessionBusy, err)
 		}
 		return "", fatalRequestError(err)
 	}
@@ -487,8 +579,25 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		} else {
 			err = errors.New("provider cannot summarize conversation history")
 		}
+		if scheduled && ScheduledActionReviewMessage(err) != "" {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if PostToolAuthenticationReviewMessage(err) != "" {
+					return "", fatalRequestError(postToolAuthenticationError{cause: errors.Join(err, ctxErr), parentErr: ctxErr})
+				}
+				return "", fatalRequestError(errors.Join(err, ctxErr))
+			}
+			return "", fatalRequestError(err)
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			if scheduled {
+				return "", errors.Join(ErrSessionBusy, err, ctxErr)
+			}
 			return "", fatalRequestError(ctxErr)
+		}
+		if scheduled && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			// Summarization does not execute tools; a child interruption must
+			// leave the scheduled turn available to retry before any action.
+			return "", errors.Join(ErrSessionBusy, err)
 		}
 		compact = strings.TrimSpace(compact)
 		if err == nil && compact != "" && utf8.ValidString(compact) && len(compact) <= maxSummaryBytes {
@@ -592,23 +701,42 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 	replyContext = WithChatID(replyContext, s.chatID)
 	actionStarted := false
 	if scheduled && tracksTools {
-		observer := toolCallObserver(replyContext)
-		replyContext = WithToolCallObserver(replyContext, func(name, arguments string) {
-			if name != loadSkillCodexTool.Name {
-				actionStarted = true
-			}
-			if observer != nil {
-				observer(name, arguments)
-			}
-		})
+		replyContext = context.WithValue(replyContext, toolActionStartedKey{}, func() { actionStarted = true })
 	}
 	reply, err := s.replyWithHistory(replyContext, requestMessage, requestHistory)
 	if err != nil {
-		if scheduled && tracksTools && !actionStarted && SkillRecoveryMessage(err) != "" {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if PostToolAuthenticationReviewMessage(err) != "" {
+				return "", fatalRequestError(postToolAuthenticationError{cause: errors.Join(err, ctxErr), parentErr: ctxErr})
+			}
+			if scheduled {
+				if ScheduledActionReviewMessage(err) != "" {
+					return "", fatalRequestError(errors.Join(err, ctxErr))
+				}
+				if !tracksTools {
+					return "", fatalRequestError(unknownActionError{cause: errors.Join(err, ctxErr)})
+				}
+				if actionStarted {
+					return "", fatalRequestError(interruptedActionError{cause: errors.Join(err, ctxErr)})
+				}
+				return "", errors.Join(ErrSessionBusy, err, ctxErr)
+			}
+			return "", fatalRequestError(ctxErr)
+		}
+		if scheduled && ScheduledActionReviewMessage(err) == "" && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			// A child request or tool can be interrupted while ctx is still live.
+			// Preserve any existing review marker before deciding whether retry
+			// is safe, especially a 401 after the setup-only load_skill tool.
+			if !tracksTools {
+				return "", fatalRequestError(unknownActionError{cause: err})
+			}
+			if actionStarted {
+				return "", fatalRequestError(interruptedActionError{cause: err})
+			}
 			return "", errors.Join(ErrSessionBusy, err)
 		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", fatalRequestError(ctxErr)
+		if scheduled && tracksTools && !actionStarted && ScheduledActionReviewMessage(err) == "" && SkillRecoveryMessage(err) != "" {
+			return "", errors.Join(ErrSessionBusy, err)
 		}
 		return "", recoverableRequestError(err)
 	}

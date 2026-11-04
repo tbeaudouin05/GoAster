@@ -25,7 +25,7 @@ func RegisterCronTool(registrar ToolRegistrar, jobs *scheduler.Scheduler) error 
 	}
 	return registrar.RegisterTool(Tool{
 		Name:        cronToolName,
-		Description: "Schedule chat messages for a later time or recurring interval. Manage only local GoAster chat turns; it does not schedule shell commands or route to channels.",
+		Description: "Schedule chat messages for a later time or recurring interval. Manage only local GoAster chat turns; it does not schedule shell commands or route to channels. A running job cannot be removed until its run finishes. If a job requires review, reconcile external state and authentication before deciding whether to enable it. If max_runs is reached, update it to 0 or above run_count, then explicitly enable the job; editing the limit does not clear review. Enabling schedules a new run.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -58,7 +58,7 @@ func RegisterCronTool(registrar ToolRegistrar, jobs *scheduler.Scheduler) error 
 				"max_runs": map[string]any{
 					"type":        "integer",
 					"minimum":     0,
-					"description": "Maximum executions; zero means unlimited",
+					"description": "Maximum executions; zero means unlimited. During a run, a positive limit must exceed the current run_count.",
 				},
 				"delete_after_run": map[string]any{
 					"type":        "boolean",

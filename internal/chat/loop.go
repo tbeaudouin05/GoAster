@@ -319,6 +319,9 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 				}
 				return safeRequestDiagnosticError(err)
 			}
+			if PostToolAuthenticationMessage(err) != "" {
+				return safeRequestDiagnosticError(err)
+			}
 			return err
 		}
 		ui.renderAssistant(w, model, reply)

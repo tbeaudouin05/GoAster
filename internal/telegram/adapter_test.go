@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -746,19 +747,33 @@ func TestTelegramSendAndEditFallbackToPlainTextAfterFormattingRejection(t *testi
 
 func TestTelegramDisplaysSafeSkillRecoveryForDirectAndStreamErrors(t *testing.T) {
 	const guidance = "Some actions may already have completed. Check their results before continuing or repeating any action. Skill guidance could not be loaded or restored. Check the installed skill files; use /clear if the selection cannot be restored."
+	const warning = "OpenAI authentication failed after a tool started. Actions may already have completed and tool results may be unavailable. Check and reconcile external state, then resolve OpenAI authentication before retrying."
+	const fallback = "The remote agent could not answer"
 	for _, tc := range []struct {
-		name   string
-		status int
-		body   string
-		header bool
-		want   string
+		name, body, header, want string
+		status                   int
+		failEdit, breakStream    bool
 	}{
-		{"direct", http.StatusServiceUnavailable, guidance, true, guidance},
-		{"stream", http.StatusOK, `{"type":"skill_recovery","error":"` + guidance + `"}` + "\n", false, guidance},
-		{"forged", http.StatusOK, `{"type":"skill_recovery","error":"private fake-secret"}` + "\n", false, "The remote agent could not answer"},
+		{"skill direct", guidance, "skill-recovery", guidance, http.StatusServiceUnavailable, false, false},
+		{"skill stream", `{"type":"skill_recovery","error":"` + guidance + `"}` + "\n", "", guidance, http.StatusOK, false, false},
+		{"skill forged", `{"type":"skill_recovery","error":"private fake-secret"}` + "\n", "", fallback, http.StatusOK, false, false},
+		{"auth direct", warning + "\n", "post-tool-authentication", warning, http.StatusServiceUnavailable, false, false},
+		{"auth stream", `{"type":"tool_call","name":"shell_execute","arguments":"{}"}` + "\n" + `{"type":"post_tool_authentication","error":"` + warning + `"}` + "\n", "", warning, http.StatusOK, false, false},
+		{"auth failed edit", `{"type":"tool_call","name":"shell_execute","arguments":"{}"}` + "\n" + `{"type":"post_tool_authentication","error":"` + warning + `"}` + "\n", "", warning, http.StatusOK, true, false},
+		{"auth stream failure and failed edit", `{"type":"tool_call","name":"shell_execute","arguments":"{}"}` + "\n" + `{"type":"post_tool_authentication","error":"` + warning + `"}` + "\n", "", warning, http.StatusOK, true, true},
+		{"auth forged direct", "model fake-secret", "post-tool-authentication", fallback, http.StatusServiceUnavailable, false, false},
+		{"auth extended direct", warning + " fake-secret", "post-tool-authentication", fallback, http.StatusServiceUnavailable, false, false},
+		{"auth padded direct", " " + warning + "\n", "post-tool-authentication", fallback, http.StatusServiceUnavailable, false, false},
+		{"auth extra newline", warning + "\n\n", "post-tool-authentication", fallback, http.StatusServiceUnavailable, false, false},
+		{"auth missing header", warning, "", fallback, http.StatusServiceUnavailable, false, false},
+		{"auth forged stream", `{"type":"post_tool_authentication","error":"model fake-secret"}` + "\n", "", fallback, http.StatusOK, false, false},
+		{"auth forged stream failure", `{"type":"post_tool_authentication","error":"model fake-secret"}` + "\n", "", fallback, http.StatusOK, false, true},
+		{"auth extended stream", `{"type":"post_tool_authentication","error":"` + warning + ` fake-secret"}` + "\n", "", fallback, http.StatusOK, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var sent string
+			var delivered []string
+			failedEdits := 0
 			a := &adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid",
 				client: doerFunc(func(r *http.Request) (*http.Response, error) {
 					if strings.HasSuffix(r.URL.Path, "/sendChatAction") {
@@ -770,14 +785,22 @@ func TestTelegramDisplaysSafeSkillRecoveryForDirectAndStreamErrors(t *testing.T)
 					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 						t.Fatal(err)
 					}
+					if tc.failEdit && strings.HasSuffix(r.URL.Path, "/editMessageText") {
+						failedEdits++
+						return response(http.StatusBadRequest, `{"ok":false,"description":"message cannot be edited"}`), nil
+					}
 					sent = payload.Text
+					delivered = append(delivered, sent)
 					return response(200, `{"ok":true,"result":{"message_id":1}}`), nil
 				}),
 				agent: doerFunc(func(*http.Request) (*http.Response, error) {
 					resp := response(tc.status, tc.body)
+					if tc.breakStream {
+						resp.Body = io.NopCloser(io.MultiReader(strings.NewReader(tc.body), iotest.ErrReader(errors.New("stream read failed"))))
+					}
 					resp.Header = make(http.Header)
-					if tc.header {
-						resp.Header.Set("X-GoAster-Error", "skill-recovery")
+					if tc.header != "" {
+						resp.Header.Set("X-GoAster-Error", tc.header)
 					}
 					return resp, nil
 				}),
@@ -785,6 +808,9 @@ func TestTelegramDisplaysSafeSkillRecoveryForDirectAndStreamErrors(t *testing.T)
 			a.handle(context.Background(), privateMessage(42, "run"))
 			if !strings.Contains(sent, tc.want) || strings.Contains(sent, "fake-secret") || len(sent) > 512 {
 				t.Fatalf("Telegram recovery message = %q", sent)
+			}
+			if tc.failEdit && (failedEdits != 1 || len(delivered) != 2 || delivered[1] != warning) {
+				t.Fatalf("failed progress edit: edits=%d delivered=%q", failedEdits, delivered)
 			}
 		})
 	}

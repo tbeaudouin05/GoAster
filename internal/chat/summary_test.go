@@ -195,11 +195,14 @@ func TestSessionSummaryFailureFallsBackToBoundedTrimming(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		summarize func() (string, error)
+		childErr  error
 	}{
-		{"provider error", func() (string, error) { return "", errors.New("summary unavailable") }},
-		{"empty summary", func() (string, error) { return " \n ", nil }},
-		{"oversized summary", func() (string, error) { return strings.Repeat("x", maxSummaryBytes+1), nil }},
-		{"invalid UTF-8", func() (string, error) { return "\xff", nil }},
+		{"provider error", func() (string, error) { return "", errors.New("summary unavailable") }, nil},
+		{"empty summary", func() (string, error) { return " \n ", nil }, nil},
+		{"oversized summary", func() (string, error) { return strings.Repeat("x", maxSummaryBytes+1), nil }, nil},
+		{"invalid UTF-8", func() (string, error) { return "\xff", nil }, nil},
+		{"child cancellation", func() (string, error) { return "", fmt.Errorf("summary: %w", context.Canceled) }, context.Canceled},
+		{"child deadline", func() (string, error) { return "", fmt.Errorf("summary: %w", context.DeadlineExceeded) }, context.DeadlineExceeded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := &summaryTestProvider{summarize: tc.summarize}
@@ -225,6 +228,53 @@ func TestSessionSummaryFailureFallsBackToBoundedTrimming(t *testing.T) {
 			}
 			if session.contextNotice != contextTrimNotice {
 				t.Fatalf("context notice = %q", session.contextNotice)
+			}
+			if tc.childErr != nil {
+				session = NewSession(Config{Model: "primary"}, provider)
+				session.history = numberedHistory(maxSessionMessages)
+				parent := context.Background()
+				_, err := session.ReplyScheduled(parent, "scheduled")
+				summaries, histories = provider.calls()
+				if parent.Err() != nil || !errors.Is(err, ErrSessionBusy) || !errors.Is(err, tc.childErr) || len(summaries) != 2 || len(histories) != 1 {
+					t.Fatalf("scheduled summary error=%v, summaries=%d, chat calls=%d", err, len(summaries), len(histories))
+				}
+
+				parent, cancel := context.WithCancel(context.Background())
+				provider.summarize = func() (string, error) {
+					cancel()
+					return "", tc.childErr
+				}
+				session = NewSession(Config{Model: "primary"}, provider)
+				session.history = numberedHistory(maxSessionMessages)
+				_, err = session.ReplyScheduled(parent, "scheduled")
+				summaries, histories = provider.calls()
+				if !errors.Is(err, ErrSessionBusy) || !errors.Is(err, context.Canceled) || !errors.Is(err, tc.childErr) || len(summaries) != 3 || len(histories) != 1 {
+					t.Fatalf("interrupted parent summary error=%v, summaries=%d, chat calls=%d", err, len(summaries), len(histories))
+				}
+
+				provider.summarize = func() (string, error) {
+					return "", postToolAuthenticationError{cause: tc.childErr}
+				}
+				session = NewSession(Config{Model: "primary"}, provider)
+				session.history = numberedHistory(maxSessionMessages)
+				_, err = session.ReplyScheduled(context.Background(), "scheduled")
+				summaries, histories = provider.calls()
+				if !errors.Is(err, tc.childErr) || errors.Is(err, ErrSessionBusy) || ScheduledActionReviewMessage(err) != postToolAuthenticationWarning || len(summaries) != 4 || len(histories) != 1 {
+					t.Fatalf("summary lost post-tool review: error=%v, summaries=%d, chat calls=%d", err, len(summaries), len(histories))
+				}
+
+				parent, cancel = context.WithCancel(context.Background())
+				provider.summarize = func() (string, error) {
+					cancel()
+					return "", postToolAuthenticationError{cause: tc.childErr}
+				}
+				session = NewSession(Config{Model: "primary"}, provider)
+				session.history = numberedHistory(maxSessionMessages)
+				_, err = session.ReplyScheduled(parent, "scheduled")
+				summaries, histories = provider.calls()
+				if !errors.Is(err, context.Canceled) || !errors.Is(err, tc.childErr) || errors.Is(err, ErrSessionBusy) || PostToolAuthenticationMessage(err) != "" || ScheduledActionReviewMessage(err) != postToolAuthenticationWarning || len(summaries) != 5 || len(histories) != 1 {
+					t.Fatalf("canceled summary lost post-tool review: error=%v, summaries=%d, chat calls=%d", err, len(summaries), len(histories))
+				}
 			}
 		})
 	}

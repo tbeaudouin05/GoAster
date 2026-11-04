@@ -1178,4 +1178,37 @@ func TestAgentReportsSafeSkillRecoveryInDirectAndStreamResponses(t *testing.T) {
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"type":"skill_recovery"`) || !strings.Contains(result.Body.String(), message) || strings.Contains(result.Body.String(), "private-fixture") {
 		t.Fatalf("stream recovery = %d %q", result.Code, result.Body.String())
 	}
+
+	for _, postToolErr := range []error{postToolAgentError{}, postToolAgentError{cause: context.Canceled}, postToolAgentError{cause: context.DeadlineExceeded}} {
+		message = chat.PostToolAuthenticationMessage(postToolErr)
+		if message == "" {
+			t.Fatal("missing post-tool warning")
+		}
+		result = postChat(t, handler(fakeProvider{err: fmt.Errorf("fake-secret: %w", postToolErr)}, readyAuth), 43, "run")
+		if result.Code != http.StatusServiceUnavailable || result.Header().Get("X-GoAster-Error") != "post-tool-authentication" || strings.TrimSpace(result.Body.String()) != message {
+			t.Fatalf("direct post-tool warning = %d %q", result.Code, result.Body.String())
+		}
+		modelPath = filepath.Join(t.TempDir(), "models.json")
+		if err := os.WriteFile(modelPath, []byte("broken"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		h = handlerWithMemoryAndRegistry(fakeProvider{err: postToolErr}, nil, readyAuth, chat.NewModelRegistryAt(modelPath))
+		result = postChat(t, h, 43, "run")
+		if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"type":"post_tool_authentication"`) || !strings.Contains(result.Body.String(), message) {
+			t.Fatalf("stream post-tool warning = %d %q", result.Code, result.Body.String())
+		}
+	}
+	result = postChat(t, handler(fakeProvider{err: errors.New(message + " fake-secret")}, readyAuth), 44, "run")
+	if result.Header().Get("X-GoAster-Error") == "post-tool-authentication" || strings.Contains(result.Body.String(), "fake-secret") || strings.Contains(result.Body.String(), message) {
+		t.Fatalf("forged error displayed: %d %q", result.Code, result.Body.String())
+	}
 }
+
+type postToolAgentError struct{ cause error }
+
+func (postToolAgentError) Error() string {
+	return "OpenAI authentication failed after a tool started. Actions may already have completed and tool results may be unavailable. Check and reconcile external state, then resolve OpenAI authentication before retrying."
+}
+
+func (err postToolAgentError) Is(target error) bool { return target.Error() == err.Error() }
+func (err postToolAgentError) Unwrap() error        { return err.cause }

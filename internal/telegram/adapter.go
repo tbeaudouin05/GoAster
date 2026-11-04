@@ -394,8 +394,10 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 			return
 		}
 		if progressMessageID != 0 {
-			_ = a.editMessage(ctx, m.Chat.ID, progressMessageID, chunks[0])
-			chunks = chunks[1:]
+			err := a.editMessage(ctx, m.Chat.ID, progressMessageID, chunks[0])
+			if err == nil || !chat.IsPostToolAuthenticationMessage(text) {
+				chunks = chunks[1:]
+			}
 		}
 		for _, chunk := range chunks {
 			a.send(ctx, m.Chat.ID, chunk)
@@ -698,6 +700,13 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if resp.Header.Get("X-GoAster-Error") == "post-tool-authentication" {
+			message := strings.TrimSuffix(string(body), "\n")
+			if chat.IsPostToolAuthenticationMessage(message) {
+				return "", agentModelError{message: message}
+			}
+			return "", fmt.Errorf("agent request failed")
+		}
 		message := strings.TrimSpace(string(body))
 		if resp.Header.Get("X-GoAster-Error") == "skill-recovery" && chat.IsSkillRecoveryMessage(message) {
 			return "", agentModelError{message: message}
@@ -746,6 +755,12 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 		case "skill_recovery":
 			if chat.IsSkillRecoveryMessage(replyEvent.Error) {
 				modelError = replyEvent.Error
+			}
+		case "post_tool_authentication":
+			if chat.IsPostToolAuthenticationMessage(replyEvent.Error) {
+				// This is a terminal agent event. Deliver its validated warning
+				// even if the remaining response stream is broken.
+				return "", agentModelError{message: replyEvent.Error}
 			}
 		case "auth_handoff":
 			if err := a.handleAuthHandoffEvent(ctx, chatID, event); err != nil {

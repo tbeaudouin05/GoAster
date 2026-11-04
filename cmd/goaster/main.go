@@ -106,8 +106,11 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 func scheduledExecutor(session *chat.Session, environment map[string]string) scheduler.Executor {
 	return func(ctx context.Context, message string) error {
 		_, err := session.ReplyScheduled(chat.WithShellEnvironment(ctx, environment), message)
+		if message := chat.ScheduledActionReviewMessage(err); message != "" {
+			return scheduler.ReviewRequiredError{Message: message, Cause: err}
+		}
 		if errors.Is(err, chat.ErrSessionBusy) {
-			return scheduler.ErrRetry
+			return errors.Join(scheduler.ErrRetry, err)
 		}
 		return err
 	}

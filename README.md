@@ -329,13 +329,25 @@ cron_expr      five-field cron expression (six fields may include seconds)
 
 Each job stores its message, enabled state, next and last run times, status,
 error, run count, and optional `max_runs` (`0` means unlimited). One-time
-`at_seconds` jobs are deleted after their execution. Updates are partial, so
-omitted message, schedule, and `max_runs` fields are preserved.
+`at_seconds` jobs are normally deleted after their execution. Updates are
+partial, so omitted message, schedule, and `max_runs` fields are preserved.
 
 Due jobs send their saved message through the same terminal chat session as
 interactive input; the session serializes turns so scheduled execution cannot
 corrupt conversation state. Scheduler instances coordinate across processes;
 if a run is interrupted after it may have started, it is disabled for review.
+If OpenAI authentication fails after a tool starts, the scheduler retains the
+job and its warning with `review_required` set, including for one-time jobs.
+The job stays disabled across restarts and future scheduled times. Reconcile
+any actions and resolve authentication before deciding whether it should run
+again. If `max_runs` has been reached, first update it to `0` (unlimited) or
+to a value greater than `run_count`, then explicitly enable the job. Changing
+the limit alone does not clear its review state or enable it. You can instead
+leave the job disabled or remove it. Enabling schedules a new execution; it
+does not recover the results of the uncertain run. While a job is running, a
+positive `max_runs` update must be greater than its current `run_count` to
+leave room for that run; otherwise the entire update is rejected. A running
+job cannot be removed until its current execution finishes.
 Skill preflight failures and conversation recovery defer jobs that have not
 started. If a saved conversation is missing or invalid, inspect the saved or
 quarantined file and any actions that may already have completed; use `/clear`

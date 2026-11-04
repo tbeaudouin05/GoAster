@@ -357,6 +357,18 @@ func handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider chat.Provider,
 				http.Error(w, "unsupported image format", http.StatusUnsupportedMediaType)
 				return
 			}
+			if message := chat.PostToolAuthenticationMessage(err); message != "" {
+				if streamEmitted {
+					emit(struct {
+						Type  string `json:"type"`
+						Error string `json:"error"`
+					}{"post_tool_authentication", message})
+					return
+				}
+				w.Header().Set("X-GoAster-Error", "post-tool-authentication")
+				http.Error(w, message, http.StatusServiceUnavailable)
+				return
+			}
 			if message := chat.SkillRecoveryMessage(err); message != "" {
 				if streamEmitted {
 					emit(struct {

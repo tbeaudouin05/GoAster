@@ -11,11 +11,13 @@ import (
 	"image/color"
 	"image/png"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ import (
 
 	"goaster/internal/attachment"
 	"goaster/internal/localenv"
+	"goaster/internal/scheduler"
 )
 
 func TestCredentialStoreSaveAndLoadIsPrivate(t *testing.T) {
@@ -763,7 +766,31 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "missing-auth.json")}
 	var requests atomic.Int32
 	var refreshStatus atomic.Int32
+	var scripted atomic.Bool
+	var script atomic.Value
+	var scriptRequests, scriptRefreshes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if scripted.Load() {
+			if r.URL.Path == "/oauth/token" {
+				scriptRefreshes.Add(1)
+				fmt.Fprint(w, `{"access_token":"new-test-access","refresh_token":"new-test-refresh","expires_in":3600}`)
+				return
+			}
+			step := int(scriptRequests.Add(1))
+			items := script.Load().([]string)
+			if step > len(items) {
+				t.Errorf("unexpected scripted request %d", step)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if items[step-1] == "401" {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, "fake-backend-secret")
+				return
+			}
+			fmt.Fprint(w, items[step-1])
+			return
+		}
 		if r.URL.Path == "/oauth/token" {
 			status := int(refreshStatus.Load())
 			if status != http.StatusOK {
@@ -861,6 +888,632 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 		t.Fatalf("rejected refreshed credentials error = %v", err)
 	}
 	checkLineError(unauthorizedError)
+
+	const customBatch = `{"output":[{"type":"function_call","call_id":"a","name":"custom_a","arguments":"{}"},{"type":"function_call","call_id":"b","name":"custom_b","arguments":"{}"}]}`
+	const builtinBatch = `{"output":[{"type":"function_call","call_id":"a","name":"web_search","arguments":"{}"},{"type":"function_call","call_id":"b","name":"web_fetch","arguments":"{}"},{"type":"function_call","call_id":"c","name":"shell_execute","arguments":"{}"}]}`
+	const skillBatch = `{"output":[{"type":"function_call","call_id":"a","name":"custom_a","arguments":"{}"},{"type":"function_call","call_id":"b","name":"load_skill","arguments":"{\"name\":\"fixture-skill\"}"}]}`
+	const done = `{"output_text":"done"}`
+	counts := map[string]int{}
+	for _, name := range []string{"web_search", "web_fetch", "shell_execute", "custom_a", "custom_b"} {
+		name := name
+		handler := func(context.Context, string) (string, error) { counts[name]++; return "ok", nil }
+		if strings.HasPrefix(name, "custom_") {
+			if err := provider.RegisterTool(Tool{Name: name, Description: "test", Parameters: map[string]any{"type": "object"}, Handler: handler}); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			provider.tools.byName[name] = handler
+		}
+	}
+	load, _ := provider.tools.handler("load_skill")
+	provider.tools.byName["load_skill"] = func(ctx context.Context, arguments string) (string, error) {
+		counts["load_skill"]++
+		return load(ctx, arguments)
+	}
+	scripted.Store(true)
+	for _, tc := range []struct {
+		name      string
+		responses []string
+		want      map[string]int
+		refreshes int32
+		outcome   string
+	}{
+		{"builtins", []string{builtinBatch, "401"}, map[string]int{"web_search": 1, "web_fetch": 1, "shell_execute": 1}, 0, "warning"},
+		{"custom batch", []string{customBatch, "401"}, map[string]int{"custom_a": 1, "custom_b": 1}, 0, "warning"},
+		{"skill suppresses action", []string{skillBatch, "401"}, map[string]int{"load_skill": 1}, 0, "warning"},
+		{"skill then action", []string{skillBatch, customBatch, "401"}, map[string]int{"load_skill": 1, "custom_a": 1, "custom_b": 1}, 0, "warning"},
+		{"refresh then succeed", []string{"401", customBatch, done}, map[string]int{"custom_a": 1, "custom_b": 1}, 1, "done"},
+		{"refresh then action fails", []string{"401", customBatch, "401"}, map[string]int{"custom_a": 1, "custom_b": 1}, 1, "warning"},
+		{"two pre-tool 401s", []string{"401", "401"}, map[string]int{}, 1, "login"},
+	} {
+		if err := store.Save(Credential{AccessToken: "test-access", RefreshToken: "test-refresh", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		counts = map[string]int{}
+		script.Store(tc.responses)
+		scriptRequests.Store(0)
+		scriptRefreshes.Store(0)
+		reply, err := provider.Reply(context.Background(), "gpt-test", "run")
+		switch tc.outcome {
+		case "warning":
+			if reply != "" || PostToolAuthenticationMessage(err) != postToolAuthenticationWarning || err.Error() != postToolAuthenticationWarning {
+				t.Fatalf("%s: reply=%q err=%v", tc.name, reply, err)
+			}
+		case "login":
+			if !errors.Is(err, ErrLoginRequired) {
+				t.Fatalf("%s: error=%v", tc.name, err)
+			}
+		case "done":
+			if err != nil || reply != "done" {
+				t.Fatalf("%s: reply=%q err=%v", tc.name, reply, err)
+			}
+		}
+		if !reflect.DeepEqual(counts, tc.want) || scriptRequests.Load() != int32(len(tc.responses)) || scriptRefreshes.Load() != tc.refreshes {
+			t.Fatalf("%s: calls=%v requests=%d refreshes=%d", tc.name, counts, scriptRequests.Load(), scriptRefreshes.Load())
+		}
+	}
+
+	if err := store.Save(Credential{AccessToken: "test-access", RefreshToken: "test-refresh", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	script.Store([]string{customBatch, "401", "401", done})
+	scriptRequests.Store(0)
+	scriptRefreshes.Store(0)
+	counts = map[string]int{}
+	_, err = provider.Reply(context.Background(), "gpt-test", "first")
+	if PostToolAuthenticationMessage(err) != postToolAuthenticationWarning {
+		t.Fatalf("first request: %v", err)
+	}
+	reply, err := provider.Reply(context.Background(), "gpt-test", "second")
+	if err != nil || reply != "done" || scriptRequests.Load() != 4 || scriptRefreshes.Load() != 1 || counts["custom_a"] != 1 || counts["custom_b"] != 1 {
+		t.Fatalf("next request: reply=%q err=%v calls=%v requests=%d refreshes=%d", reply, err, counts, scriptRequests.Load(), scriptRefreshes.Load())
+	}
+
+	const blockingCall = `{"output":[{"type":"function_call","call_id":"a","name":"custom_block","arguments":"{}"}]}`
+	if err := store.Save(Credential{AccessToken: "test-access", RefreshToken: "test-refresh", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	if err := provider.RegisterTool(Tool{Name: "custom_block", Description: "test", Parameters: map[string]any{"type": "object"}, Handler: func(ctx context.Context, _ string) (string, error) {
+		close(entered)
+		select {
+		case <-release:
+			return "ok", nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	script.Store([]string{blockingCall, "401", done, "401"})
+	scriptRequests.Store(0)
+	scriptRefreshes.Store(0)
+	concurrentCtx, cancelConcurrent := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelConcurrent()
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := provider.Reply(concurrentCtx, "gpt-test", "first concurrent")
+		firstResult <- err
+	}()
+	select {
+	case <-entered:
+	case <-concurrentCtx.Done():
+		t.Fatal("concurrent tool did not start")
+	}
+	reply, err = provider.Reply(concurrentCtx, "gpt-test", "second concurrent")
+	if err != nil || reply != "done" || scriptRefreshes.Load() != 1 {
+		t.Fatalf("concurrent pre-tool refresh: reply=%q err=%v refreshes=%d", reply, err, scriptRefreshes.Load())
+	}
+	unblock()
+	select {
+	case err := <-firstResult:
+		if PostToolAuthenticationMessage(err) != postToolAuthenticationWarning || scriptRequests.Load() != 4 || scriptRefreshes.Load() != 1 {
+			t.Fatalf("concurrent post-tool failure: err=%v requests=%d refreshes=%d", err, scriptRequests.Load(), scriptRefreshes.Load())
+		}
+	case <-concurrentCtx.Done():
+		t.Fatal("concurrent post-tool request did not finish")
+	}
+
+	for _, interactive := range []bool{false, true} {
+		script.Store([]string{customBatch, "401"})
+		scriptRequests.Store(0)
+		output.Reset()
+		err = runChatLoopWithUI(context.Background(), TerminalInput{reader: strings.NewReader("run\n"), interactive: interactive}, &output,
+			NewSession(Config{Model: "private-model"}, provider), terminalStore,
+			EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{interactive: interactive, width: 200})
+		if interactive {
+			if err != nil || !strings.Contains(output.String(), "OpenAI authentication failed after a tool started.") || !strings.Contains(output.String(), "Check and reconcile external state") || !strings.Contains(output.String(), "before retrying.") || strings.Contains(output.String(), "fake-backend-secret") {
+				t.Fatalf("interactive warning: err=%v output=%q", err, output.String())
+			}
+		} else if err == nil || err.Error() != postToolAuthenticationWarning || strings.Contains(err.Error(), "private-model") {
+			t.Fatalf("noninteractive warning: %v", err)
+		}
+	}
+	for _, forged := range []error{nil, errors.New(postToolAuthenticationWarning), fmt.Errorf("fake-secret: %w", errors.New(postToolAuthenticationWarning))} {
+		if PostToolAuthenticationMessage(forged) != "" {
+			t.Fatalf("forged error accepted: %v", forged)
+		}
+	}
+	bodyCanceled := errors.Join(postToolAuthenticationError{}, context.Canceled)
+	if !errors.Is(bodyCanceled, context.Canceled) || PostToolAuthenticationMessage(bodyCanceled) != postToolAuthenticationWarning {
+		t.Fatalf("body cancellation suppressed a live caller's warning: %v", bodyCanceled)
+	}
+	wrapped := fmt.Errorf("fake-secret: %w", postToolAuthenticationError{})
+	if requestFailureDiagnostic(wrapped) != postToolAuthenticationWarning || !IsPostToolAuthenticationMessage(postToolAuthenticationWarning) || IsPostToolAuthenticationMessage(postToolAuthenticationWarning+" fake-secret") {
+		t.Fatal("post-tool warning was not sanitized or allowlisted")
+	}
+
+	for _, job := range []scheduler.Job{
+		{Kind: scheduler.ScheduleAt, AtSeconds: 1, Message: "once"},
+		{Kind: scheduler.ScheduleEvery, EverySeconds: 1, Message: "repeat"},
+	} {
+		script.Store([]string{customBatch, "401"})
+		scriptRequests.Store(0)
+		scriptRefreshes.Store(0)
+		counts = map[string]int{}
+		clock := time.Unix(1000, 0)
+		session := NewSession(Config{Model: "gpt-test"}, provider)
+		options := scheduler.Options{Path: filepath.Join(t.TempDir(), "jobs.json"), Now: func() time.Time { return clock }, Executor: func(ctx context.Context, message string) error {
+			_, err := session.ReplyScheduled(ctx, message)
+			if warning := PostToolAuthenticationReviewMessage(err); warning != "" {
+				return scheduler.ReviewRequiredError{Message: warning}
+			}
+			return err
+		}}
+		jobs, err := scheduler.New(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		created, err := jobs.Add(job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock = clock.Add(time.Second)
+		if jobs.RunDue(context.Background()) != 1 {
+			t.Fatal("scheduled run did not execute")
+		}
+		jobs, err = scheduler.New(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock = clock.Add(time.Minute)
+		if jobs.RunDue(context.Background()) != 0 {
+			t.Fatal("scheduled run was automatically replayed")
+		}
+		saved, ok := jobs.Get(created.ID)
+		if !ok || saved.Enabled || !saved.ReviewRequired || saved.Error != postToolAuthenticationWarning || saved.NextRun != nil || saved.RunCount != 1 || scriptRequests.Load() != 2 || scriptRefreshes.Load() != 0 || counts["custom_a"] != 1 || counts["custom_b"] != 1 {
+			t.Fatalf("%s scheduled state: %+v requests=%d refreshes=%d calls=%v", job.Kind, saved, scriptRequests.Load(), scriptRefreshes.Load(), counts)
+		}
+		if job.Kind == scheduler.ScheduleEvery {
+			for _, args := range []string{
+				fmt.Sprintf(`{"action":"disable","id":%q}`, created.ID),
+				fmt.Sprintf(`{"action":"update","id":%q,"max_runs":1}`, created.ID),
+				fmt.Sprintf(`{"action":"update","id":%q,"max_runs":2}`, created.ID),
+				fmt.Sprintf(`{"action":"update","id":%q,"every_seconds":10}`, created.ID),
+			} {
+				if _, err := executeCronTool(context.Background(), args, jobs); err != nil {
+					t.Fatalf("cron update %s: %v", args, err)
+				}
+			}
+			clock = clock.Add(time.Minute)
+			if jobs.RunDue(context.Background()) != 0 {
+				t.Fatal("editing the disabled job triggered a replay")
+			}
+			saved, ok = jobs.Get(created.ID)
+			if !ok || saved.Enabled || !saved.ReviewRequired || saved.Error != postToolAuthenticationWarning || saved.RunCount != 1 {
+				t.Fatalf("editing lost pending review: %+v", saved)
+			}
+		}
+	}
+
+	// These bodies fail after a 401 header even though the request context is
+	// still live. Both errors must survive wrapping and must not trigger refresh.
+	for _, failure := range []error{context.Canceled, context.DeadlineExceeded} {
+		for _, afterTool := range []bool{false, true} {
+			if err := store.Save(Credential{AccessToken: "test-access", RefreshToken: "test-refresh", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			var connections atomic.Int32
+			scriptRefreshes.Store(0)
+			counts = map[string]int{}
+			testClientDialOverrides.Store(server.URL, func(context.Context, string, string) (net.Conn, error) {
+				step := connections.Add(1)
+				local, remote := net.Pipe()
+				_ = remote.Close()
+				started := make(chan struct{})
+				notify := sync.OnceFunc(func() { close(started) })
+				if afterTool && step == 1 {
+					body := customBatch
+					wire := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+					return codexTestConnection{Conn: local, Reader: strings.NewReader(wire), started: started, notify: notify}, nil
+				}
+				wire := "HTTP/1.1 401 Unauthorized\r\nContent-Length: 1\r\nConnection: close\r\n\r\n"
+				body := io.MultiReader(strings.NewReader(wire), failingReader{fmt.Errorf("body read failed: %w", failure)})
+				return codexTestConnection{Conn: local, Reader: body, started: started, notify: notify}, nil
+			})
+			provider.httpClient = webFetchTestClient(t, server, nil)
+			_, err := provider.Reply(context.Background(), "gpt-test", "run")
+			wantConnections := int32(1)
+			if afterTool {
+				wantConnections++
+			}
+			wantMessage := ""
+			if afterTool {
+				wantMessage = postToolAuthenticationWarning
+			}
+			if !errors.Is(err, failure) || PostToolAuthenticationMessage(err) != wantMessage || (PostToolAuthenticationReviewMessage(err) != "") != afterTool || connections.Load() != wantConnections || scriptRefreshes.Load() != 0 {
+				t.Fatalf("body failure %v after tool %v: err=%v connections=%d refreshes=%d", failure, afterTool, err, connections.Load(), scriptRefreshes.Load())
+			}
+			connections.Store(0)
+			_, err = NewSession(Config{Model: "gpt-test"}, provider).ReplyScheduled(context.Background(), "scheduled")
+			if !errors.Is(err, failure) || errors.Is(err, ErrSessionBusy) == afterTool || PostToolAuthenticationMessage(err) != wantMessage || (PostToolAuthenticationReviewMessage(err) != "") != afterTool || connections.Load() != wantConnections || scriptRefreshes.Load() != 0 {
+				t.Fatalf("scheduled body failure %v after tool %v: err=%v connections=%d refreshes=%d", failure, afterTool, err, connections.Load(), scriptRefreshes.Load())
+			}
+			if wantMessage != "" {
+				for _, interactive := range []bool{false, true} {
+					connections.Store(0)
+					err = runChatLoopWithUI(context.Background(), TerminalInput{reader: strings.NewReader("run\n"), interactive: interactive}, io.Discard,
+						NewSession(Config{Model: "private-model"}, provider), terminalStore,
+						EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{interactive: interactive, width: 200})
+					if !errors.Is(err, failure) || err.Error() != wantMessage || connections.Load() != wantConnections || scriptRefreshes.Load() != 0 {
+						t.Fatalf("body failure %v in interactive=%v loop: err=%v connections=%d", failure, interactive, err, connections.Load())
+					}
+				}
+			}
+		}
+	}
+	for _, scheduled := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		var connections atomic.Int32
+		testClientDialOverrides.Store(server.URL, func(context.Context, string, string) (net.Conn, error) {
+			step := connections.Add(1)
+			local, remote := net.Pipe()
+			_ = remote.Close()
+			started := make(chan struct{})
+			notify := sync.OnceFunc(func() { close(started) })
+			if step == 1 {
+				wire := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(customBatch), customBatch)
+				return codexTestConnection{Conn: local, Reader: strings.NewReader(wire), started: started, notify: notify}, nil
+			}
+			wire := "HTTP/1.1 401 Unauthorized\r\nContent-Length: 1\r\nConnection: close\r\n\r\n"
+			body := io.MultiReader(strings.NewReader(wire), cancelingDeadlineReader{cancel: cancel})
+			return codexTestConnection{Conn: local, Reader: body, started: started, notify: notify}, nil
+		})
+		provider.httpClient = webFetchTestClient(t, server, nil)
+		var err error
+		if scheduled {
+			_, err = NewSession(Config{Model: "gpt-test"}, provider).ReplyScheduled(ctx, "scheduled")
+		} else {
+			_, err = provider.Reply(ctx, "gpt-test", "run")
+		}
+		cancel()
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, context.DeadlineExceeded) || PostToolAuthenticationMessage(err) != "" || PostToolAuthenticationReviewMessage(err) != postToolAuthenticationWarning || strings.Contains(err.Error(), postToolAuthenticationWarning) || connections.Load() != 2 {
+			t.Fatalf("canceled parent during 401 body, scheduled=%v: err=%v connections=%d", scheduled, err, connections.Load())
+		}
+	}
+
+	provider.httpClient = server.Client()
+	for _, spec := range []scheduler.Job{
+		{Kind: scheduler.ScheduleAt, AtSeconds: 1, Message: "once"},
+		{Kind: scheduler.ScheduleEvery, EverySeconds: 1, Message: "repeat"},
+	} {
+		for _, tc := range []struct {
+			cancelBefore string
+			loadSkill    bool
+		}{{"custom_a", false}, {"custom_b", false}, {"custom_a", true}} {
+			clock := time.Unix(1000, 0)
+			ctx, cancel := context.WithCancel(context.Background())
+			requestContext := WithToolCallObserver(ctx, func(name, _ string) {
+				if name == tc.cancelBefore {
+					cancel()
+				}
+			})
+			counts = map[string]int{}
+			script.Store([]string{customBatch})
+			wantRequests := int32(1)
+			if tc.loadSkill {
+				script.Store([]string{skillBatch, customBatch})
+				wantRequests++
+			}
+			scriptRequests.Store(0)
+			scriptRefreshes.Store(0)
+			session := NewSession(Config{Model: "gpt-test"}, provider)
+			var executionErr error
+			options := scheduler.Options{Path: filepath.Join(t.TempDir(), "jobs.json"), Now: func() time.Time { return clock }, Executor: func(ctx context.Context, message string) error {
+				_, executionErr = session.ReplyScheduled(ctx, message)
+				if message := ScheduledActionReviewMessage(executionErr); message != "" {
+					executionErr = scheduler.ReviewRequiredError{Message: message, Cause: executionErr}
+				} else if errors.Is(executionErr, ErrSessionBusy) {
+					executionErr = errors.Join(scheduler.ErrRetry, executionErr)
+				}
+				return executionErr
+			}}
+			jobs, err := scheduler.New(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err := jobs.Add(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clock = clock.Add(time.Second)
+			if runs := jobs.RunDue(requestContext); runs != 1 || !errors.Is(executionErr, context.Canceled) {
+				t.Fatalf("%s before %s: runs=%d error=%v", spec.Kind, tc.cancelBefore, runs, executionErr)
+			}
+			cancel()
+			jobs, err = scheduler.New(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			saved, ok := jobs.Get(job.ID)
+			if !ok || scriptRequests.Load() != wantRequests || scriptRefreshes.Load() != 0 || counts["custom_b"] != 0 || (tc.loadSkill && counts["load_skill"] != 1) {
+				t.Fatalf("%s before %s (skill=%v): saved=%+v calls=%v requests=%d", spec.Kind, tc.cancelBefore, tc.loadSkill, saved, counts, scriptRequests.Load())
+			}
+			if tc.cancelBefore == "custom_a" {
+				if counts["custom_a"] != 0 || !errors.Is(executionErr, scheduler.ErrRetry) || errors.Is(executionErr, scheduler.ErrReviewRequired) || !saved.Enabled || saved.ReviewRequired || saved.RunCount != 0 || saved.Status != scheduler.StatusScheduled || saved.NextRun == nil {
+					t.Fatalf("%s: pre-action cancellation was not safely retryable: saved=%+v error=%v", spec.Kind, saved, executionErr)
+				}
+				clock = *saved.NextRun
+				script.Store([]string{done})
+				scriptRequests.Store(0)
+				if runs := jobs.RunDue(context.Background()); runs != 1 || executionErr != nil {
+					t.Fatalf("%s: safe retry failed: runs=%d error=%v", spec.Kind, runs, executionErr)
+				}
+			} else {
+				clock = clock.Add(time.Minute)
+				if counts["custom_a"] != 1 || !errors.Is(executionErr, scheduler.ErrReviewRequired) || errors.Is(executionErr, scheduler.ErrRetry) || saved.Enabled || !saved.ReviewRequired || saved.RunCount != 1 || saved.Status != scheduler.StatusFailed || saved.Error != interruptedActionWarning || saved.NextRun != nil || jobs.RunDue(context.Background()) != 0 {
+					t.Fatalf("%s: post-action cancellation lost review: saved=%+v error=%v", spec.Kind, saved, executionErr)
+				}
+			}
+		}
+	}
+
+	// A request or tool can fail with its own canceled context even though the
+	// scheduler's parent context remains live. Exercise both durable outcomes.
+	originalCustomA, _ := provider.tools.handler("custom_a")
+	for _, spec := range []scheduler.Job{
+		{Kind: scheduler.ScheduleAt, AtSeconds: 1, Message: "once"},
+		{Kind: scheduler.ScheduleEvery, EverySeconds: 1, Message: "repeat"},
+	} {
+		for _, failure := range []error{context.Canceled, context.DeadlineExceeded} {
+			for _, phase := range []string{"before response", "after action response", "action", "after skill", "before 401", "after action 401", "after skill 401"} {
+				parent := context.Background()
+				child := parent
+				var cancel context.CancelFunc
+				if failure == context.Canceled {
+					child, cancel = context.WithCancel(parent)
+					cancel()
+				} else {
+					child, cancel = context.WithDeadline(parent, time.Unix(0, 0))
+					cancel()
+				}
+				if !errors.Is(child.Err(), failure) {
+					t.Fatalf("%s: child context error=%v", phase, child.Err())
+				}
+				specificCause := errors.New("specific child failure")
+				childErr := errors.Join(specificCause, child.Err())
+				afterAction := phase == "after action response" || phase == "action" || phase == "after action 401"
+				afterSkill := phase == "after skill" || phase == "after skill 401"
+				postTool401 := phase == "after action 401" || phase == "after skill 401"
+				wantReview := afterAction || postTool401
+				var connections atomic.Int32
+				provider.tools.byName["custom_a"] = func(ctx context.Context, arguments string) (string, error) {
+					if phase == "action" {
+						counts["custom_a"]++
+						return "", fmt.Errorf("action failed: %w", childErr)
+					}
+					return originalCustomA(ctx, arguments)
+				}
+				prepare := func() {
+					counts = map[string]int{}
+					connections.Store(0)
+					scriptRefreshes.Store(0)
+					testClientDialOverrides.Store(server.URL, func(context.Context, string, string) (net.Conn, error) {
+						step := connections.Add(1)
+						local, remote := net.Pipe()
+						_ = remote.Close()
+						started := make(chan struct{})
+						notify := sync.OnceFunc(func() { close(started) })
+						if step == 1 && (afterAction || afterSkill) {
+							body := customBatch
+							if afterSkill {
+								body = skillBatch
+							}
+							wire := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+							return codexTestConnection{Conn: local, Reader: strings.NewReader(wire), started: started, notify: notify}, nil
+						}
+						status := "200 OK"
+						if strings.Contains(phase, "401") {
+							status = "401 Unauthorized"
+						}
+						wire := fmt.Sprintf("HTTP/1.1 %s\r\nContent-Length: 1\r\nConnection: close\r\n\r\n", status)
+						body := io.MultiReader(strings.NewReader(wire), failingReader{fmt.Errorf("body failed: %w", childErr)})
+						return codexTestConnection{Conn: local, Reader: body, started: started, notify: notify}, nil
+					})
+					provider.httpClient = webFetchTestClient(t, server, nil)
+				}
+
+				prepare()
+				_, unscheduledErr := NewSession(Config{Model: "gpt-test"}, provider).Reply(parent, "ordinary turn")
+				if parent.Err() != nil || !errors.Is(unscheduledErr, failure) || !errors.Is(unscheduledErr, specificCause) || !errors.Is(unscheduledErr, errFatalRequest) || errors.Is(unscheduledErr, ErrSessionBusy) || (ScheduledActionReviewMessage(unscheduledErr) != "") != postTool401 {
+					t.Fatalf("%s %v unscheduled %s: error=%v", spec.Kind, failure, phase, unscheduledErr)
+				}
+				if (postTool401 && unscheduledErr.Error() != postToolAuthenticationWarning) || (!postTool401 && !strings.HasPrefix(unscheduledErr.Error(), "model gpt-test: ")) {
+					t.Fatalf("%s %v unscheduled %s: changed error presentation: %v", spec.Kind, failure, phase, unscheduledErr)
+				}
+
+				prepare()
+				clock := time.Unix(1000, 0)
+				session := NewSession(Config{Model: "gpt-test"}, provider)
+				var executionErr error
+				options := scheduler.Options{Path: filepath.Join(t.TempDir(), "jobs.json"), Now: func() time.Time { return clock }, Executor: func(ctx context.Context, message string) error {
+					_, executionErr = session.ReplyScheduled(ctx, message)
+					if message := ScheduledActionReviewMessage(executionErr); message != "" {
+						executionErr = scheduler.ReviewRequiredError{Message: message, Cause: executionErr}
+					} else if errors.Is(executionErr, ErrSessionBusy) {
+						executionErr = errors.Join(scheduler.ErrRetry, executionErr)
+					}
+					return executionErr
+				}}
+				jobs, err := scheduler.New(options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				job, err := jobs.Add(spec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				clock = clock.Add(time.Second)
+				if runs := jobs.RunDue(parent); runs != 1 || parent.Err() != nil || !errors.Is(executionErr, failure) || !errors.Is(executionErr, specificCause) {
+					t.Fatalf("%s %v %s: runs=%d error=%v", spec.Kind, failure, phase, runs, executionErr)
+				}
+				if (PostToolAuthenticationReviewMessage(executionErr) != "") != postTool401 || scriptRefreshes.Load() != 0 {
+					t.Fatalf("%s %v %s: lost 401 marker or refreshed: error=%v refreshes=%d", spec.Kind, failure, phase, executionErr, scriptRefreshes.Load())
+				}
+				wantConnections := int32(1)
+				if (afterAction && phase != "action") || afterSkill {
+					wantConnections++
+				}
+				wantActions := 0
+				if afterAction {
+					wantActions = 1
+				}
+				wantSkillLoads := 0
+				if afterSkill {
+					wantSkillLoads = 1
+				}
+				if connections.Load() != wantConnections || counts["custom_a"] != wantActions || counts["load_skill"] != wantSkillLoads {
+					t.Fatalf("%s %v %s: connections=%d calls=%v", spec.Kind, failure, phase, connections.Load(), counts)
+				}
+				jobs, err = scheduler.New(options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				saved, ok := jobs.Get(job.ID)
+				if !ok {
+					t.Fatalf("%s %v %s: job was deleted", spec.Kind, failure, phase)
+				}
+				if wantReview {
+					wantWarning := interruptedActionWarning
+					if postTool401 {
+						wantWarning = postToolAuthenticationWarning
+					}
+					clock = clock.Add(time.Minute)
+					if !errors.Is(executionErr, scheduler.ErrReviewRequired) || errors.Is(executionErr, scheduler.ErrRetry) || saved.Enabled || !saved.ReviewRequired || saved.RunCount != 1 || saved.Status != scheduler.StatusFailed || saved.Error != wantWarning || saved.NextRun != nil || jobs.RunDue(parent) != 0 {
+						t.Fatalf("%s %v %s: review state=%+v error=%v", spec.Kind, failure, phase, saved, executionErr)
+					}
+				} else {
+					if !errors.Is(executionErr, scheduler.ErrRetry) || errors.Is(executionErr, scheduler.ErrReviewRequired) || !saved.Enabled || saved.ReviewRequired || saved.RunCount != 0 || saved.Status != scheduler.StatusScheduled || saved.NextRun == nil || !saved.NextRun.After(clock) || counts["custom_a"] != 0 {
+						t.Fatalf("%s %v %s: retry state=%+v error=%v", spec.Kind, failure, phase, saved, executionErr)
+					}
+					clock = saved.NextRun.Add(0)
+					provider.httpClient = server.Client()
+					script.Store([]string{done})
+					scriptRequests.Store(0)
+					if runs := jobs.RunDue(parent); runs != 1 || executionErr != nil {
+						t.Fatalf("%s %v %s: retry runs=%d error=%v", spec.Kind, failure, phase, runs, executionErr)
+					}
+				}
+			}
+		}
+	}
+	provider.tools.byName["custom_a"] = originalCustomA
+	provider.httpClient = server.Client()
+
+	// Stop cancels a real scheduler run while the tool is still executing.
+	enteredShutdownTool := make(chan struct{})
+	if err := provider.RegisterTool(Tool{Name: "shutdown_action", Description: "test", Parameters: map[string]any{"type": "object"}, Handler: func(ctx context.Context, _ string) (string, error) {
+		close(enteredShutdownTool)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	script.Store([]string{`{"output":[{"type":"function_call","call_id":"shutdown","name":"shutdown_action","arguments":"{}"}]}`})
+	scriptRequests.Store(0)
+	clock := time.Unix(1000, 0)
+	session := NewSession(Config{Model: "gpt-test"}, provider)
+	var executionErr error
+	options := scheduler.Options{Path: filepath.Join(t.TempDir(), "jobs.json"), Now: func() time.Time { return clock }, Executor: func(ctx context.Context, message string) error {
+		_, executionErr = session.ReplyScheduled(ctx, message)
+		if message := ScheduledActionReviewMessage(executionErr); message != "" {
+			executionErr = scheduler.ReviewRequiredError{Message: message, Cause: executionErr}
+		}
+		return executionErr
+	}}
+	jobs, err := scheduler.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobs.Add(scheduler.Job{Kind: scheduler.ScheduleAt, AtSeconds: 1, Message: "shutdown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Second)
+	if err := jobs.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-enteredShutdownTool:
+	case <-time.After(5 * time.Second):
+		jobs.Stop()
+		t.Fatal("scheduled tool did not start before shutdown")
+	}
+	jobs.Stop()
+	if !errors.Is(executionErr, context.Canceled) || !errors.Is(executionErr, scheduler.ErrReviewRequired) {
+		t.Fatalf("shutdown lost cancellation or review: %v", executionErr)
+	}
+	jobs, err = scheduler.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Minute)
+	if saved, ok := jobs.Get(job.ID); !ok || saved.Enabled || !saved.ReviewRequired || saved.RunCount != 1 || saved.Status != scheduler.StatusFailed || saved.Error != interruptedActionWarning || saved.NextRun != nil || jobs.RunDue(context.Background()) != 0 {
+		t.Fatalf("shutdown did not retain the interrupted action for review: %+v", saved)
+	}
+}
+
+func TestPostToolBodyDeadlineDoesNotOverrideParentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider := providerFunc(func(context.Context, string, string) (string, error) {
+		cancel()
+		return "", postToolAuthenticationError{cause: fmt.Errorf("private body detail: %w", context.DeadlineExceeded)}
+	})
+	_, err := NewSession(Config{Model: "test"}, provider).Reply(ctx, "run")
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, context.DeadlineExceeded) || PostToolAuthenticationMessage(err) != "" || PostToolAuthenticationReviewMessage(err) != postToolAuthenticationWarning || strings.Contains(err.Error(), postToolAuthenticationWarning) || strings.Contains(err.Error(), "private body detail") {
+		t.Fatalf("canceled parent did not preserve both causes and suppress the warning: %v", err)
+	}
+
+	parentDeadline := postToolAuthenticationError{cause: context.DeadlineExceeded, parentErr: context.DeadlineExceeded}
+	if !errors.Is(parentDeadline, context.DeadlineExceeded) || PostToolAuthenticationMessage(parentDeadline) != "" || PostToolAuthenticationReviewMessage(parentDeadline) != postToolAuthenticationWarning || strings.Contains(parentDeadline.Error(), postToolAuthenticationWarning) {
+		t.Fatalf("parent deadline exposed the warning or lost its cause: %v", parentDeadline)
+	}
+}
+
+type codexTestConnection struct {
+	net.Conn
+	io.Reader
+	started chan struct{}
+	notify  func()
+}
+
+type cancelingDeadlineReader struct{ cancel context.CancelFunc }
+
+func (reader cancelingDeadlineReader) Read([]byte) (int, error) {
+	reader.cancel()
+	return 0, fmt.Errorf("private body detail: %w", context.DeadlineExceeded)
+}
+
+func (conn codexTestConnection) Read(data []byte) (int, error) {
+	<-conn.started
+	return conn.Reader.Read(data)
+}
+func (conn codexTestConnection) Write(data []byte) (int, error) {
+	conn.notify()
+	return len(data), nil
 }
 
 func TestCodexChatSendsExitTextToProviderAndRequiresAuth(t *testing.T) {

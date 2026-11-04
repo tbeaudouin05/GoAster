@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -423,6 +424,8 @@ func TestCodexProviderReturnsFetchErrorToModel(t *testing.T) {
 	}
 }
 
+var testClientDialOverrides sync.Map
+
 func webFetchTestClient(t *testing.T, server *httptest.Server, addresses map[string][]netip.Addr) *http.Client {
 	t.Helper()
 	client := newWebFetchHTTPClient()
@@ -438,6 +441,9 @@ func webFetchTestClient(t *testing.T, server *httptest.Server, addresses map[str
 		return dialer.DialContext(ctx, network, server.Listener.Addr().String())
 	}
 	transport.DialContext = webFetchDialContext(lookup, dial)
+	if override, ok := testClientDialOverrides.LoadAndDelete(server.URL); ok {
+		transport.DialContext = override.(func(context.Context, string, string) (net.Conn, error))
+	}
 	t.Cleanup(client.CloseIdleConnections)
 	return client
 }

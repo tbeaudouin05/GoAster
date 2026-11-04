@@ -797,6 +797,17 @@ func (p *CodexProvider) modelReply(ctx context.Context, model string, history []
 	}
 	reply, status, err := p.requestReply(ctx, credential, model, history, allowTools)
 	if status == http.StatusUnauthorized {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if PostToolAuthenticationReviewMessage(err) != "" {
+				return "", postToolAuthenticationError{cause: errors.Join(err, ctxErr), parentErr: ctxErr}
+			}
+			return "", ctxErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", err
+		}
+	}
+	if status == http.StatusUnauthorized && PostToolAuthenticationMessage(err) == "" {
 		refreshed, refreshErr := p.auth.Refresh(ctx)
 		if refreshErr != nil {
 			return "", authenticationRequestError{cause: fmt.Errorf("OpenAI session expired; restart GoAster to authenticate: %w", refreshErr)}
@@ -805,6 +816,18 @@ func (p *CodexProvider) modelReply(ctx context.Context, model string, history []
 	}
 	if err != nil {
 		if status == http.StatusUnauthorized {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if PostToolAuthenticationReviewMessage(err) != "" {
+					return "", postToolAuthenticationError{cause: errors.Join(err, ctxErr), parentErr: ctxErr}
+				}
+				return "", ctxErr
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return "", err
+			}
+			if PostToolAuthenticationMessage(err) != "" {
+				return "", err
+			}
 			return "", fmt.Errorf("%w; restart GoAster to authenticate", ErrLoginRequired)
 		}
 		if status == http.StatusNotFound {
@@ -1097,6 +1120,7 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 	}
 	webSearchCallCount := 0
 	webFetchCallCount := 0
+	toolStarted := false
 	skillLoadCount := 0
 	skillBytes := 0
 	loadedSkills := make(map[string]bool)
@@ -1133,6 +1157,15 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 		}
 		response, status, err := p.requestCodex(requestContext, credential, model, input, allowTools)
 		if err != nil {
+			if status == http.StatusUnauthorized && toolStarted {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return "", status, postToolAuthenticationError{cause: errors.Join(err, ctxErr), parentErr: ctxErr}
+				}
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return "", status, postToolAuthenticationError{cause: err}
+				}
+				return "", status, postToolAuthenticationError{}
+			}
 			return "", status, err
 		}
 		if len(response.ToolCalls) == 0 {
@@ -1244,6 +1277,15 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 					if call.Name == webFetchCodexTool.Name {
 						webFetchCallCount++
 					}
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return "", status, ctxErr
+					}
+					if call.Name != loadSkillCodexTool.Name {
+						if started, ok := ctx.Value(toolActionStartedKey{}).(func()); ok {
+							started()
+						}
+					}
+					toolStarted = true
 					result, err = handler(ctx, call.Arguments)
 					if err != nil {
 						return "", status, err

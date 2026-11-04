@@ -41,10 +41,22 @@ const (
 var (
 	ErrJobNotFound    = errors.New("cron job not found")
 	ErrAlreadyStarted = errors.New("cron scheduler is already running")
-	// ErrRetry means execution did not start and can be retried safely.
-	ErrRetry     = errors.New("cron job should retry")
-	jobIDCounter atomic.Uint64
+	// ErrRetry means no actions started and the job can be retried safely.
+	ErrRetry = errors.New("cron job should retry")
+	// ErrReviewRequired means execution may have performed actions and must be reviewed.
+	ErrReviewRequired = errors.New("cron job requires manual review")
+	jobIDCounter      atomic.Uint64
 )
+
+// ReviewRequiredError carries safe guidance for a run that must not be replayed automatically.
+type ReviewRequiredError struct {
+	Message string
+	Cause   error
+}
+
+func (err ReviewRequiredError) Error() string    { return err.Message }
+func (err ReviewRequiredError) Unwrap() error    { return err.Cause }
+func (ReviewRequiredError) Is(target error) bool { return target == ErrReviewRequired }
 
 // Executor is called with the saved message when a job becomes due. The
 // scheduler never interprets the message as a shell command.
@@ -74,6 +86,7 @@ type Job struct {
 	LastRun        *time.Time `json:"last_run,omitempty"`
 	Status         string     `json:"status"`
 	Error          string     `json:"error,omitempty"`
+	ReviewRequired bool       `json:"review_required,omitempty"`
 	RunCount       int        `json:"run_count"`
 	MaxRuns        int        `json:"max_runs,omitempty"`
 	DeleteAfterRun bool       `json:"delete_after_run,omitempty"`
@@ -505,6 +518,7 @@ func New(options Options) (*Scheduler, error) {
 			job.Error = "previous run was interrupted"
 			job.Enabled = false
 			job.NextRun = nil
+			job.ReviewRequired = true
 			changed = true
 		}
 		if job.Kind == ScheduleAt && !job.DeleteAfterRun {
@@ -688,6 +702,12 @@ func (s *Scheduler) Update(id string, patch Patch) (Job, error) {
 	if err := validateJob(updated); err != nil {
 		return Job{}, err
 	}
+	// A running claim has not yet been included in RunCount. Reserve room for
+	// it so its eventual result can be saved without discarding this edit or
+	// violating the persisted run-count limit.
+	if current.Status == StatusRunning && patch.MaxRuns != nil && updated.MaxRuns > 0 && updated.RunCount >= updated.MaxRuns {
+		return Job{}, fmt.Errorf("cron job %q is running; max_runs must be 0 or greater than run_count until the run finishes", id)
+	}
 	if scheduleChanged {
 		updated.NextRun = nil
 		if updated.Enabled {
@@ -697,19 +717,21 @@ func (s *Scheduler) Update(id string, patch Patch) (Job, error) {
 			}
 			updated.NextRun = next
 		}
-		updated.Error = ""
-		if updated.Enabled {
+		if !updated.ReviewRequired {
+			updated.Error = ""
+		}
+		if updated.Enabled && current.Status != StatusRunning {
 			updated.Status = StatusScheduled
 		}
 	}
 	if patch.MaxRuns != nil && updated.MaxRuns > 0 && updated.RunCount >= updated.MaxRuns {
 		updated.Enabled = false
 		updated.NextRun = nil
-		if updated.Status != StatusFailed {
+		if updated.Status != StatusFailed && !updated.ReviewRequired {
 			updated.Status = StatusCompleted
 		}
 	}
-	if patch.MaxRuns != nil && updated.MaxRuns > 0 && updated.RunCount < updated.MaxRuns && current.Status == StatusCompleted && !scheduleChanged {
+	if patch.MaxRuns != nil && updated.MaxRuns > 0 && updated.RunCount < updated.MaxRuns && current.Status == StatusCompleted && !scheduleChanged && !current.ReviewRequired {
 		updated.Enabled = true
 		updated.Status = StatusScheduled
 		if updated.NextRun == nil {
@@ -748,6 +770,9 @@ func (s *Scheduler) Remove(id string) error {
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrJobNotFound, id)
 	}
+	if job.Status == StatusRunning {
+		return fmt.Errorf("cron job %q is running; wait for the run to finish before removing it", id)
+	}
 	delete(s.jobs, id)
 	if err := s.saveLocked(); err != nil {
 		s.jobs[id] = job
@@ -775,11 +800,14 @@ func (s *Scheduler) SetEnabled(id string, enabled bool) (Job, error) {
 	}
 	if enabled {
 		if job.MaxRuns > 0 && job.RunCount >= job.MaxRuns {
-			return Job{}, fmt.Errorf("cron job %q has reached max_runs", id)
+			return Job{}, fmt.Errorf("cron job %q has reached max_runs; increase max_runs above run_count or set it to 0 before enabling", id)
 		}
 		job.Enabled = true
-		job.Status = StatusScheduled
+		if job.Status != StatusRunning {
+			job.Status = StatusScheduled
+		}
 		job.Error = ""
+		job.ReviewRequired = false
 		if job.NextRun == nil {
 			next, err := initialNextRun(job.schedule(), s.now())
 			if err != nil {
@@ -789,7 +817,9 @@ func (s *Scheduler) SetEnabled(id string, enabled bool) (Job, error) {
 		}
 	} else {
 		job.Enabled = false
-		job.Status = StatusDisabled
+		if job.Status != StatusRunning {
+			job.Status = StatusDisabled
+		}
 	}
 	previous := s.jobs[id]
 	s.jobs[id] = job
@@ -868,6 +898,7 @@ func (s *Scheduler) RunDue(ctx context.Context) int {
 			job.Error = "previous run was interrupted"
 			job.Enabled = false
 			job.NextRun = nil
+			job.ReviewRequired = true
 			s.jobs[id] = job
 			changed = true
 		}
@@ -1012,7 +1043,7 @@ func (s *Scheduler) executeClaim(ctx context.Context, claimed Job) {
 		return
 	}
 	previous := current
-	if errors.Is(executionErr, ErrRetry) {
+	if errors.Is(executionErr, ErrRetry) && !errors.Is(executionErr, ErrReviewRequired) {
 		if current.Enabled {
 			current.Status = StatusScheduled
 			if sameSchedule(current, claimed) {
@@ -1030,6 +1061,18 @@ func (s *Scheduler) executeClaim(ctx context.Context, claimed Job) {
 	}
 	current.RunCount++
 	current.LastRun = timePointer(started)
+	if errors.Is(executionErr, ErrReviewRequired) {
+		current.Status = StatusFailed
+		current.Error = formatJobError(executionErr)
+		current.Enabled = false
+		current.NextRun = nil
+		current.ReviewRequired = true
+		s.jobs[current.ID] = current
+		if err := s.saveLocked(); err != nil {
+			s.jobs[current.ID] = previous
+		}
+		return
+	}
 	if current.DeleteAfterRun {
 		delete(s.jobs, current.ID)
 		if err := s.saveLocked(); err != nil {

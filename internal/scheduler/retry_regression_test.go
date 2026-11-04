@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -18,6 +19,177 @@ type schedulerTestReporter interface {
 	Skipf(string, ...any)
 	Setenv(string, string)
 	Cleanup(func())
+}
+
+func checkRunningJobCannotRemoveItself(t schedulerTestReporter) {
+	clock := time.Unix(1000, 0)
+	var removeJob func() error
+	var removalErr error
+	options := Options{Path: filepath.Join(t.TempDir(), "jobs.json"), Now: func() time.Time { return clock }, Executor: func(context.Context, string) error {
+		removalErr = removeJob()
+		return ReviewRequiredError{Message: "reconcile external state"}
+	}}
+	jobs, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobs.Add(Job{Kind: ScheduleAt, AtSeconds: 1, Message: "remove myself"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeJob = func() error { return jobs.Remove(job.ID) }
+	clock = clock.Add(time.Second)
+	if runs := jobs.RunDue(context.Background()); runs != 1 || removalErr == nil || !strings.Contains(removalErr.Error(), "running") {
+		t.Fatalf("self-removal: runs=%d error=%v", runs, removalErr)
+	}
+	restarted, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, ok := restarted.Get(job.ID); !ok || saved.Enabled || !saved.ReviewRequired || saved.Error != "reconcile external state" || saved.RunCount != 1 {
+		t.Fatalf("self-removal lost the review result: %+v", saved)
+	}
+}
+
+func checkSchedulerCrossProcessRemoval(t schedulerTestReporter) {
+	dir := os.Getenv("GOASTER_SCHEDULER_REMOVAL_TEST_DIR")
+	wait := func(name string) bool {
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				return true
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return false
+	}
+	mark := func(name string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("ready"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if dir != "" {
+		jobs, err := New(Options{Path: filepath.Join(dir, "jobs.json"), Now: func() time.Time { return time.Unix(1001, 0) }, Executor: func(context.Context, string) error {
+			mark("entered")
+			if !wait("finish") {
+				t.Fatal("timed out waiting to finish the running job")
+			}
+			return ReviewRequiredError{Message: "reconcile external state"}
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runs := jobs.RunDue(context.Background()); runs != 1 {
+			t.Fatalf("running process claimed %d jobs", runs)
+		}
+		return
+	}
+	for _, spec := range []Job{
+		{ID: "job", Kind: ScheduleAt, AtSeconds: 1, Message: "once"},
+		{ID: "job", Kind: ScheduleEvery, EverySeconds: 1, Message: "repeat"},
+	} {
+		dir = t.TempDir()
+		path := filepath.Join(dir, "jobs.json")
+		clock := time.Unix(1000, 0)
+		jobs, err := New(Options{Path: path, Now: func() time.Time { return clock }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobs.Add(spec); err != nil {
+			t.Fatal(err)
+		}
+		child := exec.Command(os.Args[0], "-test.run=^TestSchedulerManagementAndPartialUpdate$")
+		child.Env = append(os.Environ(), "GOASTER_SCHEDULER_REMOVAL_TEST_DIR="+dir)
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = child.Process.Kill() })
+		if !wait("entered") {
+			t.Fatal("child did not start the scheduled job")
+		}
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := jobs.Remove(spec.ID); err == nil || !strings.Contains(err.Error(), "running") {
+			t.Fatalf("%s: removing active job = %v", spec.Kind, err)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("%s: rejected removal changed the stored claim: %v", spec.Kind, err)
+		}
+		if active, ok := jobs.Get(spec.ID); !ok || active.Status != StatusRunning {
+			t.Fatalf("%s: active claim disappeared: %+v", spec.Kind, active)
+		}
+		for _, enabled := range []bool{false, true} {
+			if _, err := jobs.SetEnabled(spec.ID, enabled); err != nil {
+				t.Fatal(err)
+			}
+			before, err = os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := jobs.Remove(spec.ID); err == nil || !strings.Contains(err.Error(), "running") {
+				t.Fatalf("%s: removing active job with enabled=%v: %v", spec.Kind, enabled, err)
+			}
+			after, err = os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("%s: rejected removal with enabled=%v changed the claim: %v", spec.Kind, enabled, err)
+			}
+		}
+		mark("finish")
+		if err := child.Wait(); err != nil {
+			t.Fatal(err)
+		}
+		clock = clock.Add(time.Hour)
+		restarted, err := New(Options{Path: path, Now: func() time.Time { return clock }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if saved, ok := restarted.Get(spec.ID); !ok || saved.Enabled || !saved.ReviewRequired || saved.Status != StatusFailed || saved.Error != "reconcile external state" || saved.RunCount != 1 || saved.NextRun != nil {
+			t.Fatalf("%s: review was lost after removal attempt: %+v", spec.Kind, saved)
+		}
+		if runs := restarted.RunDue(context.Background()); runs != 0 {
+			t.Fatalf("%s: job awaiting review was replayed", spec.Kind)
+		}
+		if err := restarted.Remove(spec.ID); err != nil {
+			t.Fatalf("%s: removing completed claim: %v", spec.Kind, err)
+		}
+		if _, ok := restarted.Get(spec.ID); ok {
+			t.Fatalf("%s: finished job was not removed", spec.Kind)
+		}
+	}
+}
+
+func checkReviewRequiredOverridesRetry(t schedulerTestReporter) {
+	clock := time.Unix(1000, 0)
+	calls := 0
+	options := Options{Path: filepath.Join(t.TempDir(), "jobs.json"), Now: func() time.Time { return clock }, Executor: func(context.Context, string) error {
+		calls++
+		return errors.Join(ErrRetry, ReviewRequiredError{Message: "reconcile external state"})
+	}}
+	jobs, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobs.Add(Job{Kind: ScheduleAt, AtSeconds: 1, Message: "once"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Second)
+	if jobs.RunDue(context.Background()) != 1 {
+		t.Fatal("review-required job did not run")
+	}
+	jobs, err = New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Minute)
+	saved, ok := jobs.Get(job.ID)
+	if !ok || saved.Enabled || !saved.ReviewRequired || !strings.Contains(saved.Error, "reconcile external state") || jobs.RunDue(context.Background()) != 0 || calls != 1 {
+		t.Fatalf("review was lost to retry: %+v calls=%d", saved, calls)
+	}
 }
 
 func checkSchedulerCrossProcessRetry(t schedulerTestReporter) {

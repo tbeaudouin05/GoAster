@@ -236,6 +236,7 @@ func TestSchedulerManagementAndPartialUpdate(t *testing.T) {
 	}
 	checkInterruptedClaimNeedsExplicitReenable(t)
 	checkStaleSchedulersPreserveConcurrentChanges(t)
+	checkSchedulerCrossProcessRemoval(t)
 }
 
 func TestSchedulerDeletesOneTimeJobAfterExecution(t *testing.T) {
@@ -279,6 +280,8 @@ func TestSchedulerDeletesOneTimeJobAfterExecution(t *testing.T) {
 		t.Fatalf("persisted jobs after one-time execution = %#v", jobs)
 	}
 	checkSchedulerCrossProcessRetry(t)
+	checkReviewRequiredOverridesRetry(t)
+	checkRunningJobCannotRemoveItself(t)
 }
 
 func TestSchedulerHonorsMaxRunsAndPersistsFailure(t *testing.T) {
