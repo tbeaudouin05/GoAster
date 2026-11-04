@@ -130,9 +130,13 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 			reply, err := session.Reply(WithShellEnvironment(ctx, store.Values()), message)
 			if err != nil {
 				if ui.interactive {
-					ui.renderError(w, "Conversation command could not be completed.")
+					if errors.Is(err, errConversationSaveFailed) || errors.Is(err, errConversationFilePermissions) || errors.Is(err, errConversationDirectoryPermissions) || errors.Is(err, errConversationLockBusy) {
+						ui.renderError(w, requestFailureDiagnostic(err))
+					} else {
+						ui.renderError(w, "Conversation command could not be completed.")
+					}
 					if flushErr := w.Flush(); flushErr != nil {
-						return flushErr
+						return requestOutputError(err, flushErr)
 					}
 					continue
 				}
@@ -280,7 +284,10 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 		}
 		if err != nil {
 			if flushErr := w.Flush(); flushErr != nil {
-				return flushErr
+				if !ui.interactive {
+					return flushErr
+				}
+				return requestOutputError(err, flushErr)
 			}
 			if errors.Is(err, ErrConversationRecovery) {
 				if !ui.interactive {
@@ -288,7 +295,7 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 				}
 				ui.renderError(w, ErrConversationRecovery.Error())
 				if flushErr := w.Flush(); flushErr != nil {
-					return flushErr
+					return requestOutputError(err, flushErr)
 				}
 				continue
 			}
@@ -298,23 +305,19 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 				}
 				ui.renderError(w, message)
 				if flushErr := w.Flush(); flushErr != nil {
-					return flushErr
+					return requestOutputError(err, flushErr)
 				}
 				continue
 			}
-			if ui.interactive && errors.Is(err, ErrModelUnavailable) {
-				ui.renderError(w, boundText(err.Error(), 512))
-				if flushErr := w.Flush(); flushErr != nil {
-					return flushErr
+			if ui.interactive {
+				if errors.Is(err, ErrModelUnavailable) || classifyRequestError(err) == requestErrorRecoverable {
+					ui.renderRequestError(w, err)
+					if flushErr := w.Flush(); flushErr != nil {
+						return requestOutputError(err, flushErr)
+					}
+					continue
 				}
-				continue
-			}
-			if ui.interactive && classifyRequestError(err) == requestErrorRecoverable {
-				ui.renderRequestError(w)
-				if flushErr := w.Flush(); flushErr != nil {
-					return flushErr
-				}
-				continue
+				return safeRequestDiagnosticError(err)
 			}
 			return err
 		}

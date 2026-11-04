@@ -43,6 +43,47 @@ const (
 	messageTrimSuffix = "\n[message shortened by GoAster]"
 )
 
+type conversationStateError uint8
+
+const (
+	errConversationStateChanged conversationStateError = iota + 1
+	errConversationStateTooLarge
+	errConversationSaveFailed
+	errConversationLockBusy
+)
+
+func (err conversationStateError) Error() string {
+	switch err {
+	case errConversationStateChanged:
+		return "conversation state changed in another instance; restart to load the latest history"
+	case errConversationStateTooLarge:
+		return "conversation state changed; restart to recover it"
+	case errConversationSaveFailed:
+		return "conversation state could not be saved"
+	case errConversationLockBusy:
+		return "conversation lock is busy"
+	default:
+		return "conversation state error"
+	}
+}
+
+type conversationSaveError struct {
+	operation string
+	cause     error
+}
+
+func (err conversationSaveError) Error() string {
+	return fmt.Sprintf("%s: %v", err.operation, err.cause)
+}
+func (err conversationSaveError) Unwrap() error        { return err.cause }
+func (err conversationSaveError) Is(target error) bool { return target == errConversationSaveFailed }
+
+type conversationLockBusyError struct{ cause error }
+
+func (err conversationLockBusyError) Error() string        { return err.cause.Error() }
+func (err conversationLockBusyError) Unwrap() error        { return err.cause }
+func (err conversationLockBusyError) Is(target error) bool { return target == errConversationLockBusy }
+
 // SessionStore persists the local terminal conversation separately from
 // credentials and environment settings.
 type SessionStore struct {
@@ -302,7 +343,7 @@ func (s *SessionStore) saveStateWithVersion(summary string, messages []ChatMessa
 		expected = expectedVersion
 	}
 	if current != expected {
-		return [sha256.Size]byte{}, errors.New("conversation state changed in another instance; restart to load the latest history")
+		return [sha256.Size]byte{}, errConversationStateChanged
 	}
 	if !hasExpectedVersion {
 		selected = s.selectedSkills
@@ -619,7 +660,7 @@ func validateSessionFileInfo(info os.FileInfo) error {
 		return fmt.Errorf("conversation file must be a regular file")
 	}
 	if info.Mode().Perm()&0077 != 0 {
-		return fmt.Errorf("conversation file permissions are too broad: %04o (want 0600)", info.Mode().Perm())
+		return fmt.Errorf("%w: %04o (want 0600)", errConversationFilePermissions, info.Mode().Perm())
 	}
 	if info.Mode().Perm()&0444 == 0 {
 		return fmt.Errorf("conversation file is not readable")
@@ -662,7 +703,7 @@ func validateSessionDirectory(directory string, create bool) error {
 				return fmt.Errorf("restrict conversation directory: %w", err)
 			}
 		} else if info.Mode().Perm()&0077 != 0 {
-			return fmt.Errorf("conversation directory permissions are too broad: %04o (want 0700)", info.Mode().Perm())
+			return fmt.Errorf("%w: %04o (want 0700)", errConversationDirectoryPermissions, info.Mode().Perm())
 		}
 	}
 	return nil
@@ -713,6 +754,9 @@ func (s *SessionStore) lock(turn bool) (func(), error) {
 	}
 	if err := filesync.LockFile(file); err != nil {
 		_ = file.Close()
+		if filesync.IsLockBusy(err) {
+			err = conversationLockBusyError{cause: err}
+		}
 		return nil, fmt.Errorf("lock conversation state (another instance may be using it): %w", err)
 	}
 	return func() { _ = file.Close() }, nil
@@ -731,7 +775,7 @@ func sessionVersion(path string) ([sha256.Size]byte, error) {
 		return absent, err
 	}
 	if info.Size() > maxSessionFileBytes {
-		return absent, errors.New("conversation state changed; restart to recover it")
+		return absent, errConversationStateTooLarge
 	}
 	file, err := os.Open(path)
 	if err != nil {

@@ -374,6 +374,9 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 			if err == nil || reply != "" {
 				t.Fatalf("reply = %q, %v; want save failure", reply, err)
 			}
+			if !errors.Is(err, errConversationSaveFailed) || !errors.Is(err, errConversationLockBusy) || requestFailureDiagnostic(err) != requestFailureStateSave+"\n"+requestFailureLockBusy+"\n"+requestUncertaintyWarning {
+				t.Fatalf("save lock contention diagnostic = %q, error %v", requestFailureDiagnostic(err), err)
+			}
 			if !reflect.DeepEqual(session.history, wantHistory) || session.summary != wantSummary {
 				t.Fatalf("failed save retained turn or lost checkpoint: %q, %+v", session.summary, session.history)
 			}
@@ -385,6 +388,21 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 			_, histories := provider.calls()
 			if containsMessage(histories[len(histories)-1], "user", "undisplayed question") {
 				t.Fatal("retry included undisplayed turn")
+			}
+			if compact {
+				session.history = numberedHistory(maxSessionMessages)
+				version, err := session.store.saveStateWithVersion(session.summary, session.history, session.selectedSkills, session.storeVersion, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				session.storeVersion = version
+				cause := errors.New("PRIVATE_COMPACTION_SAVE_CAUSE")
+				session.store.syncDirectory = func(string) error { return fmt.Errorf("%s: %w", path, cause) }
+				_, err = session.Reply(context.Background(), "compaction checkpoint")
+				diagnostic := safeRequestDiagnosticError(err)
+				if !errors.Is(diagnostic, errConversationSaveFailed) || !errors.Is(diagnostic, cause) || !strings.Contains(diagnostic.Error(), requestFailureStateSave) || strings.Contains(diagnostic.Error(), "PRIVATE_") || strings.Contains(diagnostic.Error(), path) {
+					t.Fatalf("compaction save diagnostic = %v", diagnostic)
+				}
 			}
 		})
 	}

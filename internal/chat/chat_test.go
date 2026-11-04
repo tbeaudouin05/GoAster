@@ -309,7 +309,7 @@ func TestInteractiveRequestLifecycleShowsWorkingAndRetries(t *testing.T) {
 	if calls != 3 || strings.Count(result, "Working...") != 3 {
 		t.Fatalf("request lifecycle calls/output = %d/%q", calls, result)
 	}
-	if !strings.Contains(result, "Check whether any actions completed") || !strings.Contains(result, "retried reply") {
+	if !strings.Contains(result, "If an earlier attempt may have failed or been interrupted") || !strings.Contains(result, "check whether any actions completed") || !strings.Contains(result, "retried reply") {
 		t.Fatalf("missing recoverable error or retry reply: %q", result)
 	}
 	if strings.Contains(result, "temporary provider failure") {
@@ -407,7 +407,7 @@ func TestInteractiveToolFailureShowsSafeRequestError(t *testing.T) {
 	}
 	result := output.String()
 	if !strings.Contains(result, "Tool web_fetch: fetching a public page") ||
-		!strings.Contains(result, "Check whether any actions completed") || !strings.Contains(result, "Retry complete.") {
+		!strings.Contains(result, "If an earlier attempt may have failed or been interrupted") || !strings.Contains(result, "check whether any actions completed") || !strings.Contains(result, "Retry complete.") {
 		t.Fatalf("tool failure and retry lifecycle was not displayed: %q", result)
 	}
 	if strings.Contains(result, "PRIVATE_TOKEN") || strings.Contains(result, "private tool failure details") {
@@ -533,7 +533,7 @@ func TestInteractiveAttachmentFailureCleansUpBeforeRetry(t *testing.T) {
 		t.Errorf("temporary attachment remained after a failed inspection: %v", err)
 	}
 	result := output.String()
-	if !strings.Contains(result, "Check whether any actions completed") || !strings.Contains(result, "retry succeeded") {
+	if !strings.Contains(result, "If an earlier attempt may have failed or been interrupted") || !strings.Contains(result, "check whether any actions completed") || !strings.Contains(result, "retry succeeded") {
 		t.Fatalf("failed attachment did not return to a successful retry: %q", result)
 	}
 	if strings.Contains(result, temporaryPath) || strings.Contains(result, "inspection provider failed") {

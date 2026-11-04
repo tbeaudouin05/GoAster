@@ -229,11 +229,11 @@ func validTerminalToolName(name string) bool {
 	return true
 }
 
-func (ui terminalUI) renderRequestError(output io.Writer) {
+func (ui terminalUI) renderRequestError(output io.Writer, err error) {
 	if !ui.interactive {
 		return
 	}
-	ui.renderError(output, "Request failed. Check whether any actions completed before continuing or repeating them.")
+	ui.renderError(output, requestFailureDiagnostic(err))
 }
 
 func (ui terminalUI) renderAssistant(output io.Writer, model, reply string) {

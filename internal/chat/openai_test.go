@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,9 +24,11 @@ import (
 	"time"
 
 	"goaster/internal/attachment"
+	"goaster/internal/localenv"
 )
 
 func TestCredentialStoreSaveAndLoadIsPrivate(t *testing.T) {
+	requirePrivateSessionPermissions(t)
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "nested", "auth.json")}
 	want := Credential{
 		AccessToken:  "access-token",
@@ -62,8 +65,21 @@ func TestCredentialStoreSaveAndLoadIsPrivate(t *testing.T) {
 	if err := os.Chmod(store.Path, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Load(); err == nil || !strings.Contains(err.Error(), "permissions") {
+	fileInfo, err = os.Stat(store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileInfo.Mode().Perm() != 0644 {
+		t.Skip("filesystem cannot represent broad file permissions")
+	}
+	if _, err := store.Load(); !errors.Is(err, errCredentialPermissions) || !strings.Contains(err.Error(), "credential file permissions are too broad: 0644 (want 0600)") {
 		t.Fatalf("insecure credential file load error = %v", err)
+	}
+	provider := NewCodexProvider(store)
+	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
+	diagnostic := requestFailureDiagnostic(err)
+	if !errors.Is(err, errCredentialPermissions) || errors.Is(err, ErrLoginRequired) || !strings.Contains(diagnostic, "credential file permissions are too broad") || !strings.Contains(diagnostic, "mode 0600") || strings.Contains(diagnostic, store.Path) || strings.Contains(diagnostic, want.AccessToken) {
+		t.Fatalf("insecure credential request diagnostic = %q; error = %v", diagnostic, err)
 	}
 }
 
@@ -742,22 +758,109 @@ func mustMarshalJSON(t *testing.T, value any) []byte {
 }
 
 func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testing.T) {
+	requirePrivateSessionPermissions(t)
+	setupSkillFixture(t)
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "missing-auth.json")}
 	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	var refreshStatus atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/token" {
+			status := int(refreshStatus.Load())
+			if status != http.StatusOK {
+				w.WriteHeader(status)
+				return
+			}
+			fmt.Fprint(w, `{"access_token":"new-test-access","refresh_token":"new-test-refresh","expires_in":3600}`)
+			return
+		}
 		requests.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer server.Close()
 
 	provider := NewCodexProvider(store)
 	provider.backendURL = server.URL + "/responses"
+	provider.httpClient = server.Client()
+	provider.auth.AuthBaseURL = server.URL
+	provider.auth.HTTPClient = server.Client()
 	_, err := provider.Reply(context.Background(), "gpt-test", "hello")
-	if !errors.Is(err, ErrLoginRequired) || !strings.Contains(err.Error(), "restart GoAster") {
+	missingError := "OpenAI subscription authentication required: credentials were not found; restart GoAster to authenticate"
+	if !errors.Is(err, ErrLoginRequired) || !errors.Is(err, errCredentialsMissing) || err.Error() != missingError {
 		t.Fatalf("authentication error = %v", err)
 	}
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("backend requests = %d, want 0", got)
 	}
+	terminalStore := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+	if err := terminalStore.Load(); err != nil {
+		t.Fatal(err)
+	}
+	checkLineError := func(want string) {
+		t.Helper()
+		err := runChatLoopWithUI(context.Background(), TerminalInput{reader: strings.NewReader("hello\n")}, io.Discard,
+			NewSession(Config{Model: "gpt-test"}, provider), terminalStore,
+			EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{})
+		if err == nil || err.Error() != "model gpt-test: "+want {
+			t.Fatalf("noninteractive authentication error = %v, want %q", err, want)
+		}
+	}
+	var output bytes.Buffer
+	err = runChatLoopWithUI(context.Background(), TerminalInput{reader: strings.NewReader("hello\n"), interactive: true}, &output,
+		NewSession(Config{Model: "gpt-test"}, provider), terminalStore,
+		EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{interactive: true, width: 100})
+	if err != nil || !strings.Contains(output.String(), requestFailureCredentialsMissing) || strings.Contains(output.String(), missingError) {
+		t.Fatalf("missing credentials interactive error = %v, output %q", err, output.String())
+	}
+	checkLineError(missingError)
+	if err := os.WriteFile(store.Path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
+	malformedError := "OpenAI subscription authentication required: parse credential file: unexpected end of JSON input; restart GoAster to authenticate"
+	if !errors.Is(err, ErrLoginRequired) || errors.Is(err, errCredentialsMissing) || err.Error() != malformedError {
+		t.Fatalf("malformed credentials error = %v", err)
+	}
+	checkLineError(malformedError)
+	output.Reset()
+	err = runChatLoopWithUI(context.Background(), TerminalInput{reader: strings.NewReader("hello\n"), interactive: true}, &output,
+		NewSession(Config{Model: "gpt-test"}, provider), terminalStore,
+		EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{interactive: true, width: 100})
+	if err != nil || !strings.Contains(output.String(), requestFailureAuthentication) || strings.Contains(strings.ToLower(output.String()), "restart") {
+		t.Fatalf("malformed credentials interactive error = %v, output %q", err, output.String())
+	}
+	if err := store.Save(Credential{AccessToken: "test-access", ExpiresAt: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
+	expiredError := "OpenAI subscription authentication required: saved access token is expired and has no refresh token; restart GoAster to authenticate"
+	if !errors.Is(err, ErrLoginRequired) || err.Error() != expiredError || requestFailureDiagnostic(err) != requestFailureAuthentication+"\n"+requestUncertaintyWarning {
+		t.Fatalf("expired credentials error = %v", err)
+	}
+	checkLineError(expiredError)
+	if err := store.Save(Credential{AccessToken: "test-access", RefreshToken: "test-refresh", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	refreshStatus.Store(http.StatusUnauthorized)
+	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
+	rejectedRefreshError := "OpenAI session expired; restart GoAster to authenticate: OpenAI subscription authentication required: saved refresh token was rejected with status 401 Unauthorized"
+	if !errors.Is(err, ErrLoginRequired) || err.Error() != rejectedRefreshError || requestFailureDiagnostic(err) != requestFailureAuthentication+"\n"+requestUncertaintyWarning {
+		t.Fatalf("rejected refresh error = %v", err)
+	}
+	checkLineError(rejectedRefreshError)
+	refreshStatus.Store(http.StatusInternalServerError)
+	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
+	refreshFailureError := "OpenAI session expired; restart GoAster to authenticate: token refresh failed with status 500 Internal Server Error"
+	if errors.Is(err, ErrLoginRequired) || !errors.Is(err, errRequestAuthentication) || err.Error() != refreshFailureError || requestFailureDiagnostic(err) != requestFailureAuthentication+"\n"+requestUncertaintyWarning {
+		t.Fatalf("refresh failure error = %v", err)
+	}
+	checkLineError(refreshFailureError)
+	refreshStatus.Store(http.StatusOK)
+	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
+	unauthorizedError := "OpenAI subscription authentication required; restart GoAster to authenticate"
+	if !errors.Is(err, ErrLoginRequired) || err.Error() != unauthorizedError || requestFailureDiagnostic(err) != requestFailureAuthentication+"\n"+requestUncertaintyWarning {
+		t.Fatalf("rejected refreshed credentials error = %v", err)
+	}
+	checkLineError(unauthorizedError)
 }
 
 func TestCodexChatSendsExitTextToProviderAndRequiresAuth(t *testing.T) {

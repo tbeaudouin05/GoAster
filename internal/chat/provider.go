@@ -17,6 +17,45 @@ import (
 // Providers wrap ErrModelUnavailable when the selected model is unavailable.
 var ErrModelUnavailable = errors.New("model unavailable")
 
+const (
+	requestUncertaintyWarning     = "If an earlier attempt may have failed or been interrupted, it may have performed actions and its tool results may be unavailable. Before continuing or retrying, check whether any actions completed and verify external state."
+	requestHistoryWarning         = "Conversation history may omit failed or interrupted attempts, even after a restart. Do not assume that an omitted attempt performed no actions."
+	requestScheduledRepeatWarning = "Carry out explicitly scheduled normal repeats as requested; do not suppress them because previous scheduled runs occurred."
+
+	requestFailureAuthentication     = "Authentication is required to continue. Check your OpenAI sign-in and account status."
+	requestFailureCredentialsMissing = "OpenAI credentials were not found. Restart GoAster to initiate sign-in."
+	requestFailureTimeout            = "The request timed out."
+	requestFailureModelUnavailable   = "The selected model is unavailable."
+	requestFailureInterrupted        = "The request was interrupted."
+	requestFailureStateSave          = "Conversation state could not be saved or confirmed. Recent changes may not be recorded."
+	requestFailureLockBusy           = "Another instance may be using the conversation. Wait for it to finish, then restart GoAster to reload the conversation."
+	requestFailureCredentialMode     = "The credential file permissions are too broad. Restrict access to the file (mode 0600) before retrying."
+	requestFailureConversationMode   = "The conversation file permissions are too broad. Restrict access to the file (mode 0600) before retrying."
+	requestFailureDirectoryMode      = "The conversation directory permissions are too broad. Restrict access to the directory (mode 0700) before retrying."
+	requestFailureUnknown            = "The request failed for an unknown reason."
+)
+
+type insecurePermissionsError uint8
+
+const (
+	errCredentialPermissions insecurePermissionsError = iota + 1
+	errConversationFilePermissions
+	errConversationDirectoryPermissions
+)
+
+func (err insecurePermissionsError) Error() string {
+	switch err {
+	case errCredentialPermissions:
+		return "credential file permissions are too broad"
+	case errConversationFilePermissions:
+		return "conversation file permissions are too broad"
+	case errConversationDirectoryPermissions:
+		return "conversation directory permissions are too broad"
+	default:
+		return "permissions are too broad"
+	}
+}
+
 // ErrSessionBusy is returned before a scheduled turn starts when it must be
 // deferred, such as lock contention or an unresolved recovery. Retrying cannot
 // repeat a tool action.
@@ -38,6 +77,73 @@ func (err ModelRequestError) Error() string {
 }
 
 func (err ModelRequestError) Unwrap() error { return err.Err }
+
+type safeRequestError struct {
+	message string
+	cause   error
+}
+
+func (err safeRequestError) Error() string {
+	return err.message
+}
+
+func (err safeRequestError) Unwrap() error {
+	return err.cause
+}
+
+func requestFailureDiagnostic(err error) string {
+	message := requestFailureUnknown
+	switch {
+	case errors.Is(err, errConversationStateChanged):
+		message = errConversationStateChanged.Error()
+	case errors.Is(err, errConversationStateTooLarge):
+		message = errConversationStateTooLarge.Error()
+	case errors.Is(err, errConversationLockBusy):
+		message = requestFailureLockBusy
+	case errors.Is(err, errCredentialPermissions):
+		message = requestFailureCredentialMode
+	case errors.Is(err, errConversationFilePermissions):
+		message = requestFailureConversationMode
+	case errors.Is(err, errConversationDirectoryPermissions):
+		message = requestFailureDirectoryMode
+	case errors.Is(err, errConversationSaveFailed):
+		message = requestFailureStateSave
+	case errors.Is(err, context.DeadlineExceeded):
+		message = requestFailureTimeout
+	case errors.Is(err, context.Canceled):
+		message = requestFailureInterrupted
+	case errors.Is(err, errCredentialsMissing):
+		message = requestFailureCredentialsMissing
+	case errors.Is(err, ErrLoginRequired) || errors.Is(err, errRequestAuthentication):
+		message = requestFailureAuthentication
+	case errors.Is(err, ErrModelUnavailable):
+		message = requestFailureModelUnavailable
+	}
+	if errors.Is(err, errConversationSaveFailed) && message != requestFailureStateSave {
+		message = requestFailureStateSave + "\n" + message
+	}
+	return message + "\n" + requestUncertaintyWarning
+}
+
+func safeRequestDiagnosticError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return safeRequestError{message: requestFailureDiagnostic(err), cause: err}
+}
+
+func requestOutputError(requestErr, outputErr error) error {
+	message := requestFailureDiagnostic(requestErr)
+	if errors.Is(requestErr, ErrConversationRecovery) {
+		message = ErrConversationRecovery.Error()
+	} else if skillMessage := SkillRecoveryMessage(requestErr); skillMessage != "" {
+		message = skillMessage
+	}
+	return safeRequestError{
+		message: "Could not write request output.\n" + message,
+		cause:   errors.Join(requestErr, outputErr),
+	}
+}
 
 type requestErrorClass uint8
 
@@ -272,7 +378,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		changed := current != s.storeVersion
 		if changed || (scheduled && current == [sha256.Size]byte{}) {
 			if !scheduled {
-				return "", fatalRequestError(errors.New("conversation state changed in another instance; restart to load the latest history"))
+				return "", fatalRequestError(errConversationStateChanged)
 			}
 			loaded, err := s.store.loadStateUnderTurnLock(&s.storeVersion)
 			if err != nil {
@@ -306,7 +412,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		if s.store != nil {
 			version, err := s.store.saveStateWithVersion("", nil, nil, s.storeVersion, true)
 			if err != nil {
-				return "", fatalRequestError(fmt.Errorf("save cleared conversation state: %w", err))
+				return "", fatalRequestError(conversationSaveError{operation: "save cleared conversation state", cause: err})
 			}
 			s.storeVersion = version
 		}
@@ -394,7 +500,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 			if s.store != nil {
 				version, saveErr := s.store.saveStateWithVersion(summary, previousTurns, s.selectedSkills, s.storeVersion, true)
 				if saveErr != nil {
-					return "", fatalRequestError(fmt.Errorf("save conversation state: %w", saveErr))
+					return "", fatalRequestError(conversationSaveError{operation: "save conversation state", cause: saveErr})
 				}
 				s.storeVersion = version
 			}
@@ -536,7 +642,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 	if s.store != nil {
 		version, saveErr := s.store.saveStateWithVersion(summary, completed, s.selectedSkills, s.storeVersion, true)
 		if saveErr != nil {
-			return "", fatalRequestError(fmt.Errorf("save conversation state: %w", saveErr))
+			return "", fatalRequestError(conversationSaveError{operation: "save conversation state", cause: saveErr})
 		}
 		s.storeVersion = version
 	}
