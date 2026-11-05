@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -65,7 +66,7 @@ func (err postToolAuthenticationError) Is(target error) bool {
 // PostToolAuthenticationReviewMessage also identifies canceled requests so a
 // scheduled run can retain the uncertainty for manual review.
 func PostToolAuthenticationReviewMessage(err error) string {
-	if errors.Is(err, postToolAuthenticationMarker{}) {
+	if requestFailureIs(err, postToolAuthenticationMarker{}) {
 		return postToolAuthenticationWarning
 	}
 	return ""
@@ -74,7 +75,7 @@ func PostToolAuthenticationReviewMessage(err error) string {
 // PostToolAuthenticationMessage returns fixed guidance for a live caller,
 // including when only the client's response body was canceled or timed out.
 func PostToolAuthenticationMessage(err error) string {
-	if errors.Is(err, postToolParentCanceledMarker{}) {
+	if requestFailureIs(err, postToolParentCanceledMarker{}) {
 		return ""
 	}
 	return PostToolAuthenticationReviewMessage(err)
@@ -179,56 +180,158 @@ func (err safeRequestError) Unwrap() error {
 	return err.cause
 }
 
+const maxRequestErrorDepth = 1024
+
+func requestErrorComparable(err error) bool {
+	return err != nil && reflect.ValueOf(err).Comparable()
+}
+
+func requestFailureErrors(err error) []error {
+	if err == nil {
+		return nil
+	}
+	nodes := make([]error, 0, 4)
+	visited := make(map[error]struct{})
+	var collect func(error, int)
+	collect = func(current error, depth int) {
+		if current == nil || depth > maxRequestErrorDepth {
+			return
+		}
+		if requestErrorComparable(current) {
+			if _, seen := visited[current]; seen {
+				return
+			}
+			visited[current] = struct{}{}
+		}
+		nodes = append(nodes, current)
+		if joined, ok := current.(interface{ Unwrap() []error }); ok {
+			for _, cause := range joined.Unwrap() {
+				collect(cause, depth+1)
+			}
+			return
+		}
+		collect(errors.Unwrap(current), depth+1)
+	}
+	collect(err, 0)
+	return nodes
+}
+
+func requestFailureIs(err, target error) bool {
+	if err == nil {
+		return target == nil
+	}
+	if target == nil {
+		return false
+	}
+	targetComparable := requestErrorComparable(target)
+	for _, current := range requestFailureErrors(err) {
+		if targetComparable && requestErrorComparable(current) && current == target {
+			return true
+		}
+		if matcher, ok := current.(interface{ Is(error) bool }); ok && matcher.Is(target) {
+			return true
+		}
+	}
+	return false
+}
+
 func requestFailureDiagnostic(err error) string {
-	if message := PostToolAuthenticationMessage(err); message != "" {
-		return message
-	}
 	message := requestFailureUnknown
-	switch {
-	case errors.Is(err, errConversationStateChanged):
-		message = errConversationStateChanged.Error()
-	case errors.Is(err, errConversationStateTooLarge):
-		message = errConversationStateTooLarge.Error()
-	case errors.Is(err, errConversationLockBusy):
-		message = requestFailureLockBusy
-	case errors.Is(err, errCredentialPermissions):
-		message = requestFailureCredentialMode
-	case errors.Is(err, errConversationFilePermissions):
-		message = requestFailureConversationMode
-	case errors.Is(err, errConversationDirectoryPermissions):
-		message = requestFailureDirectoryMode
-	case errors.Is(err, errConversationSaveFailed):
-		message = requestFailureStateSave
-	case errors.Is(err, context.DeadlineExceeded):
-		message = requestFailureTimeout
-	case errors.Is(err, context.Canceled):
-		message = requestFailureInterrupted
-	case errors.Is(err, errCredentialsMissing):
-		message = requestFailureCredentialsMissing
-	case errors.Is(err, ErrLoginRequired) || errors.Is(err, errRequestAuthentication):
-		message = requestFailureAuthentication
-	case errors.Is(err, ErrModelUnavailable):
-		message = requestFailureModelUnavailable
+	if authenticationMessage := PostToolAuthenticationMessage(err); authenticationMessage != "" {
+		message = authenticationMessage
+	} else {
+		switch {
+		case requestFailureIs(err, errConversationStateChanged):
+			message = errConversationStateChanged.Error()
+		case requestFailureIs(err, errConversationStateTooLarge):
+			message = errConversationStateTooLarge.Error()
+		case requestFailureIs(err, errConversationLockBusy):
+			message = requestFailureLockBusy
+		case requestFailureIs(err, errCredentialPermissions):
+			message = requestFailureCredentialMode
+		case requestFailureIs(err, errConversationFilePermissions):
+			message = requestFailureConversationMode
+		case requestFailureIs(err, errConversationDirectoryPermissions):
+			message = requestFailureDirectoryMode
+		case requestFailureIs(err, errConversationSaveFailed):
+			message = requestFailureStateSave
+		case requestFailureIs(err, context.DeadlineExceeded):
+			message = requestFailureTimeout
+		case requestFailureIs(err, context.Canceled):
+			message = requestFailureInterrupted
+		case requestFailureIs(err, errCredentialsMissing):
+			message = requestFailureCredentialsMissing
+		case requestFailureIs(err, ErrLoginRequired) || requestFailureIs(err, errRequestAuthentication):
+			message = requestFailureAuthentication
+		case requestFailureIs(err, ErrModelUnavailable):
+			message = requestFailureModelUnavailable
+		}
 	}
-	if errors.Is(err, errConversationSaveFailed) && message != requestFailureStateSave {
+	if requestFailureIs(err, errConversationSaveFailed) && message != requestFailureStateSave {
 		message = requestFailureStateSave + "\n" + message
 	}
-	return message + "\n" + requestUncertaintyWarning
+	return requestFailureMessage(message, err) + "\n" + requestUncertaintyWarning
+}
+
+func requestFailureMessage(message string, err error) string {
+	if details := requestFailureDetails(err); details != "" {
+		if strings.HasPrefix(details, message+"\n") {
+			details = strings.TrimPrefix(details, message+"\n")
+		}
+		if details != "" && details != message {
+			message += "\nUnderlying error: " + details
+		}
+	}
+	return message
+}
+
+func requestRecoveryDiagnostic(err error) string {
+	if requestFailureIs(err, ErrConversationRecovery) {
+		return requestFailureMessage(ErrConversationRecovery.Error(), err)
+	}
+	if message := SkillRecoveryMessage(err); message != "" {
+		return requestFailureMessage(message, err)
+	}
+	return ""
+}
+
+// requestFailureDetails keeps the full error text, including causes whose
+// outer error intentionally uses a user-facing marker message.
+func requestFailureDetails(err error) string {
+	if err == nil {
+		return ""
+	}
+	details := strings.Builder{}
+	for _, current := range requestFailureErrors(err) {
+		message := current.Error()
+		if message != "" && !strings.Contains(details.String(), message) {
+			if details.Len() > 0 {
+				details.WriteByte('\n')
+			}
+			details.WriteString(message)
+		}
+	}
+	return details.String()
 }
 
 func safeRequestDiagnosticError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return safeRequestError{message: requestFailureDiagnostic(err), cause: err}
+	message := requestRecoveryDiagnostic(err)
+	if message == "" {
+		message = requestFailureDiagnostic(err)
+	}
+	return safeRequestError{message: message, cause: err}
 }
 
 func requestOutputError(requestErr, outputErr error) error {
-	message := requestFailureDiagnostic(requestErr)
-	if errors.Is(requestErr, ErrConversationRecovery) {
-		message = ErrConversationRecovery.Error()
-	} else if skillMessage := SkillRecoveryMessage(requestErr); skillMessage != "" {
-		message = skillMessage
+	message := requestRecoveryDiagnostic(requestErr)
+	if message == "" {
+		message = requestFailureDiagnostic(requestErr)
+	}
+	if details := requestFailureDetails(outputErr); details != "" {
+		message += "\nOutput error: " + details
 	}
 	return safeRequestError{
 		message: "Could not write request output.\n" + message,

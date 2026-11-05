@@ -20,7 +20,7 @@ import (
 	"goaster/internal/localenv"
 )
 
-func TestRequestFailureDiagnosticUsesOnlyFixedRedactedText(t *testing.T) {
+func TestRequestFailureDiagnosticIncludesUnderlyingErrorAndContext(t *testing.T) {
 	secret := "PRIVATE_TOKEN https://example.test/private rm -rf"
 	wantWarning := requestUncertaintyWarning
 	saveFailure := errors.New(secret)
@@ -33,6 +33,7 @@ func TestRequestFailureDiagnosticUsesOnlyFixedRedactedText(t *testing.T) {
 		{name: "missing credentials", err: fmt.Errorf("%s: %w", secret, errCredentialsMissing), want: requestFailureCredentialsMissing + "\n" + wantWarning},
 		{name: "authentication failure", err: authenticationRequestError{cause: errors.New(secret)}, want: requestFailureAuthentication + "\n" + wantWarning},
 		{name: "authentication timeout", err: authenticationRequestError{cause: fmt.Errorf("%s: %w", secret, context.DeadlineExceeded)}, want: requestFailureTimeout + "\n" + wantWarning},
+		{name: "post-tool authentication", err: postToolAuthenticationError{cause: errors.New(secret)}, want: postToolAuthenticationWarning + "\n" + wantWarning},
 		{name: "timeout", err: fmt.Errorf("%s: %w", secret, context.DeadlineExceeded), want: requestFailureTimeout + "\n" + wantWarning},
 		{name: "model unavailable", err: fmt.Errorf("%s: %w", secret, ErrModelUnavailable), want: requestFailureModelUnavailable + "\n" + wantWarning},
 		{name: "interrupted", err: fmt.Errorf("%s: %w", secret, context.Canceled), want: requestFailureInterrupted + "\n" + wantWarning},
@@ -53,11 +54,12 @@ func TestRequestFailureDiagnosticUsesOnlyFixedRedactedText(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := requestFailureDiagnostic(test.err)
-			if got != test.want {
-				t.Fatalf("diagnostic = %q, want %q", got, test.want)
+			contextMessage := strings.Split(test.want, "\n")[0]
+			if !strings.Contains(got, contextMessage) || !strings.Contains(got, wantWarning) {
+				t.Fatalf("diagnostic = %q, want context %q and warning %q", got, contextMessage, wantWarning)
 			}
-			if strings.Contains(got, secret) || strings.Contains(got, "PRIVATE_TOKEN") || strings.Contains(got, "https://") || strings.Contains(got, "rm -rf") {
-				t.Fatalf("diagnostic leaked request details: %q", got)
+			if !strings.Contains(got, "Underlying error: ") || !strings.Contains(got, test.err.Error()) {
+				t.Fatalf("diagnostic omitted underlying error details: %q", got)
 			}
 			switch test.name {
 			case "conversation permissions":
@@ -124,7 +126,24 @@ func TestRequestFailureDiagnosticUsesOnlyFixedRedactedText(t *testing.T) {
 	}
 }
 
-func TestInteractiveRequestDiagnosticsKeepRecoverableAndFatalPathsSafe(t *testing.T) {
+func TestRequestFailureDiagnosticDoesNotBoundUnderlyingError(t *testing.T) {
+	detail := strings.Repeat("PRIVATE_PROVIDER_DETAIL ", 128)
+	diagnostic := requestFailureDiagnostic(errors.New(detail))
+	if !strings.Contains(diagnostic, detail) {
+		t.Fatalf("diagnostic truncated the underlying error: got %d detail bytes, want %d", len(diagnostic), len(detail))
+	}
+	cyclicDiagnostic := requestFailureDiagnostic(cyclicRequestError{})
+	if !strings.Contains(cyclicDiagnostic, "cyclic request error") || !strings.Contains(cyclicDiagnostic, requestUncertaintyWarning) {
+		t.Fatalf("cyclic diagnostic = %q", cyclicDiagnostic)
+	}
+}
+
+type cyclicRequestError struct{}
+
+func (cyclicRequestError) Error() string { return "cyclic request error" }
+func (cyclicRequestError) Unwrap() error { return cyclicRequestError{} }
+
+func TestInteractiveRequestDiagnosticsExposeRecoverableAndFatalDetails(t *testing.T) {
 	requirePrivateSessionPermissions(t)
 	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
 	if err := store.Load(); err != nil {
@@ -157,8 +176,32 @@ func TestInteractiveRequestDiagnosticsKeepRecoverableAndFatalPathsSafe(t *testin
 	if !strings.Contains(recoverableOutput.String(), requestFailureUnknown) || !strings.Contains(recoverableOutput.String(), warningFragment) {
 		t.Fatalf("recoverable diagnostic missing: %q", recoverableOutput.String())
 	}
-	if strings.Contains(recoverableOutput.String(), secret) {
-		t.Fatalf("recoverable diagnostic leaked provider detail: %q", recoverableOutput.String())
+	if !strings.Contains(recoverableOutput.String(), secret) {
+		t.Fatalf("recoverable diagnostic omitted provider detail: %q", recoverableOutput.String())
+	}
+
+	conversationCause := errors.New("PRIVATE_CONVERSATION_RECOVERY")
+	conversationProvider := providerFunc(func(context.Context, string, string) (string, error) {
+		return "", errors.Join(ErrConversationRecovery, conversationCause)
+	})
+	var conversationOutput bytes.Buffer
+	err = runChatLoopWithUI(
+		context.Background(), TerminalInput{reader: strings.NewReader("continue\n"), interactive: true}, &conversationOutput,
+		NewSession(defaultConfig(t), conversationProvider), store,
+		EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }),
+		terminalUI{interactive: true, width: 100},
+	)
+	if err != nil || !strings.Contains(conversationOutput.String(), "saved conversation is missing or invalid") || !strings.Contains(conversationOutput.String(), conversationCause.Error()) {
+		t.Fatalf("interactive recovery = %v, output %q", err, conversationOutput.String())
+	}
+	err = runChatLoopWithUI(
+		context.Background(), TerminalInput{reader: strings.NewReader("continue\n")}, io.Discard,
+		NewSession(defaultConfig(t), conversationProvider), store,
+		EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }),
+		terminalUI{},
+	)
+	if err == nil || !errors.Is(err, ErrConversationRecovery) || !errors.Is(err, conversationCause) || !strings.Contains(err.Error(), conversationCause.Error()) {
+		t.Fatalf("line recovery = %v", err)
 	}
 
 	var fatalOutput bytes.Buffer
@@ -177,8 +220,8 @@ func TestInteractiveRequestDiagnosticsKeepRecoverableAndFatalPathsSafe(t *testin
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), requestFailureTimeout) || !strings.Contains(err.Error(), warningFragment) {
 		t.Fatalf("fatal path = error %v, output %q", err, fatalOutput.String())
 	}
-	if strings.Contains(fatalOutput.String(), secret) || strings.Contains(err.Error(), secret) {
-		t.Fatalf("fatal diagnostic leaked provider detail: error=%v output=%q", err, fatalOutput.String())
+	if strings.Contains(fatalOutput.String(), secret) || !strings.Contains(err.Error(), secret) {
+		t.Fatalf("fatal diagnostic did not expose provider detail in the returned error: error=%v output=%q", err, fatalOutput.String())
 	}
 	// The CLI prints the returned error. A fatal diagnostic must appear only
 	// there, not in both the loop output and the caller's error report.
@@ -226,15 +269,19 @@ func TestInteractiveRequestDiagnosticsKeepRecoverableAndFatalPathsSafe(t *testin
 		if !errors.Is(err, requestFailure) || !errors.Is(err, writeFailure) {
 			t.Fatalf("%s write failure lost a cause: %v", failurePoint, err)
 		}
-		if strings.Contains(err.Error(), "PRIVATE_") {
-			t.Fatalf("%s write failure diagnostic = %v", failurePoint, err)
+		if failurePoint == "skill diagnostic" && !strings.Contains(err.Error(), "Restart to reload the conversation") {
+			t.Fatalf("skill recovery guidance was lost: %v", err)
 		}
-		if failurePoint == "skill diagnostic" {
-			if !strings.Contains(err.Error(), "Restart to reload the conversation") {
-				t.Fatalf("skill recovery guidance was lost: %v", err)
+		if !strings.Contains(err.Error(), "PRIVATE_REQUEST_FAILURE") {
+			t.Fatalf("%s write failure omitted request details: %v", failurePoint, err)
+		}
+		if failurePoint != "skill diagnostic" {
+			if !strings.Contains(err.Error(), requestUncertaintyWarning) {
+				t.Fatalf("%s write failure diagnostic = %v", failurePoint, err)
 			}
-		} else if !strings.Contains(err.Error(), requestUncertaintyWarning) {
-			t.Fatalf("%s write failure diagnostic = %v", failurePoint, err)
+		}
+		if !strings.Contains(err.Error(), "PRIVATE_OUTPUT_FAILURE") {
+			t.Fatalf("%s write failure omitted output details: %v", failurePoint, err)
 		}
 	}
 	{
@@ -260,8 +307,8 @@ func TestInteractiveRequestDiagnosticsKeepRecoverableAndFatalPathsSafe(t *testin
 			noticeLoopSession{NewSession(defaultConfig(t), provider)}, store,
 			EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{},
 		)
-		if err != writeFailure {
-			t.Fatalf("line-mode error = %v, want original write failure", err)
+		if !errors.Is(err, requestFailure) || !errors.Is(err, writeFailure) || !strings.Contains(err.Error(), requestFailure.Error()) || !strings.Contains(err.Error(), writeFailure.Error()) {
+			t.Fatalf("line-mode error = %v, want request and write failures", err)
 		}
 	}
 	{
@@ -326,8 +373,8 @@ func TestInteractiveRequestDiagnosticsKeepRecoverableAndFatalPathsSafe(t *testin
 		} else if !errors.Is(err, errConversationSaveFailed) || !errors.Is(err, saveCause) || !strings.Contains(err.Error(), requestFailureStateSave) {
 			t.Fatalf("request save diagnostic = %v", err)
 		}
-		if strings.Contains(output, "PRIVATE_") || err != nil && strings.Contains(err.Error(), "PRIVATE_") {
-			t.Fatalf("save diagnostic exposed private details: error %v, output %q", err, output)
+		if !strings.Contains(output, "PRIVATE_SAVE_CAUSE") && (err == nil || !strings.Contains(err.Error(), "PRIVATE_SAVE_CAUSE")) {
+			t.Fatalf("save diagnostic omitted the underlying cause: error %v, output %q", err, output)
 		}
 	}
 	{
@@ -351,8 +398,8 @@ func TestInteractiveRequestDiagnosticsKeepRecoverableAndFatalPathsSafe(t *testin
 			session, store, EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }),
 			terminalUI{interactive: true, width: 100},
 		)
-		if !errors.Is(err, errConversationSaveFailed) || !errors.Is(err, saveCause) || !errors.Is(err, outputCause) || !strings.Contains(err.Error(), requestFailureStateSave) || strings.Contains(err.Error(), "PRIVATE_") {
-			t.Fatalf("clear output failure lost a cause or leaked details: %v", err)
+		if !errors.Is(err, errConversationSaveFailed) || !errors.Is(err, saveCause) || !errors.Is(err, outputCause) || !strings.Contains(err.Error(), requestFailureStateSave) || !strings.Contains(err.Error(), "PRIVATE_SAVE_CAUSE") || !strings.Contains(err.Error(), "PRIVATE_OUTPUT_CAUSE") {
+			t.Fatalf("clear output failure lost a cause or request details: %v", err)
 		}
 	}
 	{
@@ -375,7 +422,7 @@ func TestInteractiveRequestDiagnosticsKeepRecoverableAndFatalPathsSafe(t *testin
 			if !errors.Is(err, errConversationLockBusy) || !filesync.IsLockBusy(err) || !strings.Contains(err.Error(), "lock conversation state (another instance may be using it)") {
 				t.Fatalf("typed lock contention = %v", err)
 			}
-			if diagnostic := requestFailureDiagnostic(err); diagnostic != requestFailureLockBusy+"\n"+requestUncertaintyWarning || strings.Contains(diagnostic, path) {
+			if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, requestFailureLockBusy) || !strings.Contains(diagnostic, err.Error()) || !strings.Contains(diagnostic, requestUncertaintyWarning) || strings.Contains(diagnostic, path) {
 				t.Fatalf("lock contention diagnostic = %q", diagnostic)
 			}
 			_, err = session.ReplyScheduled(context.Background(), "scheduled")

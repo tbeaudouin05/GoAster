@@ -171,15 +171,16 @@ func TestSelectedSkillCountsTowardCompaction(t *testing.T) {
 	}
 }
 
-func TestTerminalShowsSafeSkillRecovery(t *testing.T) {
+func TestTerminalShowsSkillRecoveryDetails(t *testing.T) {
 	for _, message := range []string{skillResetMessage, skillChangedMessage, skillBudgetMessage, skillSaveMessage} {
 		if !IsSkillRecoveryMessage(message) || !strings.Contains(message, skillActionNotice) || strings.Contains(message, "restart the workflow") {
 			t.Fatalf("unsafe or unrecognized recovery message: %q", message)
 		}
 	}
 	private := strings.Repeat("private-detail-", 1000)
+	privateError := errors.New(private)
 	provider := providerFunc(func(context.Context, string, string) (string, error) {
-		return "", skillRecovery(errors.New(private), skillResetMessage)
+		return "", skillRecovery(privateError, skillResetMessage)
 	})
 	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
 	if err := store.Load(); err != nil {
@@ -189,14 +190,14 @@ func TestTerminalShowsSafeSkillRecovery(t *testing.T) {
 	err := runChatLoopWithUI(context.Background(), TerminalInput{reader: strings.NewReader("run\n/clear\n"), interactive: true}, &output,
 		NewSession(defaultConfig(t), provider), store,
 		EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{interactive: true, width: 200})
-	if err != nil || !strings.Contains(output.String(), "/clear") || !strings.Contains(output.String(), "Conversation history cleared") || strings.Contains(output.String(), "private-detail") {
+	if err != nil || !strings.Contains(output.String(), "/clear") || !strings.Contains(output.String(), "Conversation history cleared") || !strings.Contains(output.String(), "private-detail") {
 		t.Fatalf("terminal output = %q, error=%v", output.String(), err)
 	}
 	output.Reset()
 	err = runChatLoopWithUI(context.Background(), TerminalInput{reader: strings.NewReader("run\n")}, &output,
 		NewSession(defaultConfig(t), provider), store,
 		EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{})
-	if err == nil || err.Error() != skillResetMessage || strings.Contains(err.Error(), "private-detail") {
+	if err == nil || !errors.Is(err, privateError) || !strings.Contains(err.Error(), skillResetMessage) || !strings.Contains(err.Error(), "private-detail") {
 		t.Fatalf("line mode error = %v", err)
 	}
 

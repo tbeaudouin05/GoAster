@@ -284,24 +284,11 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 		}
 		if err != nil {
 			if flushErr := w.Flush(); flushErr != nil {
-				if !ui.interactive {
-					return flushErr
-				}
 				return requestOutputError(err, flushErr)
 			}
-			if errors.Is(err, ErrConversationRecovery) {
+			if message := requestRecoveryDiagnostic(err); message != "" {
 				if !ui.interactive {
-					return ErrConversationRecovery
-				}
-				ui.renderError(w, ErrConversationRecovery.Error())
-				if flushErr := w.Flush(); flushErr != nil {
-					return requestOutputError(err, flushErr)
-				}
-				continue
-			}
-			if message := SkillRecoveryMessage(err); message != "" {
-				if !ui.interactive {
-					return errors.New(message)
+					return safeRequestError{message: message, cause: err}
 				}
 				ui.renderError(w, message)
 				if flushErr := w.Flush(); flushErr != nil {

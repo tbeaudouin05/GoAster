@@ -276,7 +276,7 @@ func (a *OpenAIAuthenticator) RequestDeviceCode(ctx context.Context) (DeviceCode
 		return DeviceCode{}, fmt.Errorf("read device code response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return DeviceCode{}, fmt.Errorf("device code request failed with status %s", response.Status)
+		return DeviceCode{}, errors.New(httpStatusErrorMessage("device code request failed", response.Status, body))
 	}
 	var result struct {
 		DeviceAuthID string          `json:"device_auth_id"`
@@ -374,7 +374,7 @@ func (a *OpenAIAuthenticator) pollDeviceCode(ctx context.Context, deviceCode Dev
 			continue
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return tokenResponse{}, fmt.Errorf("device authentication failed with status %s", response.Status)
+			return tokenResponse{}, errors.New(httpStatusErrorMessage("device authentication failed", response.Status, body))
 		}
 		var code deviceTokenResponse
 		if err := json.Unmarshal(body, &code); err != nil {
@@ -405,7 +405,7 @@ func (a *OpenAIAuthenticator) exchangeCode(ctx context.Context, code deviceToken
 		return tokenResponse{}, fmt.Errorf("read token response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return tokenResponse{}, fmt.Errorf("token exchange failed with status %s", response.Status)
+		return tokenResponse{}, errors.New(httpStatusErrorMessage("token exchange failed", response.Status, body))
 	}
 	var result tokenResponse
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -447,9 +447,9 @@ func (a *OpenAIAuthenticator) refresh(ctx context.Context, current Credential) (
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		if response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusUnauthorized {
-			return Credential{}, fmt.Errorf("%w: saved refresh token was rejected with status %s", ErrLoginRequired, response.Status)
+			return Credential{}, fmt.Errorf("%w: %s", ErrLoginRequired, httpStatusErrorMessage("saved refresh token was rejected", response.Status, body))
 		}
-		return Credential{}, fmt.Errorf("token refresh failed with status %s", response.Status)
+		return Credential{}, errors.New(httpStatusErrorMessage("token refresh failed", response.Status, body))
 	}
 	var result tokenResponse
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -566,6 +566,14 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func httpStatusErrorMessage(prefix, status string, body []byte) string {
+	message := fmt.Sprintf("%s with status %s", prefix, status)
+	if len(body) > 0 {
+		message += ": " + string(body)
+	}
+	return message
 }
 
 func readLimited(reader io.Reader) ([]byte, error) {
@@ -808,11 +816,22 @@ func (p *CodexProvider) modelReply(ctx context.Context, model string, history []
 		}
 	}
 	if status == http.StatusUnauthorized && PostToolAuthenticationMessage(err) == "" {
+		firstUnauthorizedErr := err
 		refreshed, refreshErr := p.auth.Refresh(ctx)
 		if refreshErr != nil {
-			return "", authenticationRequestError{cause: fmt.Errorf("OpenAI session expired; restart GoAster to authenticate: %w", refreshErr)}
+			return "", authenticationRequestError{cause: fmt.Errorf("OpenAI session expired; restart GoAster to authenticate: %w", errors.Join(firstUnauthorizedErr, refreshErr))}
 		}
-		reply, status, err = p.requestReply(ctx, refreshed, model, history, allowTools)
+		retryReply, retryStatus, retryErr := p.requestReply(ctx, refreshed, model, history, allowTools)
+		if retryErr != nil {
+			combinedErr := errors.Join(firstUnauthorizedErr, retryErr)
+			if PostToolAuthenticationMessage(retryErr) != "" {
+				err = postToolAuthenticationError{cause: combinedErr}
+			} else {
+				err = combinedErr
+			}
+		} else {
+			reply, status, err = retryReply, retryStatus, nil
+		}
 	}
 	if err != nil {
 		if status == http.StatusUnauthorized {
@@ -828,10 +847,10 @@ func (p *CodexProvider) modelReply(ctx context.Context, model string, history []
 			if PostToolAuthenticationMessage(err) != "" {
 				return "", err
 			}
-			return "", fmt.Errorf("%w; restart GoAster to authenticate", ErrLoginRequired)
+			return "", authenticationRequestError{cause: fmt.Errorf("%w; restart GoAster to authenticate: %w", ErrLoginRequired, err)}
 		}
 		if status == http.StatusNotFound {
-			return "", fmt.Errorf("%w: Codex model %s was not found", ErrModelUnavailable, model)
+			return "", fmt.Errorf("%w: Codex model %s was not found: %w", ErrModelUnavailable, model, err)
 		}
 		return "", err
 	}
@@ -1164,7 +1183,7 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return "", status, postToolAuthenticationError{cause: err}
 				}
-				return "", status, postToolAuthenticationError{}
+				return "", status, postToolAuthenticationError{cause: err}
 			}
 			return "", status, err
 		}
@@ -1539,7 +1558,7 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 		return codexParsedResponse{}, response.StatusCode, fmt.Errorf("read Codex response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return codexParsedResponse{}, response.StatusCode, fmt.Errorf("Codex backend request failed with status %s", response.Status)
+		return codexParsedResponse{}, response.StatusCode, errors.New(httpStatusErrorMessage("Codex backend request failed", response.Status, body))
 	}
 	parsed, err := parseCodexResponseResult(body)
 	if err != nil {

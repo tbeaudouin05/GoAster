@@ -374,8 +374,9 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 			if err == nil || reply != "" {
 				t.Fatalf("reply = %q, %v; want save failure", reply, err)
 			}
-			if !errors.Is(err, errConversationSaveFailed) || !errors.Is(err, errConversationLockBusy) || requestFailureDiagnostic(err) != requestFailureStateSave+"\n"+requestFailureLockBusy+"\n"+requestUncertaintyWarning {
-				t.Fatalf("save lock contention diagnostic = %q, error %v", requestFailureDiagnostic(err), err)
+			diagnostic := requestFailureDiagnostic(err)
+			if !errors.Is(err, errConversationSaveFailed) || !errors.Is(err, errConversationLockBusy) || !strings.Contains(diagnostic, requestFailureStateSave) || !strings.Contains(diagnostic, requestFailureLockBusy) || !strings.Contains(diagnostic, err.Error()) || !strings.Contains(diagnostic, requestUncertaintyWarning) {
+				t.Fatalf("save lock contention diagnostic = %q, error %v", diagnostic, err)
 			}
 			if !reflect.DeepEqual(session.history, wantHistory) || session.summary != wantSummary {
 				t.Fatalf("failed save retained turn or lost checkpoint: %q, %+v", session.summary, session.history)
@@ -400,8 +401,8 @@ func TestSessionFailedSaveDoesNotRetainUndisplayedTurn(t *testing.T) {
 				session.store.syncDirectory = func(string) error { return fmt.Errorf("%s: %w", path, cause) }
 				_, err = session.Reply(context.Background(), "compaction checkpoint")
 				diagnostic := safeRequestDiagnosticError(err)
-				if !errors.Is(diagnostic, errConversationSaveFailed) || !errors.Is(diagnostic, cause) || !strings.Contains(diagnostic.Error(), requestFailureStateSave) || strings.Contains(diagnostic.Error(), "PRIVATE_") || strings.Contains(diagnostic.Error(), path) {
-					t.Fatalf("compaction save diagnostic = %v", diagnostic)
+				if !errors.Is(diagnostic, errConversationSaveFailed) || !errors.Is(diagnostic, cause) || !strings.Contains(diagnostic.Error(), requestFailureStateSave) || !strings.Contains(diagnostic.Error(), "PRIVATE_COMPACTION_SAVE_CAUSE") || !strings.Contains(diagnostic.Error(), path) {
+					t.Fatalf("compaction save diagnostic omitted underlying details = %v", diagnostic)
 				}
 			}
 		})

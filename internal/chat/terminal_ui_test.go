@@ -314,6 +314,16 @@ func TestSanitizeTerminalTextRemovesCSIOSCAndControls(t *testing.T) {
 	}
 }
 
+func TestSanitizeTerminalTextNormalizesCarriageReturns(t *testing.T) {
+	fixture := "before\roverwrite\r\nnext"
+	if got, want := sanitizeTerminalText(fixture), "before\noverwrite\nnext"; got != want {
+		t.Fatalf("sanitized text = %q, want %q", got, want)
+	}
+	if strings.Contains(SanitizeTerminalText(fixture), "\r") {
+		t.Fatalf("terminal-safe text retained a carriage return: %q", SanitizeTerminalText(fixture))
+	}
+}
+
 func TestTerminalUIUsesCompactASCIIAtNarrowWidths(t *testing.T) {
 	fixture := "  code\tvalue\n\nA long URL https://example.test/" + strings.Repeat("segment/", 5) + "界😀e\u0301"
 	for _, width := range []int{20, 31, 40, 80, 120} {

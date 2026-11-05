@@ -46,7 +46,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := run(context.Background(), os.Args[1:], os.Stdout, chat.NewOpenAIAuthenticator(store), serve); err != nil {
-		fmt.Fprintln(os.Stderr, "agent:", err)
+		fmt.Fprintln(os.Stderr, "agent:", chat.SanitizeTerminalText(err.Error()))
 		os.Exit(1)
 	}
 }

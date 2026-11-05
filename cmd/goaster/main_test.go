@@ -3,12 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
 
 func TestRunDoesNotAcceptLoginCommand(t *testing.T) {
 	var output bytes.Buffer
+	writeFatalError(&output, "goaster:", errors.New("provider \x1b[31mfailed\x1b[0m"))
+	if got, want := output.String(), "goaster: provider failed\n"; got != want {
+		t.Fatalf("fatal error output = %q, want %q", got, want)
+	}
+	output.Reset()
 	if err := run(context.Background(), []string{"login"}, strings.NewReader(""), &output, &output); err == nil || !strings.Contains(err.Error(), "unexpected positional arguments") {
 		t.Fatalf("login command error = %v", err)
 	}

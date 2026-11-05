@@ -174,7 +174,7 @@ func approveProcessHandoff(ctx context.Context, request processHandoffRequest, t
 	}
 
 	if err := run(ctx, request, terminal, sshRun); err != nil {
-		fmt.Fprintf(errorOutput, "Process handoff did not complete: %v. Review the local terminal output before continuing.\n", err)
+		fmt.Fprintf(errorOutput, "Process handoff did not complete: %s. Review the local terminal output before continuing.\n", chat.SanitizeTerminalText(err.Error()))
 		return processHandoffToolFailed
 	}
 	return processHandoffToolSucceeded

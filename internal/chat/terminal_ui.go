@@ -893,6 +893,12 @@ func expandTerminalTabs(text string) string {
 	return expanded.String()
 }
 
+// SanitizeTerminalText removes terminal control sequences while preserving
+// ordinary error text for callers that print failures outside the chat UI.
+func SanitizeTerminalText(text string) string {
+	return sanitizeTerminalText(text)
+}
+
 func sanitizeTerminalText(text string) string {
 	var sanitized strings.Builder
 	for index := 0; index < len(text); {
@@ -913,7 +919,15 @@ func sanitizeTerminalText(text string) string {
 			index += size
 			continue
 		}
-		if runeValue == '\n' || runeValue == '\r' || runeValue == '\t' ||
+		if runeValue == '\r' {
+			sanitized.WriteByte('\n')
+			index += size
+			if index < len(text) && text[index] == '\n' {
+				index++
+			}
+			continue
+		}
+		if runeValue == '\n' || runeValue == '\t' ||
 			(runeValue >= 0x20 && runeValue != 0x7f && !(runeValue >= 0x80 && runeValue <= 0x9f) &&
 				(!unicode.Is(unicode.Cf, runeValue) || terminalCombiningRune(runeValue))) {
 			sanitized.WriteRune(runeValue)

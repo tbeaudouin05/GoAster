@@ -17,9 +17,13 @@ import (
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "goaster:", err)
+		writeFatalError(os.Stderr, "goaster:", err)
 		os.Exit(1)
 	}
+}
+
+func writeFatalError(output io.Writer, prefix string, err error) {
+	fmt.Fprintln(output, prefix, chat.SanitizeTerminalText(err.Error()))
 }
 
 func run(ctx context.Context, args []string, input io.Reader, output, errorOutput io.Writer) error {

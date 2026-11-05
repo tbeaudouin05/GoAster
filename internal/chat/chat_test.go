@@ -312,8 +312,8 @@ func TestInteractiveRequestLifecycleShowsWorkingAndRetries(t *testing.T) {
 	if !strings.Contains(result, "If an earlier attempt may have failed or been interrupted") || !strings.Contains(result, "check whether any actions completed") || !strings.Contains(result, "retried reply") {
 		t.Fatalf("missing recoverable error or retry reply: %q", result)
 	}
-	if strings.Contains(result, "temporary provider failure") {
-		t.Fatalf("provider error leaked into the interactive request notice: %q", result)
+	if !strings.Contains(result, "temporary provider failure") {
+		t.Fatalf("provider error was omitted from the interactive request notice: %q", result)
 	}
 }
 
@@ -376,7 +376,7 @@ func TestInteractiveToolCallProgressShowsWhileToolRunsAndAfterCompletion(t *test
 	}
 }
 
-func TestInteractiveToolFailureShowsSafeRequestError(t *testing.T) {
+func TestInteractiveToolFailureShowsUnderlyingRequestError(t *testing.T) {
 	var output bytes.Buffer
 	calls := 0
 	provider := providerFunc(func(ctx context.Context, _ string, _ string) (string, error) {
@@ -410,8 +410,8 @@ func TestInteractiveToolFailureShowsSafeRequestError(t *testing.T) {
 		!strings.Contains(result, "If an earlier attempt may have failed or been interrupted") || !strings.Contains(result, "check whether any actions completed") || !strings.Contains(result, "Retry complete.") {
 		t.Fatalf("tool failure and retry lifecycle was not displayed: %q", result)
 	}
-	if strings.Contains(result, "PRIVATE_TOKEN") || strings.Contains(result, "private tool failure details") {
-		t.Fatalf("tool arguments or private failure details leaked into terminal output: %q", result)
+	if strings.Contains(result, "PRIVATE_TOKEN") || !strings.Contains(result, "private tool failure details") {
+		t.Fatalf("tool arguments were exposed or provider details were omitted from terminal output: %q", result)
 	}
 }
 
@@ -536,8 +536,8 @@ func TestInteractiveAttachmentFailureCleansUpBeforeRetry(t *testing.T) {
 	if !strings.Contains(result, "If an earlier attempt may have failed or been interrupted") || !strings.Contains(result, "check whether any actions completed") || !strings.Contains(result, "retry succeeded") {
 		t.Fatalf("failed attachment did not return to a successful retry: %q", result)
 	}
-	if strings.Contains(result, temporaryPath) || strings.Contains(result, "inspection provider failed") {
-		t.Fatalf("attachment failure leaked path or provider error: %q", result)
+	if strings.Contains(result, temporaryPath) || !strings.Contains(result, "inspection provider failed") {
+		t.Fatalf("attachment failure leaked path or omitted provider error: %q", result)
 	}
 }
 

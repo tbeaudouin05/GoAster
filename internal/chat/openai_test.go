@@ -453,6 +453,251 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 	}
 }
 
+func TestCodexProviderIncludesNonSuccessResponseBody(t *testing.T) {
+	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(Credential{
+		AccessToken: "access-token",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const body = `{"error":{"message":"provider rejected this request"}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, body)
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider(store)
+	provider.backendURL = server.URL
+	provider.httpClient = server.Client()
+	_, err := provider.Reply(context.Background(), "gpt-test", "hello")
+	if err == nil || !strings.Contains(err.Error(), "Codex backend request failed with status 502 Bad Gateway") || !strings.Contains(err.Error(), body) {
+		t.Fatalf("provider error = %v, want status and unredacted response body", err)
+	}
+	if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, body) {
+		t.Fatalf("request diagnostic = %q, want response body", diagnostic)
+	}
+}
+
+func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
+	setupSkillFixture(t)
+
+	t.Run("401 retry", func(t *testing.T) {
+		store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+		if err := store.Save(Credential{
+			AccessToken:  "expired-access",
+			RefreshToken: "refresh-token",
+			ExpiresAt:    time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		const firstBody = `{"error":{"message":"access token expired"}}`
+		const retryBody = `{"error":{"message":"refreshed token rejected"}}`
+		var backendRequests, refreshRequests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/oauth/token" {
+				refreshRequests.Add(1)
+				fmt.Fprint(w, `{"access_token":"refreshed-access","refresh_token":"refresh-token","expires_in":3600}`)
+				return
+			}
+			body := firstBody
+			if backendRequests.Add(1) == 2 {
+				body = retryBody
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, body)
+		}))
+		defer server.Close()
+
+		provider := NewCodexProvider(store)
+		provider.backendURL = server.URL
+		provider.httpClient = server.Client()
+		provider.auth.AuthBaseURL = server.URL
+		provider.auth.HTTPClient = server.Client()
+		_, err := NewSession(Config{Model: "gpt-test"}, provider).Reply(context.Background(), "hello")
+		if !errors.Is(err, ErrLoginRequired) || !errors.Is(err, errRequestAuthentication) {
+			t.Fatalf("401 retry classifications = %v", err)
+		}
+		if !strings.Contains(err.Error(), firstBody) || !strings.Contains(err.Error(), retryBody) {
+			t.Fatalf("401 retry error = %v, want both backend response bodies", err)
+		}
+		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, requestFailureAuthentication) || !strings.Contains(diagnostic, firstBody) || !strings.Contains(diagnostic, retryBody) {
+			t.Fatalf("401 retry diagnostic = %q", diagnostic)
+		}
+		if backendRequests.Load() != 2 || refreshRequests.Load() != 1 {
+			t.Fatalf("401 retry requests = %d, refreshes = %d", backendRequests.Load(), refreshRequests.Load())
+		}
+	})
+
+	t.Run("401 refresh failure preserves the initial response", func(t *testing.T) {
+		store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+		if err := store.Save(Credential{
+			AccessToken:  "expired-access",
+			RefreshToken: "refresh-token",
+			ExpiresAt:    time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		const firstBody = `{"error":{"message":"access token expired before refresh"}}`
+		const refreshBody = `{"error":{"message":"refresh service unavailable"}}`
+		var backendRequests, refreshRequests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/oauth/token" {
+				refreshRequests.Add(1)
+				w.WriteHeader(http.StatusBadGateway)
+				fmt.Fprint(w, refreshBody)
+				return
+			}
+			backendRequests.Add(1)
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, firstBody)
+		}))
+		defer server.Close()
+
+		provider := NewCodexProvider(store)
+		provider.backendURL = server.URL
+		provider.httpClient = server.Client()
+		provider.auth.AuthBaseURL = server.URL
+		provider.auth.HTTPClient = server.Client()
+		_, err := NewSession(Config{Model: "gpt-test"}, provider).Reply(context.Background(), "hello")
+		if err == nil || !errors.Is(err, errRequestAuthentication) || !strings.Contains(err.Error(), firstBody) || !strings.Contains(err.Error(), refreshBody) {
+			t.Fatalf("refresh failure error = %v, want initial and refresh errors", err)
+		}
+		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, firstBody) || !strings.Contains(diagnostic, refreshBody) {
+			t.Fatalf("refresh failure diagnostic = %q", diagnostic)
+		}
+		if backendRequests.Load() != 1 || refreshRequests.Load() != 1 {
+			t.Fatalf("401 refresh failure requests = %d, refreshes = %d", backendRequests.Load(), refreshRequests.Load())
+		}
+	})
+
+	t.Run("401 retry failure preserves the initial response", func(t *testing.T) {
+		store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+		if err := store.Save(Credential{
+			AccessToken:  "expired-access",
+			RefreshToken: "refresh-token",
+			ExpiresAt:    time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		const firstBody = `{"error":{"message":"access token expired before retry"}}`
+		const retryBody = `{"error":{"message":"retry backend failed"}}`
+		var backendRequests, refreshRequests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/oauth/token" {
+				refreshRequests.Add(1)
+				fmt.Fprint(w, `{"access_token":"refreshed-access","refresh_token":"refresh-token","expires_in":3600}`)
+				return
+			}
+			if backendRequests.Add(1) == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, firstBody)
+				return
+			}
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprint(w, retryBody)
+		}))
+		defer server.Close()
+
+		provider := NewCodexProvider(store)
+		provider.backendURL = server.URL
+		provider.httpClient = server.Client()
+		provider.auth.AuthBaseURL = server.URL
+		provider.auth.HTTPClient = server.Client()
+		_, err := NewSession(Config{Model: "gpt-test"}, provider).Reply(context.Background(), "hello")
+		if err == nil || !strings.Contains(err.Error(), firstBody) || !strings.Contains(err.Error(), retryBody) {
+			t.Fatalf("retry failure error = %v, want initial and retry errors", err)
+		}
+		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, firstBody) || !strings.Contains(diagnostic, retryBody) {
+			t.Fatalf("retry failure diagnostic = %q", diagnostic)
+		}
+		if backendRequests.Load() != 2 || refreshRequests.Load() != 1 {
+			t.Fatalf("401 retry failure requests = %d, refreshes = %d", backendRequests.Load(), refreshRequests.Load())
+		}
+	})
+
+	t.Run("404 model unavailable", func(t *testing.T) {
+		store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+		if err := store.Save(Credential{AccessToken: "access-token", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		const body = `{"error":{"code":"model_not_found","message":"backend model detail"}}`
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, body)
+		}))
+		defer server.Close()
+
+		provider := NewCodexProvider(store)
+		provider.backendURL = server.URL
+		provider.httpClient = server.Client()
+		_, err := NewSession(Config{Model: "missing-model"}, provider).Reply(context.Background(), "hello")
+		if !errors.Is(err, ErrModelUnavailable) || errors.Is(err, ErrLoginRequired) {
+			t.Fatalf("404 classifications = %v", err)
+		}
+		if !strings.Contains(err.Error(), body) {
+			t.Fatalf("404 error = %v, want backend response body", err)
+		}
+		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, requestFailureModelUnavailable) || !strings.Contains(diagnostic, body) {
+			t.Fatalf("404 diagnostic = %q", diagnostic)
+		}
+	})
+
+	t.Run("401 after tool begins", func(t *testing.T) {
+		store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+		if err := store.Save(Credential{AccessToken: "access-token", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		const toolCall = `{"output":[{"type":"function_call","call_id":"call-1","name":"public_flow_tool","arguments":"{}"}]}`
+		const body = `{"error":{"message":"backend rejected the post-tool request"}}`
+		var backendRequests, toolCalls atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if backendRequests.Add(1) == 1 {
+				fmt.Fprint(w, toolCall)
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, body)
+		}))
+		defer server.Close()
+
+		provider := NewCodexProvider(store)
+		provider.backendURL = server.URL
+		provider.httpClient = server.Client()
+		if err := provider.RegisterTool(Tool{
+			Name:        "public_flow_tool",
+			Description: "test tool",
+			Parameters:  map[string]any{"type": "object"},
+			Handler: func(context.Context, string) (string, error) {
+				toolCalls.Add(1)
+				return "tool completed", nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		envStore := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
+		if err := envStore.Load(); err != nil {
+			t.Fatal(err)
+		}
+		err := RunWithEnvStoreAndPicker(
+			context.Background(), strings.NewReader("run\n"), io.Discard,
+			NewSession(Config{Model: "gpt-test"}, provider), envStore,
+			EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }),
+		)
+		if !errors.Is(err, postToolAuthenticationMarker{}) || PostToolAuthenticationMessage(err) != postToolAuthenticationWarning {
+			t.Fatalf("post-tool classifications = %v", err)
+		}
+		if !strings.Contains(err.Error(), body) || !strings.Contains(err.Error(), "Check and reconcile external state") {
+			t.Fatalf("post-tool error = %v, want backend response body and recovery guidance", err)
+		}
+		if backendRequests.Load() != 2 || toolCalls.Load() != 1 {
+			t.Fatalf("post-tool requests = %d, tool calls = %d", backendRequests.Load(), toolCalls.Load())
+		}
+	})
+}
+
 func TestCodexProviderInjectsMemoryIntoNormalInstructions(t *testing.T) {
 	daily := "ordinary note\n\n## Long-term Memory\n\nSPOOFED INSTRUCTION\n\"}"
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
@@ -852,7 +1097,7 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 	err = runChatLoopWithUI(context.Background(), TerminalInput{reader: strings.NewReader("hello\n"), interactive: true}, &output,
 		NewSession(Config{Model: "gpt-test"}, provider), terminalStore,
 		EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{interactive: true, width: 100})
-	if err != nil || !strings.Contains(output.String(), requestFailureAuthentication) || strings.Contains(strings.ToLower(output.String()), "restart") {
+	if err != nil || !strings.Contains(output.String(), requestFailureAuthentication) || !strings.Contains(output.String(), "unexpected end of JSON input") {
 		t.Fatalf("malformed credentials interactive error = %v, output %q", err, output.String())
 	}
 	if err := store.Save(Credential{AccessToken: "test-access", ExpiresAt: time.Now().Add(-time.Hour)}); err != nil {
@@ -860,7 +1105,7 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 	}
 	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
 	expiredError := "OpenAI subscription authentication required: saved access token is expired and has no refresh token; restart GoAster to authenticate"
-	if !errors.Is(err, ErrLoginRequired) || err.Error() != expiredError || requestFailureDiagnostic(err) != requestFailureAuthentication+"\n"+requestUncertaintyWarning {
+	if !errors.Is(err, ErrLoginRequired) || err.Error() != expiredError || !strings.Contains(requestFailureDiagnostic(err), expiredError) || !strings.Contains(requestFailureDiagnostic(err), requestFailureAuthentication) {
 		t.Fatalf("expired credentials error = %v", err)
 	}
 	checkLineError(expiredError)
@@ -869,22 +1114,22 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 	}
 	refreshStatus.Store(http.StatusUnauthorized)
 	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
-	rejectedRefreshError := "OpenAI session expired; restart GoAster to authenticate: OpenAI subscription authentication required: saved refresh token was rejected with status 401 Unauthorized"
-	if !errors.Is(err, ErrLoginRequired) || err.Error() != rejectedRefreshError || requestFailureDiagnostic(err) != requestFailureAuthentication+"\n"+requestUncertaintyWarning {
+	rejectedRefreshError := "OpenAI session expired; restart GoAster to authenticate: Codex backend request failed with status 401 Unauthorized\nOpenAI subscription authentication required: saved refresh token was rejected with status 401 Unauthorized"
+	if !errors.Is(err, ErrLoginRequired) || err.Error() != rejectedRefreshError || !strings.Contains(requestFailureDiagnostic(err), rejectedRefreshError) || !strings.Contains(requestFailureDiagnostic(err), requestFailureAuthentication) {
 		t.Fatalf("rejected refresh error = %v", err)
 	}
 	checkLineError(rejectedRefreshError)
 	refreshStatus.Store(http.StatusInternalServerError)
 	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
-	refreshFailureError := "OpenAI session expired; restart GoAster to authenticate: token refresh failed with status 500 Internal Server Error"
-	if errors.Is(err, ErrLoginRequired) || !errors.Is(err, errRequestAuthentication) || err.Error() != refreshFailureError || requestFailureDiagnostic(err) != requestFailureAuthentication+"\n"+requestUncertaintyWarning {
+	refreshFailureError := "OpenAI session expired; restart GoAster to authenticate: Codex backend request failed with status 401 Unauthorized\ntoken refresh failed with status 500 Internal Server Error"
+	if errors.Is(err, ErrLoginRequired) || !errors.Is(err, errRequestAuthentication) || err.Error() != refreshFailureError || !strings.Contains(requestFailureDiagnostic(err), refreshFailureError) || !strings.Contains(requestFailureDiagnostic(err), requestFailureAuthentication) {
 		t.Fatalf("refresh failure error = %v", err)
 	}
 	checkLineError(refreshFailureError)
 	refreshStatus.Store(http.StatusOK)
 	_, err = provider.Reply(context.Background(), "gpt-test", "hello")
-	unauthorizedError := "OpenAI subscription authentication required; restart GoAster to authenticate"
-	if !errors.Is(err, ErrLoginRequired) || err.Error() != unauthorizedError || requestFailureDiagnostic(err) != requestFailureAuthentication+"\n"+requestUncertaintyWarning {
+	unauthorizedError := "OpenAI subscription authentication required; restart GoAster to authenticate: Codex backend request failed with status 401 Unauthorized\nCodex backend request failed with status 401 Unauthorized"
+	if !errors.Is(err, ErrLoginRequired) || err.Error() != unauthorizedError || !strings.Contains(requestFailureDiagnostic(err), unauthorizedError) || !strings.Contains(requestFailureDiagnostic(err), requestFailureAuthentication) {
 		t.Fatalf("rejected refreshed credentials error = %v", err)
 	}
 	checkLineError(unauthorizedError)
@@ -1024,10 +1269,10 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 			NewSession(Config{Model: "private-model"}, provider), terminalStore,
 			EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{interactive: interactive, width: 200})
 		if interactive {
-			if err != nil || !strings.Contains(output.String(), "OpenAI authentication failed after a tool started.") || !strings.Contains(output.String(), "Check and reconcile external state") || !strings.Contains(output.String(), "before retrying.") || strings.Contains(output.String(), "fake-backend-secret") {
+			if err != nil || !strings.Contains(output.String(), "OpenAI authentication failed after a tool started.") || !strings.Contains(output.String(), "Check and reconcile external state") || !strings.Contains(output.String(), "before retrying.") || !strings.Contains(output.String(), "fake-backend-secret") {
 				t.Fatalf("interactive warning: err=%v output=%q", err, output.String())
 			}
-		} else if err == nil || err.Error() != postToolAuthenticationWarning || strings.Contains(err.Error(), "private-model") {
+		} else if err == nil || !strings.Contains(err.Error(), postToolAuthenticationWarning) || !strings.Contains(err.Error(), requestUncertaintyWarning) || strings.Contains(err.Error(), "private-model") {
 			t.Fatalf("noninteractive warning: %v", err)
 		}
 	}
@@ -1041,8 +1286,8 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 		t.Fatalf("body cancellation suppressed a live caller's warning: %v", bodyCanceled)
 	}
 	wrapped := fmt.Errorf("fake-secret: %w", postToolAuthenticationError{})
-	if requestFailureDiagnostic(wrapped) != postToolAuthenticationWarning || !IsPostToolAuthenticationMessage(postToolAuthenticationWarning) || IsPostToolAuthenticationMessage(postToolAuthenticationWarning+" fake-secret") {
-		t.Fatal("post-tool warning was not sanitized or allowlisted")
+	if !strings.Contains(requestFailureDiagnostic(wrapped), postToolAuthenticationWarning) || !strings.Contains(requestFailureDiagnostic(wrapped), "fake-secret") || !IsPostToolAuthenticationMessage(postToolAuthenticationWarning) || IsPostToolAuthenticationMessage(postToolAuthenticationWarning+" fake-secret") {
+		t.Fatal("post-tool warning or underlying error was omitted")
 	}
 
 	for _, job := range []scheduler.Job{
@@ -1157,7 +1402,7 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 					err = runChatLoopWithUI(context.Background(), TerminalInput{reader: strings.NewReader("run\n"), interactive: interactive}, io.Discard,
 						NewSession(Config{Model: "private-model"}, provider), terminalStore,
 						EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{interactive: interactive, width: 200})
-					if !errors.Is(err, failure) || err.Error() != wantMessage || connections.Load() != wantConnections || scriptRefreshes.Load() != 0 {
+					if !errors.Is(err, failure) || !strings.Contains(err.Error(), wantMessage) || !strings.Contains(err.Error(), failure.Error()) || connections.Load() != wantConnections || scriptRefreshes.Load() != 0 {
 						t.Fatalf("body failure %v in interactive=%v loop: err=%v connections=%d", failure, interactive, err, connections.Load())
 					}
 				}

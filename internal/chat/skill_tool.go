@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -31,9 +30,11 @@ func (err skillRecoveryError) Error() string { return err.err.Error() }
 func (err skillRecoveryError) Unwrap() error { return err.err }
 
 func skillRecovery(err error, message string) error {
-	var existing skillRecoveryError
-	if errors.As(err, &existing) {
-		message = existing.message
+	for _, current := range requestFailureErrors(err) {
+		if existing, ok := current.(skillRecoveryError); ok {
+			message = existing.message
+			break
+		}
 	}
 	return skillRecoveryError{err: err, message: message}
 }
@@ -41,9 +42,10 @@ func skillRecovery(err error, message string) error {
 // SkillRecoveryMessage returns a fixed, safe explanation for a skill failure.
 // It never includes filesystem errors, skill contents, or tool arguments.
 func SkillRecoveryMessage(err error) string {
-	var recovery skillRecoveryError
-	if errors.As(err, &recovery) {
-		return recovery.message
+	for _, current := range requestFailureErrors(err) {
+		if recovery, ok := current.(skillRecoveryError); ok {
+			return recovery.message
+		}
 	}
 	return ""
 }
