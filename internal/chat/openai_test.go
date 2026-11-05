@@ -86,6 +86,111 @@ func TestCredentialStoreSaveAndLoadIsPrivate(t *testing.T) {
 	}
 }
 
+func TestOpenAIHTTPClientTimeoutsAndInjectedClients(t *testing.T) {
+	provider := NewCodexProvider(CredentialStore{})
+
+	if got := provider.auth.HTTPClient.Timeout; got != openAIOAuthHTTPTimeout {
+		t.Fatalf("OAuth HTTP timeout = %s, want %s", got, openAIOAuthHTTPTimeout)
+	}
+	if got := provider.httpClient.Timeout; got != openAIModelHTTPTimeout {
+		t.Fatalf("model HTTP timeout = %s, want %s", got, openAIModelHTTPTimeout)
+	}
+	if provider.httpClient == provider.auth.HTTPClient {
+		t.Fatal("OAuth and model HTTP clients share the same instance")
+	}
+
+	injectedAuthClient := &http.Client{Timeout: time.Second}
+	provider.auth.HTTPClient = injectedAuthClient
+	if got := provider.auth.httpClient(); got != injectedAuthClient {
+		t.Fatal("injected OAuth HTTP client was not retained")
+	}
+	injectedModelClient := &http.Client{Timeout: 2 * time.Second}
+	provider.httpClient = injectedModelClient
+	if got := provider.client(); got != injectedModelClient {
+		t.Fatal("injected model HTTP client was not retained")
+	}
+}
+
+func TestOpenAIAuthenticatorHTTPClientTimeout(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+
+	provider := NewCodexProvider(CredentialStore{})
+	provider.auth.AuthBaseURL = server.URL
+	provider.auth.HTTPClient = &http.Client{Timeout: 100 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	requestStartedAt := time.Now()
+	_, err := provider.auth.RequestDeviceCode(ctx)
+	var timeoutErr interface{ Timeout() bool }
+	if !errors.As(err, &timeoutErr) || !timeoutErr.Timeout() {
+		t.Fatalf("stalled device code request error = %v, want a timeout", err)
+	}
+	if elapsed := time.Since(requestStartedAt); elapsed >= time.Second {
+		t.Fatalf("stalled device code request took %s, want under 1s", elapsed)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("stalled device code request did not reach the server")
+	}
+}
+
+func TestCodexProviderRequestCancellation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		close(started)
+		<-r.Context().Done()
+		<-release
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+
+	provider := NewCodexProvider(CredentialStore{})
+	provider.backendURL = server.URL
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := provider.requestCodex(ctx, Credential{AccessToken: "access-token"}, "gpt-test", []codexInputItem{{Type: "message"}}, false)
+		result <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("model request did not reach the server")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled model request error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled model request did not return")
+	}
+}
+
 func TestOpenAIAuthenticatorDeviceLogin(t *testing.T) {
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
 	var pollCount atomic.Int32

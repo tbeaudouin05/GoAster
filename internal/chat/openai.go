@@ -37,6 +37,8 @@ const (
 	credentialFilename  = "auth.json"
 
 	tokenRefreshSkew       = 5 * time.Minute
+	openAIOAuthHTTPTimeout = 30 * time.Second
+	openAIModelHTTPTimeout = 10 * time.Minute
 	deviceCodeTimeout      = 15 * time.Minute
 	defaultPollDelay       = 5 * time.Second
 	maxResponseBody        = 8 << 20
@@ -219,7 +221,7 @@ type OpenAIAuthenticator struct {
 func NewOpenAIAuthenticator(store CredentialStore) *OpenAIAuthenticator {
 	return &OpenAIAuthenticator{
 		Store:       store,
-		HTTPClient:  &http.Client{Timeout: 30 * time.Second},
+		HTTPClient:  &http.Client{Timeout: openAIOAuthHTTPTimeout},
 		AuthBaseURL: openAIAuthURL,
 		Now:         time.Now,
 		Sleep:       sleepContext,
@@ -693,7 +695,7 @@ func NewCodexProvider(store CredentialStore) *CodexProvider {
 	authenticator := NewOpenAIAuthenticator(store)
 	provider := &CodexProvider{
 		auth:            authenticator,
-		httpClient:      authenticator.HTTPClient,
+		httpClient:      &http.Client{Timeout: openAIModelHTTPTimeout},
 		backendURL:      openAICodexURL,
 		webSearchClient: newWebSearchHTTPClient(),
 		webSearchURL:    duckDuckGoHTMLURL,
