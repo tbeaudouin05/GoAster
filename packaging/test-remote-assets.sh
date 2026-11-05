@@ -18,11 +18,16 @@ import sys
 repo, fixture = map(pathlib.Path, sys.argv[1:])
 source = repo / 'cmd' / 'goaster-agent' / 'main.go'
 contents = source.read_text()
-listener = '\tif err := server.ListenAndServe(); err != nil {\n\t\treturn fmt.Errorf("server stopped")\n\t}\n\treturn nil\n'
-if contents.count(listener) != 1:
+listener = '\tlistener, err := controltransport.Listen()\n'
+end_marker = '\n}\n\nfunc handlerWithMemoryAndRegistryAndGitHubAuthWithSecret'
+if contents.count(listener) != 1 or contents.count(end_marker) != 1:
+    raise SystemExit('could not isolate the agent listener for the offline test')
+start = contents.index(listener)
+end = contents.index(end_marker, start)
+if 'server.Serve(listener)' not in contents[start:end] or 'server.Close()' not in contents[start:end]:
     raise SystemExit('could not isolate the agent listener for the offline test')
 overlay = fixture / 'agent-main.go'
-overlay.write_text(contents.replace(listener, '\t_ = server\n\treturn nil\n'))
+overlay.write_text(contents[:start] + '\t_, _, _, _ = ctx, controlSecret, memory, registry\n\treturn nil' + contents[end:])
 (fixture / 'overlay.json').write_text(json.dumps({'Replace': {str(source): str(overlay)}}))
 PY
 cd "$repo_root"

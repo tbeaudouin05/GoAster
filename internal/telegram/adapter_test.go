@@ -7,10 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"goaster/internal/controlsecret"
+	"goaster/internal/controltransport"
 )
 
 type doerFunc func(*http.Request) (*http.Response, error)
@@ -619,6 +624,46 @@ func TestAgentRejectsUntypedLegacyResponse(t *testing.T) {
 	reply, err := a.askAgent(context.Background(), "hello", 42, nil, nil)
 	if err == nil || reply != "" {
 		t.Fatalf("untyped legacy response = %q, %v; want an error with no reply", reply, err)
+	}
+}
+
+func TestRunRejectsInvalidConfiguredControlSecretBeforeTelegramState(t *testing.T) {
+	t.Setenv(controlsecret.ValueEnv, "")
+	t.Setenv(controlsecret.FileEnv, filepath.Join(t.TempDir(), "missing-control-secret"))
+	if err := Run(context.Background(), Paths{}, nil); err == nil || err.Error() != "control secret configuration is invalid" {
+		t.Fatalf("Run() error = %v; want invalid control secret", err)
+	}
+}
+
+func TestRunRejectsInvalidSocketBeforeTelegramState(t *testing.T) {
+	t.Setenv(controlsecret.FileEnv, "")
+	// An unset file setting retains legacy behavior; an explicitly configured
+	// empty socket must fail before loading Telegram state.
+	if err := os.Unsetenv(controlsecret.FileEnv); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(controlsecret.ValueEnv, "")
+	t.Setenv(controltransport.SocketEnv, "")
+	if err := Run(context.Background(), Paths{}, nil); err == nil || err.Error() != "agent socket configuration is invalid or unavailable" {
+		t.Fatalf("Run() error = %v; want invalid socket", err)
+	}
+
+	if os.Geteuid() >= 0 {
+		dir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "control-secret")
+		if err := os.WriteFile(path, []byte(strings.Repeat("ab", 32)+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(controlsecret.FileEnv, path)
+		if err := os.Unsetenv(controltransport.SocketEnv); err != nil {
+			t.Fatal(err)
+		}
+		if err := Run(context.Background(), Paths{}, nil); err == nil || err.Error() != "agent socket configuration is invalid or unavailable" {
+			t.Fatalf("Run() accepted file secret without socket: %v", err)
+		}
 	}
 }
 

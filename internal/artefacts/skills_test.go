@@ -85,6 +85,14 @@ func TestInstallBundledStartersOnce(t *testing.T) {
 	if err := os.WriteFile(path, []byte("custom workflow"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// A release containing revised OVH guidance must not overwrite any part
+	// of an already installed, user-edited workflow.
+	for _, filename := range []string{"META.md", "SKILL.md", "AUTH.md"} {
+		file := filepath.Join(root, "skills", "ovh-remote", filename)
+		if err := os.WriteFile(file, []byte("user edit in "+filename), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := InstallStarters(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +101,12 @@ func TestInstallBundledStartersOnce(t *testing.T) {
 	}
 	if got, err := os.ReadFile(memoryPath); err != nil || string(got) != "user memory" {
 		t.Fatalf("existing memory changed: %q, %v", got, err)
+	}
+	for _, filename := range []string{"META.md", "SKILL.md", "AUTH.md"} {
+		file := filepath.Join(root, "skills", "ovh-remote", filename)
+		if got, err := os.ReadFile(file); err != nil || string(got) != "user edit in "+filename {
+			t.Fatalf("existing ovh-remote %s changed: %q, %v", filename, got, err)
+		}
 	}
 	checkConcurrentStarterInstallation(t)
 	checkStarterSourceValidation(t)

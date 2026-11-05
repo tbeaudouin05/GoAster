@@ -132,6 +132,8 @@ func runRemoteLoginOnTerminal(ctx context.Context, options remoteLoginOptions, o
 		Target:         options.Target,
 		IdentityFile:   options.IdentityFile,
 		KnownHostsFile: options.KnownHostsFile,
+		AgentTransport: options.AgentTransport,
+		AgentSocket:    options.AgentSocket,
 		Port:           options.Port,
 	}
 	return runOpenAIInteractiveProcessHandoff(ctx, request, terminal, sshRun)
@@ -150,10 +152,14 @@ func approveProcessHandoff(ctx context.Context, request processHandoffRequest, t
 	if !request.ProvisionedTarget.isZero() {
 		hostKeyPolicy = "one automatic first-contact acceptance, then strict; a changed key will stop the connection"
 	}
+	transport := request.AgentTransport
+	if request.AgentTransport == remoteTransportSocket {
+		transport += " " + strconv.Quote(request.AgentSocket)
+	}
 
 	if _, err := fmt.Fprintf(output,
-		"\nProtected process handoff approval required.\nProfile: %q\nTarget: %q\nSSH port: %d\nLocal SSH key: %s\nKnown-hosts file: %s\nHost-key verification: %s.\nType YES to start the interactive handoff and verification: ",
-		request.Profile, request.Target, request.Port, strconv.Quote(request.IdentityFile), knownHosts, hostKeyPolicy); err != nil {
+		"\nProtected process handoff approval required.\nProfile: %q\nTarget: %q\nSSH port: %d\nLocal SSH key: %s\nKnown-hosts file: %s\nHost-key verification: %s.\nAgent transport: %s\nType YES to start the interactive handoff and verification: ",
+		request.Profile, request.Target, request.Port, strconv.Quote(request.IdentityFile), knownHosts, hostKeyPolicy, transport); err != nil {
 		return processHandoffToolFailed
 	}
 	if flusher, ok := output.(interface{ Flush() error }); ok {

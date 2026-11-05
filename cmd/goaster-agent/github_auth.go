@@ -26,7 +26,6 @@ const (
 	githubDefaultAuthBase       = "https://github.com"
 	githubDefaultAPIBase        = "https://api.github.com"
 	githubClientIDEnv           = "GOASTER_GITHUB_CLIENT_ID"
-	githubAuthControlSecretEnv  = "GOASTER_GITHUB_AUTH_CONTROL_SECRET"
 	githubAuthControlHeader     = "X-GoAster-GitHub-Auth-Control"
 	githubDefaultConsentTTL     = 5 * time.Minute
 	githubDefaultDeviceTTL      = 15 * time.Minute

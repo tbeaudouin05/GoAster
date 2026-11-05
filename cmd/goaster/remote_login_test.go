@@ -29,9 +29,10 @@ func prepareProvisionedRemoteLoginFiles(t *testing.T) (string, string) {
 
 func provisionedRemoteLoginOptions(identityFile string) remoteLoginOptions {
 	return remoteLoginOptions{
-		Target:       "root@203.0.113.10",
-		IdentityFile: identityFile,
-		Port:         22,
+		Target:         "root@203.0.113.10",
+		IdentityFile:   identityFile,
+		AgentTransport: remoteTransportTCP,
+		Port:           22,
 		ProvisionedTarget: remoteProvisionedTarget{
 			InstanceID: "instance-123",
 			PublicIP:   "203.0.113.10",
@@ -63,6 +64,7 @@ func TestRemoteLoginUsesProtectedTerminalAndHealthCheck(t *testing.T) {
 		"--key", "/tmp/goaster-ovh",
 		"--port", "2222",
 		"--known-hosts", "/tmp/known_hosts",
+		"--agent-transport", "tcp",
 	}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -146,6 +148,70 @@ func TestRemoteLoginRequiresExplicitSafeInputs(t *testing.T) {
 	}
 }
 
+func TestRemoteLoginUsesOnlyConfiguredSocketForHealth(t *testing.T) {
+	options := remoteLoginOptions{
+		Target: "root@example.invalid", IdentityFile: "/tmp/key", Port: 22,
+		AgentTransport: remoteTransportSocket,
+		AgentSocket:    "/run/goaster-agent/agent.sock",
+	}
+	var calls [][]string
+	runner := func(_ context.Context, arguments []string, _ io.Reader, _, _ io.Writer) error {
+		calls = append(calls, append([]string(nil), arguments...))
+		if len(calls) == 2 && arguments[len(arguments)-1] != remoteHealthCommand {
+			return errors.New("socket unavailable")
+		}
+		// A TCP impersonator would answer successfully; it must not be used.
+		return nil
+	}
+	err := runRemoteLoginWith(context.Background(), options, nil, io.Discard, io.Discard, runner)
+	if err == nil || !strings.Contains(err.Error(), "remote agent health check failed") || len(calls) != 2 {
+		t.Fatalf("socket health failure = %v, calls = %d", err, len(calls))
+	}
+	health := strings.Join(calls[1], " ")
+	if !strings.Contains(health, "/usr/bin/env GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock /usr/local/bin/goaster-agent health") {
+		t.Fatalf("health check did not use the configured Unix socket: %s", health)
+	}
+	if strings.Contains(health, remoteHealthCommand) {
+		t.Fatalf("socket health check included the TCP fallback: %s", health)
+	}
+}
+
+func TestRemoteLoginRejectsUnsafeSocketArguments(t *testing.T) {
+	for _, socket := range []string{"", "relative", "/run/a/../b", "/run/a;id", "/run/a b", "/run/a'bad", "/"} {
+		_, err := parseRemoteLogin([]string{"--target", "root@example.invalid", "--key", "/tmp/key", "--agent-transport", "socket", "--agent-socket", socket}, io.Discard)
+		if err == nil {
+			t.Errorf("accepted socket path %q", socket)
+		}
+	}
+	for _, arguments := range [][]string{
+		{},
+		{"--agent-socket", "/run/agent.sock"},
+		{"--agent-transport", "socket"},
+		{"--agent-transport", ""},
+		{"--agent-transport", "auto"},
+		{"--agent-transport", "tcp", "--agent-socket", "/run/agent.sock"},
+	} {
+		args := append([]string{"--target", "root@example.invalid", "--key", "/tmp/key"}, arguments...)
+		calls := 0
+		err := runRemoteLogin(context.Background(), args, nil, io.Discard, io.Discard, func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
+			calls++
+			return nil
+		})
+		if err == nil || calls != 0 {
+			t.Errorf("ambiguous CLI transport %q: error %v, SSH calls %d", arguments, err, calls)
+		}
+	}
+	for _, options := range []remoteLoginOptions{
+		{},
+		{AgentTransport: remoteTransportSocket},
+		{AgentTransport: remoteTransportTCP, AgentSocket: "/run/agent.sock"},
+	} {
+		if command, err := remoteHealthCommandFor(options); err == nil || command != "" {
+			t.Errorf("ambiguous transport generated health command %q, error %v", command, err)
+		}
+	}
+}
+
 func TestRemoteLoginReportsFailuresWithoutCommandDetails(t *testing.T) {
 	secret := "remote-device-token"
 	calls := 0
@@ -153,7 +219,7 @@ func TestRemoteLoginReportsFailuresWithoutCommandDetails(t *testing.T) {
 		calls++
 		return errors.New(secret)
 	}
-	options := remoteLoginOptions{Target: "goaster@example.invalid", IdentityFile: "/tmp/key", Port: 22}
+	options := remoteLoginOptions{Target: "goaster@example.invalid", IdentityFile: "/tmp/key", Port: 22, AgentTransport: remoteTransportTCP}
 	err := runRemoteLoginWith(context.Background(), options, nil, io.Discard, io.Discard, runner)
 	if err == nil || !strings.Contains(err.Error(), "remote agent login failed") {
 		t.Fatalf("error = %v, want bounded login failure", err)
@@ -175,7 +241,7 @@ func TestRemoteLoginReportsHealthFailureAfterSuccessfulLogin(t *testing.T) {
 		}
 		return nil
 	}
-	options := remoteLoginOptions{Target: "goaster@example.invalid", IdentityFile: "/tmp/key", Port: 22}
+	options := remoteLoginOptions{Target: "goaster@example.invalid", IdentityFile: "/tmp/key", Port: 22, AgentTransport: remoteTransportTCP}
 	err := runRemoteLoginWith(context.Background(), options, nil, io.Discard, io.Discard, runner)
 	if err == nil || !strings.Contains(err.Error(), "remote agent health check failed") {
 		t.Fatalf("error = %v, want health-check failure", err)
@@ -289,6 +355,7 @@ func TestRemoteLoginExistingTargetUsesOnlyPreTrustedKnownHosts(t *testing.T) {
 		Target:         "root@host.example",
 		IdentityFile:   identityFile,
 		KnownHostsFile: knownHostsFile,
+		AgentTransport: remoteTransportTCP,
 		Port:           22,
 	}
 	var calls [][]string

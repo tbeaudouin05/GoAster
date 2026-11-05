@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strings"
 	"sync"
@@ -18,6 +17,8 @@ import (
 
 	"goaster/internal/attachment"
 	"goaster/internal/chat"
+	"goaster/internal/controlsecret"
+	"goaster/internal/controltransport"
 )
 
 type httpDoer interface {
@@ -99,7 +100,6 @@ const (
 	telegramTypingRefreshInterval = 4 * time.Second
 	telegramTypingActionTimeout   = 2 * time.Second
 	telegramAgentRequestTimeout   = 20 * time.Minute
-	telegramAuthControlSecretEnv  = "GOASTER_GITHUB_AUTH_CONTROL_SECRET"
 	telegramAuthControlHeader     = "X-GoAster-GitHub-Auth-Control"
 )
 
@@ -108,6 +108,14 @@ const (
 // an initial getUpdates request; /clear and /m remain usable while model
 // authentication is unavailable.
 func Run(ctx context.Context, paths Paths, ready func() error) error {
+	controlSecret, err := controlsecret.Load()
+	if err != nil {
+		return err
+	}
+	agent, err := newAgentClient()
+	if err != nil {
+		return err
+	}
 	token, err := readPrivate(paths.Token)
 	if err != nil || ValidateToken(string(token)) != nil {
 		return fmt.Errorf("Telegram token file is invalid")
@@ -116,19 +124,24 @@ func Run(ctx context.Context, paths Paths, ready func() error) error {
 	if err != nil {
 		return fmt.Errorf("Telegram pairing state is invalid")
 	}
-	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	controlSecret := strings.TrimSpace(os.Getenv(telegramAuthControlSecretEnv))
-	if strings.ContainsAny(controlSecret, "\r\n") {
-		controlSecret = ""
-	}
 	a := &adapter{
 		token: string(token), pairing: pairing,
 		authControlSecret: controlSecret,
 		client:            &http.Client{Timeout: 40 * time.Second, CheckRedirect: noRedirect},
-		agent:             &http.Client{Timeout: telegramAgentRequestTimeout, CheckRedirect: noRedirect},
+		agent:             agent,
 		apiBase:           "https://api.telegram.org",
 	}
 	return a.run(ctx, ready)
+}
+
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+func newAgentClient() (httpDoer, error) {
+	transport, err := controltransport.ClientTransport()
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Timeout: telegramAgentRequestTimeout, CheckRedirect: noRedirect, Transport: transport}, nil
 }
 
 func (a *adapter) run(ctx context.Context, ready func() error) error {

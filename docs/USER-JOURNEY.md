@@ -25,6 +25,12 @@ same in its own home. Existing skills and memory are left untouched; GoAster
 does not update them automatically. Each starter includes `META.md`,
 `SKILL.md`, and `AUTH.md`.
 
+An upgrade does not replace installed runtime skills. Before using updated OVH
+socket or secret guidance on an existing setup, follow the explicit
+[runtime skill migration](../README.md#update-existing-runtime-skills) for the
+local app and, when applicable, the remote agent. Back up and manually merge
+the reviewed changes so existing user edits are retained.
+
 On first launch, or when no valid subscription credential is available,
 GoAster displays an OpenAI device-login URL and one-time code in that terminal.
 Open the URL in a browser, sign in with the ChatGPT account that has the
@@ -402,8 +408,14 @@ never relay them through GoAster or Telegram chat. This login writes a separate
 `/root/.goaster/agent-auth.json` on the remote host. Keep the local
 `~/.goaster/auth.json`, its tokens, and the local conversation on your own
 machine; GoAster never copies them to the host. After successful authorization,
-the existing command runs its separate SSH health check against
-`http://127.0.0.1:8765/healthz` and reports whether the running agent is ready.
+the existing command runs its separate SSH `/healthz` check over the reviewed
+agent socket or the existing loopback transport and reports whether the agent
+is ready. The handoff requires an explicit `agent_transport` selected after
+inspecting the running agent configuration. For a socket setup it also requires
+the reviewed socket path; the check never falls back to TCP. Existing loopback
+setups remain available with an explicit `tcp` selection. An omitted selection
+fails before connecting; the handoff does not automatically detect a wrong
+selection.
 That check can refresh and write the remote credential.
 Continue to Telegram setup only when this check returns `ok`; this marks the
 remote agent ready, not the full onboarding complete.
@@ -434,6 +446,11 @@ code's SHA-256 verifier; give the raw pairing code privately to the intended
 Telegram user. The pairing code is distinct from either OpenAI device-login
 code.
 
+For a fresh root-run Linux systemd setup, the agent and adapter use the same
+`GOASTER_AGENT_SOCKET` path in the agent's root-owned, mode `0700` runtime
+directory. See the [socket setup](../README.md#protected-agent-socket-for-ovh-systemd-setups)
+for the unit settings and coordinated migration of existing services.
+
 After the agent passes `/healthz`, start the separately approved Telegram
 adapter service. With systemd, configure the adapter as `Type=notify`; it
 reports ready after the agent process is available and Telegram accepts its
@@ -448,11 +465,12 @@ persists across adapter restarts. The code has no automatic expiry, so keep it
 private and use it only for the intended user.
 
 For the required end-to-end smoke test, have the paired user send a fresh,
-ordinary text message in the private Telegram chat and confirm that the remote
-agent's reply arrives in that same chat. A healthy `/healthz`, adapter
-readiness, or pairing confirmation alone does not pass this test. Report full
-onboarding complete only after this real message and reply succeed; otherwise
-report partial and continue prompting for the pending step.
+ordinary text message in the private Telegram chat and require the agent's
+`/chat` request to succeed with a normal final reply delivered in that same
+chat (HTTP 200). An HTTP error, timeout, adapter error message, healthy `/healthz`,
+adapter readiness, or pairing confirmation alone does not pass this test.
+Report full onboarding complete only after this real successful response and
+reply; otherwise report partial and continue prompting for the pending step.
 
 ## 7. Chat through Telegram
 

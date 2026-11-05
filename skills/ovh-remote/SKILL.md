@@ -87,8 +87,14 @@ stdin, a 30-second overall timeout and these options: `BatchMode=yes`,
 `ControlPath=none`, `ConnectTimeout=10`, `ServerAliveInterval=15`, and
 `ServerAliveCountMax=3`. When a known-hosts file is recorded, use it with
 `GlobalKnownHostsFile=none` and `UserKnownHostsFile` set to the safely quoted
-absolute path. Run only `curl --fail --silent --show-error --max-time 10
-http://127.0.0.1:8765/livez` remotely and suppress remote output. This checks
+absolute path. Inspect the effective agent unit's transport setting first. If
+it sets `GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock`, run only
+`/usr/bin/env GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock /usr/local/bin/goaster-agent live`
+remotely. For a different reviewed socket path, substitute that exact safe,
+absolute path. If the setting is absent, run only `curl --fail --silent
+--show-error --max-time 10 http://127.0.0.1:8765/livez`. Suppress remote
+output. A configured but unavailable socket is a failure; never retry it over
+TCP. This checks
 only that the agent process responds; it does not check whether its separate
 OpenAI login is usable. Do not call `/healthz` as part of this read-only check:
 that endpoint can refresh and write credentials. If readiness must be checked,
@@ -403,7 +409,8 @@ blocker; do not weaken SSH or silently substitute another account.
 Before using the tool, confirm internally that the exact target and local key
 are those covered by the approved routine checklist. Then call
 `process_handoff` with `profile: "openai"`, `mode: "interactive"`, that
-confirmed target, and the approved local key; do not request a second
+confirmed target, the approved local key, and the explicitly reviewed agent
+transport; do not request a second
 chat approval for this listed handoff. The tool prints the target, key path,
 port, and strict host-key policy in the local terminal and requires the
 administrator to type `YES` there before connecting. It opens `/dev/tty` when
@@ -418,7 +425,7 @@ onboarder invokes `process_handoff` itself during normal onboarding; do not ask
 the user to type this command:
 
 ```text
-goaster remote-login --target root@SERVER --key ~/.ssh/goaster-ovh
+goaster remote-login --target root@SERVER --key ~/.ssh/goaster-ovh --agent-transport socket --agent-socket /run/goaster-agent/agent.sock
 ```
 
 The flow launches OpenSSH directly with protected terminal I/O and forces an
@@ -450,10 +457,27 @@ whose provenance is unclear and which has no trusted entry, obtain and compare
 the fingerprint through a trusted channel and get explicit approval before
 connecting.
 
+Inspect the effective running agent unit, its drop-ins, launch command, and
+environment before every login; stop if the actual transport is uncertain.
+Set `agent_transport: "socket"` for a socket-configured agent and include the
+exact reviewed socket path in `agent_socket`. Set `agent_transport: "tcp"`
+only after verifying that the agent uses legacy loopback TCP, and omit
+`agent_socket` in that case. Both fields are required as applicable; never
+infer TCP from a missing path. The selection is an assertion based on this
+inspection, not automatic detection. Neither the transport nor the path is
+stored in the saved connection record.
+The remote handoff accepts only clean, absolute socket paths containing ASCII
+letters, digits, `/`, `.`, `_`, and `-`.
+The exceptional `goaster remote-login` command requires `--agent-transport
+socket --agent-socket /run/goaster-agent/agent.sock` for the example socket,
+or `--agent-transport tcp` for a verified legacy loopback setup. An omitted or
+inconsistent selection fails before SSH. Socket health checks use the agent's
+peer-verified `health` probe and never fall back to TCP.
+
 The administrator opens the displayed URL, signs in, and approves the remote
 device authorization in the browser. Wait for that approval and for the
 interactive login to exit. The existing command then opens a second strict SSH
-session for the `curl` check of `http://127.0.0.1:8765/healthz`; this can
+session for the `/healthz` check over the selected transport; this can
 refresh and write the remote credential. Include it in the approved login
 handoff and continue onboarding only when it returns `ok`.
 Treat a canceled login or failed health check as a failure or uncertain result.
@@ -571,6 +595,21 @@ or replace existing files. The agent installs starters only when its user
 skills directory is absent and creates default `MEMORY.md` only if missing;
 never replace existing user skills or memory. Ensure these assets are installed
 before starting the agent.
+
+An existing runtime's skill files do not update when the package assets change.
+Before relying on this revised workflow or migrating an existing service,
+follow the explicit runtime-skill migration in the reviewed release README:
+inspect both the local user's and the remote agent's applicable runtime trees,
+back up existing skills privately outside their discovery directories, compare
+the installed files and their edits with the reviewed new `META.md`, `SKILL.md`,
+and `AUTH.md`, and prepare and review a manual merge. Preserve user edits and
+memory; never automatically copy starter files over an existing skill. Apply
+only approved changes after checking the files have not changed since backup.
+Stop the relevant processes during the change and include stopping, restarting,
+and verification in the approved checklist. Agent and adapter restarts must be
+coordinated, with the agent verified before starting the adapter. Existing
+conversations with changed selected skills need `/clear` or their exact prior
+files restored before continuing.
 
 After cloning and before building or installing anything, verify that this
 source revision includes the current asset packaging checks and all required
@@ -729,11 +768,91 @@ For a fresh systemd agent unit, include these service settings:
 ```ini
 [Service]
 User=root
+RuntimeDirectory=goaster-agent
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+Environment=GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock
 ExecStart=/usr/bin/env HOME=/root GOASTER_STARTER_DIR=/usr/local/share/goaster/skills /usr/local/bin/goaster-agent
 ```
 
-The Telegram unit also runs as `root`; no GitHub-specific environment file is
-needed for the standard GitHub CLI web login.
+Set the same `Environment=GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock`
+in the Telegram unit's `[Service]` section, which also runs as `root`. The
+agent unit owns the runtime directory; systemd creates it as root with mode
+`0700` before launch and removes it when the service stops. Do not create a
+second runtime directory with the Telegram unit. Both units must see the same
+directory even with filesystem namespaces or bind mounts. Ensure every parent
+is root-owned and has no symlinks or untrusted writable access (a root-owned
+sticky directory protects root-owned children). The socket is created with
+mode `0600`; the adapter verifies its root owner and kernel-reported root peer
+before sending data. An existing entry is not removed by the agent. After an
+unclean stop, stop both services and inspect the exact path, its type and
+ownership, and the system's Unix listeners and owning processes. Only after
+confirming that the entry is the root-owned stale socket in the reviewed private
+directory and that no process is using it, manually remove that exact socket as
+an approved step. Leave other entries untouched and investigate if anything is
+uncertain. Start and verify the agent before starting the adapter. Keep the
+runtime directory private, and do not grant untrusted users filesystem or ACL
+access.
+
+When this setting is present, the agent listens only on the socket and the
+adapter uses only that socket. A missing, invalid, or unavailable socket fails
+closed. A configured control secret file requires the socket setting in each
+service; omitting it fails startup. If both settings are absent, the existing
+loopback TCP behavior, including the legacy secret environment value, is
+unchanged. For an existing installation, coordinate the transport change:
+review both units, stop the adapter, update and reload both units, restart the
+agent, verify it using the socket, then restart the adapter and require the
+real Telegram message/reply check. Include each mutation in the approved
+checklist or obtain the required approval. Do not switch only one unit.
+
+No GitHub-specific environment file is
+needed for the standard GitHub CLI web login, but both units need the shared
+control secret used to authenticate `/chat` and GitHub authorization
+requests. For a fresh setup, before either service starts, create one 32-byte
+random secret as 64 lowercase hexadecimal characters in a root-owned,
+non-symlinked file such as
+`/etc/goaster/control-secret`; keep the file at mode `0600` and its parent
+root-controlled and not group- or world-writable. Do not put the secret value
+in a unit, command argument, chat message, or log. Add these settings to both
+the agent and Telegram `[Service]` sections:
+
+```ini
+Environment=GOASTER_GITHUB_AUTH_CONTROL_SECRET_FILE=/etc/goaster/control-secret
+UnsetEnvironment=GOASTER_GITHUB_AUTH_CONTROL_SECRET
+```
+
+The file path must be absolute and clean, and the file may contain only the 64
+lowercase hexadecimal characters with an optional final newline. For fresh
+setup, reload systemd when needed, start the agent first, and start the adapter
+only after the agent readiness check succeeds. After pairing, require a fresh
+ordinary message whose `/chat` request returns HTTP 200 with a non-empty `final`
+reply and is delivered in the same private chat. An HTTP error, timeout,
+adapter error message, healthy `/healthz`, readiness notification, or pairing
+confirmation alone is insufficient.
+
+For an existing installation, defer the rotation if both services cannot be
+restarted and verified together. First stop the adapter before staging a new
+secret, changing a file, or editing either unit. Retain a protected, usable
+copy of the previous secret and unit settings for recovery without exposing the
+secret. Stage a replacement in a new protected file (or atomically replace the
+existing file), configure both units with the same file and socket paths, and
+reload systemd if either unit changed. Restart the agent and verify its
+readiness before starting the adapter. Then repeat the successful `/chat`
+final-reply check; readiness alone does not validate the rotated secret. On
+failure, stop the adapter, restore the previous protected secret and unit
+settings for both services, and reload if needed. Restart the agent after the
+restore even when only the secret file changed; it retains the secret loaded at
+startup. Verify the restarted agent before restarting the adapter and repeating
+the message/reply check. If recovery cannot
+be verified, leave the adapter stopped and investigate. Include these mutations
+and any recovery in the approved checklist or obtain the required approval.
+
+Mode `0600` limits access by other local users, but both services and
+`shell_execute` run as `root`; the GoAster shell can therefore read the file and
+has host-wide access. On Windows, leave the file setting unset and use the
+legacy `GOASTER_GITHUB_AUTH_CONTROL_SECRET` environment setting instead. Do not
+set both: a configured file path is validated with Unix ownership metadata and
+fails closed on Windows.
 
 The explicit assignment binds both starter skills and default memory to the
 reviewed installation, even if `/usr/local/bin/skills` exists or the service
@@ -812,11 +931,12 @@ is included in the approved routine checklist; otherwise obtain separate
 explicit approval before restarting an agent or adapter service.
 
 Do not claim the agent is ready for Telegram chat until remote login succeeds
-and the running agent's loopback `http://127.0.0.1:8765/healthz` returns `ok`.
+and the running agent's `/healthz` returns `ok` over its configured transport.
 That check verifies the stored credential and refreshes it if needed; it is not
 a successful model request. Configure a systemd adapter service as
-`Type=notify` for readiness reporting; the adapter requires this health check
-and an initial successful poll before sending its ready notification. If it was
+`Type=notify` for readiness reporting; the adapter checks agent liveness and
+requires an initial successful poll before sending its ready notification. It
+checks authentication before telling a paired user that chat is ready. If it was
 started before remote login, restart it after the agent is ready only if that
 restart is listed in the approved routine checklist; otherwise ask for
 separate explicit approval. Preserve the existing Telegram token and pairing
@@ -934,7 +1054,7 @@ successfully pairs or an administrator performs a separately approved reset.
 Treat it as a bearer secret while it is pending. Setup refuses to replace
 existing pairing state. After pairing, only the saved numeric Telegram user ID
 is allowed. The adapter forwards that account's ordinary text messages from
-private chats or groups it receives to the loopback agent and returns replies
+private chats or groups it receives to the local agent and returns replies
 to the originating chat. Other users, bot senders, and group messages from a
 different account are ignored. A pairing does not grant SSH access or host
 privileges. Group delivery of ordinary text may require disabling Telegram

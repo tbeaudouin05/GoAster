@@ -44,6 +44,37 @@ network connection. An existing skills directory, even an empty one, and an
 existing MEMORY.md are left untouched; GoAster never updates user skills
 automatically.
 
+### Update existing runtime skills
+
+Updating the package or `GOASTER_STARTER_DIR` does not update an existing
+runtime skills directory. In particular, an older installed `ovh-remote`
+workflow will not acquire the socket, secret-rotation, or transport-selection
+guidance merely by installing a new release. Before using those steps on an
+existing installation, review and explicitly migrate the installed workflow.
+The local app uses `~/.goaster/artefacts/skills/`; a root-run remote agent uses
+`/root/.goaster/artefacts/skills/`. They are separate installations.
+
+1. Choose the matching `skills/` tree from the reviewed new package or source
+   release. Inspect the existing runtime tree and its files; stop if paths are
+   symlinked or their ownership or contents are unexpected. Stop the processes
+   using that runtime while changing files; for a remote setup, stop the
+   adapter before the agent. Include those actions in the approved checklist.
+2. Make a private backup of the existing runtime skills, including all user
+   edits, outside the discovered `skills/` directory. Preserve file ownership
+   and permissions. Compare each affected `META.md`, `SKILL.md`, and `AUTH.md`
+   with the reviewed new version. If the previous starter version is available,
+   use it as a common baseline; otherwise review the differences manually.
+3. Prepare a manual merge that retains user changes and incorporates the
+   reviewed guidance. Inspect the complete resulting files and diff, obtain
+   approval for the intended changes, and verify the runtime files still match
+   the backup before applying the approved merge. Do not recursively copy the
+   new starter tree over existing files or automatically replace edited files.
+   Keep the backup for recovery. Leave existing memory untouched.
+4. Restart the relevant processes under the approved checklist, agent before
+   adapter on a remote host, and verify the workflow. A conversation that had
+   selected a changed skill must use `/clear` to discard that selection, or
+   restore the exact original files before continuing that conversation.
+
 Each starter contains `META.md`, `SKILL.md`, and `AUTH.md`. If installation is
 interrupted, GoAster reports the `.skills-installing` marker and stops; inspect
 the partial files, preserve any edits, and remove or move them and the marker
@@ -388,6 +419,108 @@ GoAster's root-run unrestricted shell can access locally stored `gh`
 credentials. The standard web login does not create a credential sandbox; do
 not describe those credentials as inaccessible to the agent or model.
 
+### Protected agent socket for OVH systemd setups
+
+For a fresh Linux OVH setup running both services as root, configure the
+agent's systemd `[Service]` section with:
+
+```ini
+User=root
+RuntimeDirectory=goaster-agent
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+Environment=GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock
+```
+
+Set the same `GOASTER_AGENT_SOCKET` environment assignment in the Telegram
+service's `[Service]` section. The agent's runtime directory is root-owned and
+private; its socket is mode `0600`. Both services must see the same directory,
+including when a unit uses a filesystem namespace. Its ancestors must be
+root-owned, without symlinks or untrusted writable access, except that a
+root-owned sticky directory protects root-owned children. The adapter also
+checks the socket owner and kernel-reported peer before sending requests.
+Root and the root-run GoAster shell still have full host access.
+
+With the variable set, the agent listens only on the socket and the adapter
+never falls back to TCP if the socket is missing or unsafe. A configured control
+secret file also requires this socket setting in each service; omitting it fails
+startup. When both settings are absent, existing loopback TCP behavior remains
+unchanged, including with the legacy control-secret environment value. Socket
+mode is supported on Linux for the root service setup; paths must be absolute, clean,
+and at most 107 bytes. An explicitly empty value fails closed. Systemd normally
+removes the runtime directory on stop; the agent does not overwrite an existing
+socket or other file.
+
+After an unclean stop, an unexpected socket can prevent a restart. Stop both
+services and inspect the exact path, its type and ownership, and the system's
+Unix listeners and owning processes. Only after confirming that the entry is
+the root-owned stale socket in the reviewed private directory and that no
+process is using it, manually remove that exact socket. Leave other entries
+untouched and investigate if anything is uncertain. Start and verify the agent
+before starting the adapter.
+
+For an existing installation, review both units and coordinate the change:
+stop the adapter, update both units, reload systemd, restart the agent and
+check it over the socket, then restart the adapter and perform the real
+Telegram message/reply check. Inspect the running agent's effective transport
+before each login. The OpenAI `process_handoff` requires `agent_transport`
+(`socket` or `tcp`); for a socket also pass the reviewed path as `agent_socket`.
+The exceptional `goaster remote-login` command requires `--agent-transport`
+and, for sockets, `--agent-socket`. Legacy loopback installations use explicit
+`tcp`. An omitted or inconsistent selection fails before SSH. The saved
+connection record stores neither the transport nor the path, so inspect the
+effective unit for later logins. The selection is an operator assertion, not
+an automatic detection of the service configuration. A
+socket-based liveness check can use
+`/usr/bin/env GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock /usr/local/bin/goaster-agent live`;
+use `health` in place of `live` for readiness. These probes verify the socket
+and its peer and do not fall back to TCP. For remote login, socket paths may
+contain only ASCII letters, digits, `/`, `.`, `_`, and `-`.
+
+### Shared agent and adapter control secret
+
+For a fresh systemd setup, before either service starts, provision one fresh
+32-byte secret as 64 lowercase hexadecimal characters in a root-owned file
+such as `/etc/goaster/control-secret`, with mode `0600` (and a non-symlinked,
+root-controlled parent). Set the same non-secret file path in both the
+`goaster-agent` and `goaster-telegram` units:
+
+```ini
+Environment=GOASTER_GITHUB_AUTH_CONTROL_SECRET_FILE=/etc/goaster/control-secret
+UnsetEnvironment=GOASTER_GITHUB_AUTH_CONTROL_SECRET
+```
+
+After fresh setup, reload systemd when needed, start the agent first, and start
+the adapter only after the agent readiness check succeeds. For the final gate,
+have the paired user send a fresh ordinary message and require `/chat` to return
+HTTP 200 with a non-empty final reply that the adapter delivers in the same
+private Telegram chat. An HTTP error, timeout, adapter error message, readiness
+result, or pairing confirmation does not pass this check.
+
+For an existing installation, defer the rotation if both services cannot be
+restarted and verified together. First stop the adapter before staging a new
+secret, changing a file, or editing either unit. Retain a protected, usable
+copy of the previous secret and unit settings for recovery without exposing the
+secret. Stage a replacement in a new protected file (or atomically replace the
+existing file), configure both units with the same file and socket paths, and
+reload systemd if either unit changed. Restart the agent and verify its
+readiness before starting the adapter. Then repeat the successful `/chat`
+final-reply check; readiness alone does not validate the rotated secret. On
+failure, stop the adapter, restore the previous protected secret and unit
+settings for both services, and reload if needed. Restart the agent after the
+restore even if only the secret file changed: the running agent keeps the
+secret it loaded at startup. Verify the restarted agent before restarting the
+adapter and repeating the message/reply check. If recovery cannot
+be verified, leave the adapter stopped and investigate.
+
+Mode `0600` protects the file from other local users, not from GoAster's
+root-run `shell_execute`, which can read root files and has host-wide impact.
+
+On Windows, leave `GOASTER_GITHUB_AUTH_CONTROL_SECRET_FILE` unset and use the
+legacy `GOASTER_GITHUB_AUTH_CONTROL_SECRET` environment setting instead. The
+file setting requires Unix ownership metadata and fails closed on Windows; do
+not configure both settings.
+
 ### GitHub CLI login
 
 Use an existing `gh` session when it is authenticated to `github.com`. Before
@@ -571,7 +704,7 @@ The local terminal login described above stays local. Never copy or send its
 `auth.json`, a custom `-auth-file`, its OAuth tokens, or its saved session to the
 OVH host. A freshly installed remote agent has no subscription credentials and
 does not use the terminal's credential file. The agent can run while waiting
-for login, but its loopback `/healthz` and `/chat` endpoints return unavailable.
+for login, but its `/healthz` and `/chat` endpoints return unavailable.
 
 GoAster also remembers a successful server connection locally. It saves a
 small non-secret connection record beside the dedicated SSH key, containing
@@ -632,8 +765,9 @@ Telegram chat. The remote login saves its own credentials as
 `0700` directory permissions. This file is separate from
 `/root/.goaster/auth.json`, even if both programs use the same home; GoAster never
 copies the local file. After login exits successfully, the command runs a
-separate SSH health check against the remote agent's loopback `/healthz`
-endpoint and reports failure clearly. This check can refresh remote credentials.
+separate SSH health check against the remote agent's `/healthz` endpoint over
+the selected socket or loopback transport and reports failure clearly. This
+check can refresh remote credentials.
 If login is canceled or the
 health check fails, inspect the remote service before retrying. For later
 reauthentication, keep the agent service running so the command's built-in
@@ -704,7 +838,7 @@ images sent as Telegram documents; supported formats are JPEG, PNG, GIF, and
 WebP. Images are limited to 8192 pixels per dimension and 20 million pixels;
 for animated GIFs the 20 million pixel limit applies across all frames, with
 at most 1000 frames. Telegram downloads are limited to 20 MiB. The adapter
-sends the bytes as base64 in the loopback request; the unprivileged agent
+sends the bytes as base64 in the local agent request; the agent
 creates its own private temporary directory and 0600 file for the current
 turn, and removes them when the request finishes, including on errors or
 timeouts. No shared temporary directory or adapter-owned file is needed. The

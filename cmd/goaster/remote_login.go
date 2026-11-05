@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os/exec"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,8 @@ const (
 	remoteAgentPath           = "/usr/local/bin/goaster-agent"
 	remoteLoginCommand        = remoteAgentPath + " login"
 	remoteHealthCommand       = "curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8765/healthz"
+	remoteTransportTCP        = "tcp"
+	remoteTransportSocket     = "socket"
 	remoteLoginTimeout        = 20 * time.Minute
 	remoteHealthTimeout       = 30 * time.Second
 	remoteFirstContactTimeout = 30 * time.Second
@@ -37,6 +40,8 @@ type remoteLoginOptions struct {
 	Target            string
 	IdentityFile      string
 	KnownHostsFile    string
+	AgentTransport    string
+	AgentSocket       string
 	Port              int
 	ProvisionedTarget remoteProvisionedTarget
 }
@@ -62,7 +67,7 @@ func parseRemoteLogin(args []string, output io.Writer) (remoteLoginOptions, erro
 	flags := flag.NewFlagSet("goaster remote-login", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "Usage: goaster remote-login --target USER@HOST --key PATH [options]")
+		fmt.Fprintln(output, "Usage: goaster remote-login --target USER@HOST --key PATH --agent-transport socket|tcp [options]")
 		fmt.Fprintln(output, "This is an internal command for exceptional use. Normally, ask GoAster in chat to set up or sign in to the remote agent.")
 		flags.PrintDefaults()
 	}
@@ -70,12 +75,26 @@ func parseRemoteLogin(args []string, output io.Writer) (remoteLoginOptions, erro
 	flags.StringVar(&options.IdentityFile, "key", "", "local SSH private-key path (required)")
 	flags.StringVar(&options.IdentityFile, "identity", "", "alias for --key")
 	flags.StringVar(&options.KnownHostsFile, "known-hosts", "", "optional known_hosts file; strict verification is always enabled")
+	flags.Func("agent-transport", "required reviewed agent transport: socket or tcp", func(value string) error {
+		options.AgentTransport = value
+		return nil
+	})
+	flags.StringVar(&options.AgentSocket, "agent-socket", "", "absolute Unix socket path for the remote agent, when configured")
 	flags.IntVar(&options.Port, "port", options.Port, "SSH port")
 	if err := flags.Parse(args); err != nil {
 		return remoteLoginOptions{}, err
 	}
 	if flags.NArg() != 0 {
 		return remoteLoginOptions{}, fmt.Errorf("unexpected remote-login arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	var emptySocket bool
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "agent-socket" && options.AgentSocket == "" {
+			emptySocket = true
+		}
+	})
+	if emptySocket {
+		return remoteLoginOptions{}, errors.New("remote agent socket path is invalid")
 	}
 	if err := validateRemoteLoginOptions(options); err != nil {
 		return remoteLoginOptions{}, err
@@ -102,12 +121,53 @@ func validateRemoteLoginOptions(options remoteLoginOptions) error {
 	if options.Port < 1 || options.Port > 65535 {
 		return errors.New("remote-login port must be between 1 and 65535")
 	}
+	switch options.AgentTransport {
+	case remoteTransportSocket:
+		if !validRemoteAgentSocket(options.AgentSocket) {
+			return errors.New("socket transport requires a valid remote agent socket path")
+		}
+	case remoteTransportTCP:
+		if options.AgentSocket != "" {
+			return errors.New("remote agent socket path cannot be used with TCP transport")
+		}
+	default:
+		return errors.New("remote agent transport must be explicitly selected as socket or tcp")
+	}
 	if !options.ProvisionedTarget.isZero() {
 		if err := validateRemoteProvisionedTarget(options.ProvisionedTarget, options.Target); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// The path is embedded in a fixed remote shell command. Limit it to clean,
+// absolute Linux paths made solely of shell-safe characters.
+func validRemoteAgentSocket(socket string) bool {
+	if !path.IsAbs(socket) || path.Clean(socket) != socket || socket == "/" || len(socket) > 107 {
+		return false
+	}
+	for _, ch := range socket {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '/' || ch == '_' || ch == '-' || ch == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func remoteHealthCommandFor(options remoteLoginOptions) (string, error) {
+	switch options.AgentTransport {
+	case remoteTransportTCP:
+		if options.AgentSocket == "" {
+			return remoteHealthCommand, nil
+		}
+	case remoteTransportSocket:
+		if validRemoteAgentSocket(options.AgentSocket) {
+			return "/usr/bin/env GOASTER_AGENT_SOCKET=" + options.AgentSocket + " " + remoteAgentPath + " health", nil
+		}
+	}
+	return "", errors.New("invalid remote agent transport selection")
 }
 
 func (target remoteProvisionedTarget) isZero() bool {
@@ -191,6 +251,10 @@ func runRemoteLoginWith(ctx context.Context, options remoteLoginOptions, input i
 	if err := validateRemoteLoginOptions(options); err != nil {
 		return err
 	}
+	healthCommand, err := remoteHealthCommandFor(options)
+	if err != nil {
+		return err
+	}
 	if input == nil {
 		input = strings.NewReader("")
 	}
@@ -226,7 +290,7 @@ func runRemoteLoginWith(ctx context.Context, options remoteLoginOptions, input i
 	}
 
 	healthContext, cancelHealth := context.WithTimeout(ctx, remoteHealthTimeout)
-	healthErr := sshRun(healthContext, sshArguments(options, false, remoteHealthCommand), input, output, errorOutput)
+	healthErr := sshRun(healthContext, sshArguments(options, false, healthCommand), input, output, errorOutput)
 	healthContextErr := healthContext.Err()
 	cancelHealth()
 	if healthErr != nil || healthContextErr != nil {

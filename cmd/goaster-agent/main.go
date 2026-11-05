@@ -1,4 +1,4 @@
-// goaster-agent exposes GoAster chat only on the server's loopback interface.
+// goaster-agent exposes GoAster chat locally over loopback or a Unix socket.
 package main
 
 import (
@@ -11,15 +11,19 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"goaster/internal/artefacts"
 	"goaster/internal/attachment"
 	"goaster/internal/chat"
 	"goaster/internal/command"
+	"goaster/internal/controlsecret"
+	"goaster/internal/controltransport"
 )
 
 const maxChatEnvelopeBytes int64 = 1 << 20
@@ -61,18 +65,56 @@ func run(ctx context.Context, args []string, output io.Writer, auth *chat.OpenAI
 	if len(args) == 1 && args[0] == "login" {
 		return auth.Login(ctx, output)
 	}
+	if len(args) == 1 && (args[0] == "live" || args[0] == "health") {
+		return probeAgent(ctx, args[0], output)
+	}
 	if len(args) != 0 {
-		return fmt.Errorf("invalid invocation; use goaster-agent or goaster-agent login")
+		return fmt.Errorf("invalid invocation; use goaster-agent, login, live, or health")
 	}
 	return start(auth.Store)
 }
 
+func probeAgent(ctx context.Context, probe string, output io.Writer) error {
+	transport, err := controltransport.ClientTransport()
+	if err != nil {
+		return err
+	}
+	endpoint := "/livez"
+	if probe == "health" {
+		endpoint = "/healthz"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+controltransport.Address+endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("agent probe failed")
+	}
+	client := http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("agent probe failed")
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 33))
+	if err != nil || response.StatusCode != http.StatusOK || string(body) != "ok\n" {
+		return fmt.Errorf("agent probe failed")
+	}
+	_, err = io.WriteString(output, "ok\n")
+	return err
+}
+
 func serve(store chat.CredentialStore) error {
+	controlSecret, err := controlsecret.Load()
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	memory, err := chat.NewMemoryStoreWithError("")
 	if err != nil {
 		return fmt.Errorf("initialize Markdown memory store: %w", err)
 	}
-	if err := artefacts.InstallStarters(context.Background()); err != nil {
+	if err := artefacts.InstallStarters(ctx); err != nil {
 		return fmt.Errorf("install starter skills: %w", err)
 	}
 	provider := chat.NewCodexProvider(store)
@@ -80,15 +122,9 @@ func serve(store chat.CredentialStore) error {
 	if err != nil {
 		return fmt.Errorf("initialize background command manager: %w", err)
 	}
-	stopSignalHandler := backgroundManager.CloseOnSignal()
-	defer stopSignalHandler()
 	defer backgroundManager.Close()
 	if err := chat.RegisterBackgroundCommandTool(provider, backgroundManager); err != nil {
 		return fmt.Errorf("register background command tool: %w", err)
-	}
-	controlSecret := strings.TrimSpace(os.Getenv(githubAuthControlSecretEnv))
-	if strings.ContainsAny(controlSecret, "\r\n") {
-		controlSecret = ""
 	}
 	githubAuth := newGitHubAuthManager(githubAuthConfig{
 		ClientID:   os.Getenv(githubClientIDEnv),
@@ -101,8 +137,22 @@ func serve(store chat.CredentialStore) error {
 	if err != nil {
 		return fmt.Errorf("initialize model registry: %w", err)
 	}
-	server := &http.Server{Addr: "127.0.0.1:8765", Handler: handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider, memory, provider.CheckAuth, registry, githubAuth, controlSecret), ReadHeaderTimeout: 10 * time.Second}
-	if err := server.ListenAndServe(); err != nil {
+	listener, err := controltransport.Listen()
+	if err != nil {
+		return fmt.Errorf("could not start local agent listener: %w", err)
+	}
+	defer listener.Close()
+	server := http.Server{Handler: handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider, memory, provider.CheckAuth, registry, githubAuth, controlSecret), ReadHeaderTimeout: 10 * time.Second}
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		<-ctx.Done()
+		_ = server.Close()
+	}()
+	err = server.Serve(listener)
+	stop()
+	<-stopped // Wait for Close to finish unlinking the Unix socket.
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("server stopped")
 	}
 	return nil

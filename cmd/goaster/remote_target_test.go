@@ -228,7 +228,7 @@ func TestRemoteLoginFailureDoesNotCreateConnectionRecord(t *testing.T) {
 				}
 			}
 			calls := 0
-			options := remoteLoginOptions{Target: "root@new.example", IdentityFile: identityFile, Port: 22}
+			options := remoteLoginOptions{Target: "root@new.example", IdentityFile: identityFile, Port: 22, AgentTransport: remoteTransportTCP}
 			err := runRemoteLoginWith(context.Background(), options, strings.NewReader(""), io.Discard, io.Discard, func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
 				calls++
 				if calls == 2 {

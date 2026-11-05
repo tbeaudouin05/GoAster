@@ -23,9 +23,15 @@ belong in this workflow:
 ```sh
 go test ./cmd/goaster ./cmd/goaster-agent ./config \
   ./internal/artefacts ./internal/attachment ./internal/chat \
-  ./internal/command ./internal/filesync ./internal/localenv \
+  ./internal/command ./internal/controlsecret ./internal/controltransport \
+  ./internal/filesync ./internal/localenv \
   ./internal/scheduler ./packaging/cmd/archive
 ```
+
+On Linux, the protected socket tests require root and a short, secure `TMPDIR`
+whose ancestors are root-owned and safe. If those tests cannot run, report that
+coverage as incomplete. Use only a temporary directory you are authorized to
+use and preserve its existing files and policy markers.
 
 ## Isolated binary and prompt smoke test
 

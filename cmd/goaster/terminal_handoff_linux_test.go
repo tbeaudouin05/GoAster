@@ -27,7 +27,7 @@ func TestDetachedProcessCannotStartProtectedLogin(t *testing.T) {
 				t.Fatal("detached process started SSH")
 				return nil
 			}))
-		result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"root@host.example","key":"/tmp/key"}`)
+		result, err := tool.Handler(context.Background(), `{"agent_transport":"tcp","profile":"openai","target":"root@host.example","key":"/tmp/key"}`)
 		if err != nil || result != processHandoffToolNoTerminal {
 			t.Fatalf("result = %q, error = %v", result, err)
 		}
@@ -44,7 +44,7 @@ func TestDetachedProcessCannotStartProtectedLogin(t *testing.T) {
 				calls++
 				return nil
 			}))
-		result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"root@host.example","key":"/tmp/key"}`)
+		result, err := tool.Handler(context.Background(), `{"agent_transport":"tcp","profile":"openai","target":"root@host.example","key":"/tmp/key"}`)
 		if err != nil || result != processHandoffToolSucceeded || calls != 2 {
 			t.Fatalf("PTY handoff result = %q, error = %v, SSH calls = %d", result, err, calls)
 		}

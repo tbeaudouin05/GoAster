@@ -23,6 +23,7 @@ import (
 	"goaster/internal/attachment"
 	"goaster/internal/chat"
 	"goaster/internal/command"
+	"goaster/internal/controlsecret"
 )
 
 type fakeProvider struct{ err error }
@@ -230,6 +231,14 @@ func TestAgentLoopbackHandler(t *testing.T) {
 	}
 	if checks != 1 {
 		t.Fatalf("readiness authentication checks = %d, want 1", checks)
+	}
+}
+
+func TestServeRejectsInvalidConfiguredControlSecretBeforeStartup(t *testing.T) {
+	t.Setenv(controlsecret.ValueEnv, "")
+	t.Setenv(controlsecret.FileEnv, filepath.Join(t.TempDir(), "missing-control-secret"))
+	if err := serve(chat.CredentialStore{}); err == nil || err.Error() != "control secret configuration is invalid" {
+		t.Fatalf("serve() error = %v; want invalid control secret", err)
 	}
 }
 

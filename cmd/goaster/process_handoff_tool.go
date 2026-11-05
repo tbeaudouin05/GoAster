@@ -38,6 +38,8 @@ type processHandoffToolArguments struct {
 	Target            string                  `json:"target"`
 	Key               string                  `json:"key"`
 	KnownHosts        string                  `json:"known_hosts,omitempty"`
+	AgentTransport    string                  `json:"agent_transport"`
+	AgentSocket       string                  `json:"agent_socket,omitempty"`
 	Port              int                     `json:"port,omitempty"`
 	ProvisionedTarget remoteProvisionedTarget `json:"provisioned_target,omitempty"`
 }
@@ -51,6 +53,8 @@ type processHandoffRequest struct {
 	Target               string
 	IdentityFile         string
 	KnownHostsFile       string
+	AgentTransport       string
+	AgentSocket          string
 	Port                 int
 	ProvisionedTarget    remoteProvisionedTarget
 	HasProvisionedTarget bool
@@ -115,6 +119,15 @@ func newProcessHandoffTool(handoff processHandoff) chat.Tool {
 					"type":        "string",
 					"description": "Optional local known_hosts file containing the already verified host key",
 				},
+				"agent_socket": map[string]any{
+					"type":        "string",
+					"description": "Required with socket transport: exact absolute Unix socket path from the reviewed running agent configuration; omit for tcp",
+				},
+				"agent_transport": map[string]any{
+					"type":        "string",
+					"enum":        []string{remoteTransportSocket, remoteTransportTCP},
+					"description": "Required: inspect the running remote agent configuration and select socket or tcp; never infer tcp from a missing socket path",
+				},
 				"provisioned_target": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -138,7 +151,7 @@ func newProcessHandoffTool(handoff processHandoff) chat.Tool {
 					"description": "SSH port, default 22",
 				},
 			},
-			"required":             []string{"profile", "target", "key"},
+			"required":             []string{"profile", "target", "key", "agent_transport"},
 			"additionalProperties": false,
 		},
 		Handler: func(ctx context.Context, arguments string) (string, error) {
@@ -194,6 +207,9 @@ func parseProcessHandoffToolRequest(arguments string) (processHandoffRequest, er
 	if _, exists := fields["port"]; !exists {
 		parsed.Port = 22
 	}
+	if _, exists := fields["agent_socket"]; exists && !validRemoteAgentSocket(parsed.AgentSocket) {
+		return processHandoffRequest{}, fmt.Errorf("remote agent socket path is invalid")
+	}
 	key, err := expandProcessHandoffPath(parsed.Key)
 	if err != nil {
 		return processHandoffRequest{}, err
@@ -209,6 +225,8 @@ func parseProcessHandoffToolRequest(arguments string) (processHandoffRequest, er
 		Target:               parsed.Target,
 		IdentityFile:         key,
 		KnownHostsFile:       knownHosts,
+		AgentTransport:       parsed.AgentTransport,
+		AgentSocket:          parsed.AgentSocket,
 		Port:                 parsed.Port,
 		ProvisionedTarget:    parsed.ProvisionedTarget,
 		HasProvisionedTarget: hasProvisionedTarget,
@@ -250,6 +268,8 @@ func (request processHandoffRequest) remoteLoginOptions() remoteLoginOptions {
 		Target:            request.Target,
 		IdentityFile:      request.IdentityFile,
 		KnownHostsFile:    request.KnownHostsFile,
+		AgentTransport:    request.AgentTransport,
+		AgentSocket:       request.AgentSocket,
 		Port:              request.Port,
 		ProvisionedTarget: request.ProvisionedTarget,
 	}

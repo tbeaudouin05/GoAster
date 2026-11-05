@@ -25,6 +25,41 @@ type channelWriter struct {
 	writes chan string
 }
 
+func TestProcessHandoffAcceptsOnlySafeAgentSocket(t *testing.T) {
+	request, err := parseProcessHandoffToolRequest(`{"agent_transport":"socket","profile":"openai","target":"root@host.example","key":"/tmp/key","agent_socket":"/run/goaster-agent/agent.sock"}`)
+	if err != nil || request.remoteLoginOptions().AgentTransport != remoteTransportSocket || request.remoteLoginOptions().AgentSocket != "/run/goaster-agent/agent.sock" {
+		t.Fatalf("socket handoff request = %+v, %v", request, err)
+	}
+	for _, value := range []string{`""`, `null`, `"/run/a;id"`, `"/run/a/../b"`} {
+		args := `{"agent_transport":"socket","profile":"openai","target":"root@host.example","key":"/tmp/key","agent_socket":` + value + `}`
+		if _, err := parseProcessHandoffToolRequest(args); err == nil {
+			t.Errorf("accepted invalid agent_socket %s", value)
+		}
+	}
+	for _, arguments := range []string{
+		`{"profile":"openai","target":"root@host.example","key":"/tmp/key"}`,
+		`{"profile":"openai","target":"root@host.example","key":"/tmp/key","agent_socket":"/run/agent.sock"}`,
+		`{"profile":"openai","target":"root@host.example","key":"/tmp/key","agent_transport":null}`,
+		`{"profile":"openai","target":"root@host.example","key":"/tmp/key","agent_transport":""}`,
+		`{"profile":"openai","target":"root@host.example","key":"/tmp/key","agent_transport":"auto"}`,
+		`{"profile":"openai","target":"root@host.example","key":"/tmp/key","agent_transport":"socket"}`,
+		`{"profile":"openai","target":"root@host.example","key":"/tmp/key","agent_transport":"tcp","agent_socket":"/run/agent.sock"}`,
+	} {
+		calls := 0
+		result, err := newProcessHandoffTool(func(context.Context, processHandoffRequest) string {
+			calls++
+			return processHandoffToolSucceeded
+		}).Handler(context.Background(), arguments)
+		if err != nil || result != processHandoffToolInvalid || calls != 0 {
+			t.Errorf("ambiguous transport request %s: result %q, error %v, handoffs %d", arguments, result, err, calls)
+		}
+	}
+	tcp, err := parseProcessHandoffToolRequest(`{"profile":"openai","target":"root@host.example","key":"/tmp/key","agent_transport":"tcp"}`)
+	if err != nil || tcp.remoteLoginOptions().AgentTransport != remoteTransportTCP || tcp.AgentSocket != "" {
+		t.Fatalf("explicit legacy TCP handoff = %+v, %v", tcp, err)
+	}
+}
+
 func newChannelWriter() channelWriter {
 	return channelWriter{writes: make(chan string, 64)}
 }
@@ -88,8 +123,12 @@ func TestProcessHandoffToolUsesApprovedInteractiveFlowWithoutRelayingOutput(t *t
 	if registered.Parameters["additionalProperties"] != false {
 		t.Fatalf("tool schema allows extra arguments: %+v", registered.Parameters)
 	}
+	required, ok := registered.Parameters["required"].([]string)
+	if !ok || !strings.Contains(strings.Join(required, ","), "agent_transport") {
+		t.Fatalf("tool schema does not require transport: %+v", registered.Parameters)
+	}
 
-	result, err := registered.Handler(context.Background(), `{"profile":"openai","mode":"interactive","target":"goaster@host.example","key":"~/.ssh/goaster-ovh","known_hosts":"~/.ssh/verified_hosts","port":2222}`)
+	result, err := registered.Handler(context.Background(), `{"agent_transport":"tcp","profile":"openai","mode":"interactive","target":"goaster@host.example","key":"~/.ssh/goaster-ovh","known_hosts":"~/.ssh/verified_hosts","port":2222}`)
 	if err != nil {
 		t.Fatalf("process_handoff handler: %v", err)
 	}
@@ -143,10 +182,10 @@ func TestProcessHandoffToolDeclineAndInvalidArgumentsDoNotConnect(t *testing.T) 
 		arguments string
 		want      string
 	}{
-		{name: "declined", input: "no\n", arguments: `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key"}`, want: processHandoffToolDeclined},
-		{name: "missing enter", input: "YES", arguments: `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key"}`, want: processHandoffToolDeclined},
-		{name: "unknown argument", input: "YES\n", arguments: `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key","command":"anything"}`, want: processHandoffToolInvalid},
-		{name: "invalid port", input: "YES\n", arguments: `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key","port":0}`, want: processHandoffToolInvalid},
+		{name: "declined", input: "no\n", arguments: `{"agent_transport":"tcp","profile":"openai","target":"goaster@host.example","key":"/tmp/key"}`, want: processHandoffToolDeclined},
+		{name: "missing enter", input: "YES", arguments: `{"agent_transport":"tcp","profile":"openai","target":"goaster@host.example","key":"/tmp/key"}`, want: processHandoffToolDeclined},
+		{name: "unknown argument", input: "YES\n", arguments: `{"agent_transport":"tcp","profile":"openai","target":"goaster@host.example","key":"/tmp/key","command":"anything"}`, want: processHandoffToolInvalid},
+		{name: "invalid port", input: "YES\n", arguments: `{"agent_transport":"tcp","profile":"openai","target":"goaster@host.example","key":"/tmp/key","port":0}`, want: processHandoffToolInvalid},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
@@ -182,7 +221,7 @@ func TestProcessHandoffToolReturnsOnlyGenericFailureStatus(t *testing.T) {
 			}
 			return errors.New(secret)
 		}))
-	result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"goaster@host.example","key":"/tmp/key"}`)
+	result, err := tool.Handler(context.Background(), `{"agent_transport":"tcp","profile":"openai","target":"goaster@host.example","key":"/tmp/key"}`)
 	if err != nil {
 		t.Fatalf("process_handoff handler: %v", err)
 	}
@@ -205,8 +244,8 @@ func TestProcessHandoffToolRejectsUnknownProfilesAndBackgroundMode(t *testing.T)
 		return processHandoffToolSucceeded
 	})
 	for _, arguments := range []string{
-		`{"profile":"unknown","mode":"interactive","target":"root@host.example","key":"/tmp/key"}`,
-		`{"profile":"openai","mode":"background","target":"root@host.example","key":"/tmp/key"}`,
+		`{"agent_transport":"tcp","profile":"unknown","mode":"interactive","target":"root@host.example","key":"/tmp/key"}`,
+		`{"agent_transport":"tcp","profile":"openai","mode":"background","target":"root@host.example","key":"/tmp/key"}`,
 	} {
 		result, err := tool.Handler(context.Background(), arguments)
 		if err != nil {
@@ -222,7 +261,7 @@ func TestProcessHandoffToolRejectsUnknownProfilesAndBackgroundMode(t *testing.T)
 }
 
 func TestProcessHandoffParsesVerifiedProvisionedTargetIdentity(t *testing.T) {
-	request, err := parseProcessHandoffToolRequest(`{"profile":"openai","target":"root@203.0.113.10","key":"/tmp/key","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`)
+	request, err := parseProcessHandoffToolRequest(`{"agent_transport":"tcp","profile":"openai","target":"root@203.0.113.10","key":"/tmp/key","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`)
 	if err != nil {
 		t.Fatalf("parse provisioned process handoff: %v", err)
 	}
@@ -238,8 +277,8 @@ func TestProcessHandoffParsesVerifiedProvisionedTargetIdentity(t *testing.T) {
 	}
 
 	for _, arguments := range []string{
-		`{"profile":"openai","target":"root@203.0.113.11","key":"/tmp/key","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`,
-		`{"profile":"openai","target":"root@203.0.113.10","key":"/tmp/key","provisioned_target":{"instance_id":"../../other","public_ip":"203.0.113.10"}}`,
+		`{"agent_transport":"tcp","profile":"openai","target":"root@203.0.113.11","key":"/tmp/key","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`,
+		`{"agent_transport":"tcp","profile":"openai","target":"root@203.0.113.10","key":"/tmp/key","provisioned_target":{"instance_id":"../../other","public_ip":"203.0.113.10"}}`,
 	} {
 		if _, err := parseProcessHandoffToolRequest(arguments); err == nil {
 			t.Fatalf("invalid provisioned target was accepted: %s", arguments)
@@ -271,7 +310,7 @@ func TestProcessHandoffRunsNewInstanceFirstContactBeforeStrictVerification(t *te
 		return nil
 	}
 	tool := newProcessHandoffTool(newProtectedProcessHandoff(testTerminalOpener(strings.NewReader("YES\n"), io.Discard), runner))
-	result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"root@203.0.113.10","key":"~/.ssh/goaster-ovh","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`)
+	result, err := tool.Handler(context.Background(), `{"agent_transport":"tcp","profile":"openai","target":"root@203.0.113.10","key":"~/.ssh/goaster-ovh","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`)
 	if err != nil || result != processHandoffToolSucceeded {
 		t.Fatalf("process handoff result = %q, error = %v", result, err)
 	}
