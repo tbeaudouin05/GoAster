@@ -562,12 +562,21 @@ the [GoAster user journey](docs/USER-JOURNEY.md).
 GoAster follows the [OVH provisioning skill](skills/ovh/SKILL.md) when you ask
 for new OVHcloud resources. It requires a user-created active project and
 verifies it with read-only project discovery before checking quota, region,
-and options. Before
-creation approval, GoAster uses `web_search` and `web_fetch` to check current
-official OVH prices and gives a brief, broad estimate with its source. It adds
-region, currency, or VAT context when needed. If pricing cannot be verified,
-GoAster says the cost is unknown and gets the user's acknowledgment before
-requesting explicit approval. For an ordinary new-host setup,
+and options. For the standard d2-2 instance with pay-as-you-go public IPv4,
+GoAster can give a rough illustrative estimate without web search: about
+US$0.02/hour or US$15/month before tax, using 730 hours and a 20% buffer over
+the official [OVH US Public Cloud price list](https://us.ovhcloud.com/public-cloud/prices/)
+dated 2026-11-05. This US-list estimate is not an exact quote or guaranteed
+ceiling; account and region prices vary, no Savings Plan discount is assumed,
+and other resources and tax are extra. A test under one hour may cost roughly
+US$0.02 if deleted promptly, but that is not guaranteed; the IPv4 address and
+other retained resources may continue to cost, so clean up all billable
+resources. It exceeds the default US$8/month
+budget, so GoAster needs an explicit budget override and separate approval of
+the exact billable configuration. It does not apply to other configurations;
+if applicable pricing is unknown, GoAster says so and gets the user's
+acknowledgment before requesting creation approval. No web search is mandatory.
+For an ordinary new-host setup,
 its defaults are a GoAster
 remote agent on Ubuntu LTS, the smallest suitable machine, SSH-key-only access
 (with a dedicated local key generated automatically if needed), unrestricted

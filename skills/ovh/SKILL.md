@@ -91,14 +91,16 @@ method, or network exposure during ordinary onboarding:
   stop only because a trusted source IP is unknown.
 - Budget: estimated recurring OVH charges must not exceed **US$8 per month**.
   Include the instance and required storage, public address, and predictable
-  network charges when official pricing is available. This is a hard default
-  ceiling when the estimate is available. If the smallest suitable
-  configuration is known to exceed it, do not create it until the user
-  explicitly overrides the ceiling. Complete the public price precheck before
-  creation approval; the estimate is informational. If official pricing is
-  unavailable, report that the cost is unknown and continue the approval flow
-  based on the smallest suitable machine only after the user's acknowledgment.
-  Do not guess a price or stop solely because pricing could not be retrieved.
+  network charges when applicable pricing is known. The standard d2-2 plus
+  pay-as-you-go public IPv4 has the illustrative US-list estimate in the
+  Public price estimate section below; it is not an account-specific quote.
+  This is a hard default ceiling when the estimate is available. If the
+  smallest suitable configuration is known to exceed it, do not create it until the user
+  explicitly overrides the ceiling. Before creation approval, present the
+  applicable estimate or say that the cost is unknown. If an applicable price
+  is unknown, get the user's acknowledgment before requesting exact creation
+  approval. Do not guess a price or stop solely because pricing could not be
+  retrieved. No web search is mandatory.
 
 The user may explicitly override any default. The OVH account/API region and endpoint are separate from the Public Cloud deployment region. Before probing any account/API endpoint, verify that all three required OVH credential values (`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, and `OVH_CONSUMER_KEY`) are available through the local `/env` flow. If any are missing, tell the user to configure the missing values through the local `/env` flow, then resume setup once they are available. After the OVH credentials are available through the local `/env` flow, proactively probe every supported account/API endpoint with the same credentials and the existing read-only `GET /cloud/project` discovery request. Use only the same restricted rights; do not add permissions or make a write request.
 
@@ -221,42 +223,40 @@ covers retention and pricing.
 
 ### Public price estimate
 
-Before requesting approval to create any server or other OVH resource,
-perform a fresh public-web search with GoAster's built-in
-`web_search` for current official OVHcloud Public Cloud prices. Include the
-selected deployment region and relevant option types in the search, such as
-compute, required storage, public addressing, and predictable network charges.
-Start with OVHcloud's [Public Cloud price list](https://www.ovhcloud.com/en/public-cloud/prices/).
-Use `web_fetch` to read the matching official OVHcloud price page or another
-official OVHcloud pricing source before estimating; search snippets alone and
-third-party prices are not confirmation. Use public prices only, not an OVH
-billing API or account-specific pricing endpoint. This is a read-only check.
+For the standard configuration of one d2-2 instance with one public IPv4 on
+pay-as-you-go pricing, use this rough illustrative baseline without a web
+search: the [official OVH US Public Cloud price list](https://us.ovhcloud.com/public-cloud/prices/),
+dated 2026-11-05, lists d2-2 at US$0.0129/hour and public IPv4 at
+US$0.00319/hour. Adding them gives US$0.01609/hour; a 20% buffer gives
+US$0.019308/hour, shown as roughly **US$0.02/hour**. At 730 hours per month,
+that is US$14.095/month, rounded up to roughly **US$15/month**. State that
+this is before tax, is an illustrative US-list estimate rather than an exact
+quote or guaranteed ceiling, and assumes no Savings Plan discount. OVH prices
+vary by account and region. This figure covers only the d2-2 and pay-as-you-go
+public IPv4 list items; other resources (including storage) and tax are extra.
+Do not describe it as an account-specific or selected-region price unless
+that has been independently verified.
 
-Run this check after read-only inspection identifies the deployment region,
-smallest suitable machine, and required options, and before requesting
-creation approval. Use a broad, rounded estimate or range based on official
-published prices. If converting an hourly rate to a monthly amount, state the
-approximate-hours-per-month assumption.
+For a test lasting less than one hour, explain that it may cost roughly
+US$0.02 if deleted promptly; this is not a guarantee or maximum. The IPv4
+address and other retained resources may continue to cost after the instance
+is deleted. Warn the user to clean up the address and any other billable
+resources as well as the server.
 
-Keep the user-facing price explanation concise, for example:
-“OVH’s public price for this setup is approximately [currency and amount]/month, based on
-the [official OVH price list](URL) checked [YYYY-MM-DD]. This is a broad
-estimate, not an exact quote.” When an hourly estimate is available, also
-include this concise cost and cleanup information:
-“Estimated cost: ~US$0.02 for 1 hour, or ~US$0.40 for 24 hours, before tax.
-Delete the server after testing to stop compute charges. Retained storage or
-snapshots may still incur fees.” Keep the `~` qualifiers; these amounts are
-approximate, not an exact quote. Add a short note with region, currency, VAT
-treatment, or material uncovered charges only when needed to interpret the
-estimate. Do not present a numeric price as applying to the selected region
-unless the official source establishes both the region and currency, or imply
-that listed options are available in the user's account.
-
-If no usable official price covers the selected region or options, do not
-guess or use third-party prices. Say the current price is unknown, briefly
-identify the official source checked and date, and get the user's
-acknowledgment before requesting explicit creation approval. These API key
-rights are the agreed set for GoAster server provisioning.
+Do not apply this baseline to a different instance type, address option,
+billing option, or additional resource. For a configuration outside this
+supported pairing, say its cost is unknown unless applicable official pricing
+has otherwise been verified; get the user's acknowledgment of that unknown
+cost before requesting exact creation approval. No web search is mandatory.
+When a price has not been verified for the selected region/account, label the
+US figure as an illustrative reference and make the actual regional/account
+cost uncertainty clear. Never guess or imply an unsupported option is
+available. The US$8/month default budget ceiling still applies: this roughly
+US$15/month estimate exceeds it, so get the user's explicit budget override
+before creation. Even with an override, obtain separate explicit approval for
+the exact billable configuration after presenting its assumptions, estimate
+or unknown cost, and consequences. These API key rights are the agreed set
+for GoAster server provisioning.
 
 Use the generic `/file` command in the local terminal to inspect a file,
 including a dashboard screenshot. It accepts supported images and documents
@@ -301,17 +301,17 @@ secret values belong only in the local `/env` flow.
    public client-key fingerprint, and local key path. Generating the local key
    does not authorize an OVH change; defer registering the public key in the
    project and creating the instance until explicit approval.
-3. Before asking for approval to create a server or other OVH resource,
-   complete the Public price estimate above. Present the exact proposed
-   resource, assumptions, SSH rule, and brief estimate. If pricing is
-   unavailable, say the current cost is unknown and get the user's
-   acknowledgment before requesting approval.
+3. Before asking for approval to create a server or other OVH resource, use
+   the applicable Public price estimate above. Present the exact proposed
+   resource, assumptions, SSH rule, and brief estimate. If applicable pricing is
+   unknown, say so and get the user's acknowledgment before requesting
+   approval.
 4. Before creating any server or other OVH resource, changing any billable
    resource, deleting or replacing data or resources, registering the generated
    public SSH key, or changing access or network exposure, explain the exact
    action, affected resources, costs or consequences, and obtain explicit user
    confirmation. For resource creation, the confirmation must follow the
-   read-only assumptions and completed price report (including a clear
+   read-only assumptions and price report (including a clear
    statement when price is unknown) and cover that exact configuration. Do
    not exceed the US$8/month default ceiling when a known estimate is available
    without an explicit budget override.

@@ -781,13 +781,13 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 		"Select the smallest available machine suitable for the workload.",
 		"If no usable project key has a matching local private identity, generate a",
 		"dedicated local Ed25519 keypair automatically.",
-		"Before asking for approval to create a server or other OVH resource, complete the Public price estimate above.",
+		"Before asking for approval to create a server or other OVH resource, use the applicable Public price estimate above.",
 		"Present the exact proposed resource, assumptions, SSH rule, and brief estimate.",
-		"If pricing is unavailable, say the current cost is unknown",
+		"If applicable pricing is unknown, say so",
 		"get the user's acknowledgment before requesting approval.",
 		"Before creating any server or other OVH resource, changing any billable resource, deleting or replacing",
 		"For resource creation, the confirmation must",
-		"follow the read-only assumptions and completed price report (including a clear statement when price is unknown)",
+		"follow the read-only assumptions and price report (including a clear statement when price is unknown)",
 		"configuration.",
 	}
 	previous := -1
@@ -803,26 +803,30 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 		previous = position
 	}
 	for _, want := range []string{
-		"perform a fresh public-web search with GoAster's built-in `web_search`",
-		"Use `web_fetch` to read the matching official OVHcloud price page",
-		"https://www.ovhcloud.com/en/public-cloud/prices/",
-		"search snippets alone and third-party prices are not confirmation.",
-		"not an OVH billing API or account-specific pricing endpoint.",
-		"after read-only inspection identifies the deployment region, smallest suitable machine, and required options",
-		"OVH’s public price for this setup is approximately [currency and amount]/month",
-		"official OVH price list](URL) checked [YYYY-MM-DD]",
-		"This is a broad estimate, not an exact quote.",
-		"When an hourly estimate is available, also include this concise cost and cleanup information:",
-		"Estimated cost: ~US$0.02 for 1 hour, or ~US$0.40 for 24 hours, before tax. Delete the server after testing to stop compute charges. Retained storage or snapshots may still incur fees.",
-		"Keep the `~` qualifiers; these amounts are approximate, not an exact quote.",
-		"Add a short note with region, currency, VAT treatment, or material uncovered charges only when needed",
-		"Do not present a numeric price as applying to the selected region unless the official source establishes both the region and currency",
-		"do not guess or use third-party prices.",
-		"Say the current price is unknown",
-		"get the user's acknowledgment before requesting explicit creation approval.",
+		"For the standard configuration of one d2-2 instance with one public IPv4 on pay-as-you-go pricing",
+		"use this rough illustrative baseline without a web search",
+		"official OVH US Public Cloud price list](https://us.ovhcloud.com/public-cloud/prices/), dated 2026-11-05",
+		"d2-2 at US$0.0129/hour and public IPv4 at US$0.00319/hour",
+		"US$0.01609/hour; a 20% buffer gives US$0.019308/hour, shown as roughly **US$0.02/hour**",
+		"At 730 hours per month, that is US$14.095/month, rounded up to roughly **US$15/month**",
+		"before tax",
+		"rather than an exact quote or guaranteed ceiling",
+		"assumes no Savings Plan discount",
+		"OVH prices vary by account and region",
+		"other resources (including storage) and tax are extra",
+		"For a test lasting less than one hour, explain that it may cost roughly US$0.02 if deleted promptly; this is not a guarantee or maximum.",
+		"The IPv4 address and other retained resources may continue to cost after the instance is deleted.",
+		"Warn the user to clean up the address and any other billable resources as well as the server.",
+		"Do not apply this baseline to a different instance type, address option, billing option, or additional resource.",
+		"say its cost is unknown unless applicable official pricing has otherwise been verified",
+		"get the user's acknowledgment of that unknown cost before requesting exact creation approval.",
+		"No web search is mandatory.",
+		"label the US figure as an illustrative reference and make the actual regional/account cost uncertainty clear.",
+		"this roughly US$15/month estimate exceeds it, so get the user's explicit budget override before creation.",
+		"Even with an override, obtain separate explicit approval for the exact billable configuration",
 	} {
 		if !strings.Contains(policy, want) {
-			t.Errorf("OVH provisioning price precheck missing requirement %q", want)
+			t.Errorf("OVH provisioning price guidance missing requirement %q", want)
 		}
 	}
 	if !strings.Contains(policy, "Confirmation for one action does not authorize a different action.") {
@@ -1120,6 +1124,33 @@ func TestInternetFetchNetworkPolicyContract(t *testing.T) {
 	} {
 		if !strings.Contains(download, requirement) {
 			t.Errorf("OVH remote Go download instruction missing requirement %q", requirement)
+		}
+	}
+}
+
+func TestOVHPriceGuidanceDocsMatchProvisioningPolicy(t *testing.T) {
+	for _, path := range []string{"README.md", "docs/USER-JOURNEY.md"} {
+		document := strings.Join(strings.Fields(readFixture(t, filepath.Join("..", "..", filepath.FromSlash(path)))), " ")
+		for _, want := range []string{
+			"US$0.02/hour",
+			"US$15/month",
+			"2026-11-05",
+			"No web search is mandatory.",
+			"explicit budget override",
+			"exact billable configuration",
+			"other configurations",
+		} {
+			if !strings.Contains(document, want) {
+				t.Errorf("%s is missing OVH price guidance %q", path, want)
+			}
+		}
+		for _, outdated := range []string{
+			"must use `web_search` and `web_fetch`",
+			"checks current official OVH prices with `web_search` and `web_fetch`",
+		} {
+			if strings.Contains(document, outdated) {
+				t.Errorf("%s still mandates a web search for OVH pricing: %q", path, outdated)
+			}
 		}
 	}
 }

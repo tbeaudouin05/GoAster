@@ -186,7 +186,7 @@ The installed OVH workflows cover different starting points:
 
 | Example request | What GoAster does |
 | --- | --- |
-| “Create a new OVH server and install GoAster on it.” | The [provisioning workflow](../skills/ovh/SKILL.md) expects a user-created active project, then uses defaults for a GoAster remote agent, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, automatic generation of a dedicated local SSH key when needed, unrestricted SSH on TCP 22, and no other inbound application ports. It asks for the preferred deployment region only when genuinely unknown. Before creation approval, it checks current official OVH prices with `web_search` and `web_fetch` and gives a brief broad estimate. If price is unknown, it says so and gets the user's acknowledgment before requesting explicit approval. The US$8/month ceiling applies when a price is known. The [SSH workflow](../skills/ovh-remote/SKILL.md) then connects to that host and bootstraps GoAster. |
+| “Create a new OVH server and install GoAster on it.” | The [provisioning workflow](../skills/ovh/SKILL.md) expects a user-created active project, then uses defaults for a GoAster remote agent, Ubuntu LTS, the smallest suitable machine, SSH-key-only access, automatic generation of a dedicated local SSH key when needed, unrestricted SSH on TCP 22, and no other inbound application ports. It asks for the preferred deployment region only when genuinely unknown. For d2-2 plus pay-as-you-go public IPv4, it gives the rough US-list estimate below without web search. Other configurations are unknown unless their applicable official prices are verified, and require the user's acknowledgment before creation approval. The roughly US$15/month estimate exceeds the default US$8/month budget, so an explicit budget override and exact billable configuration approval are required. The [SSH workflow](../skills/ovh-remote/SKILL.md) then connects to that host and bootstraps GoAster. |
 | “Install GoAster on my existing OVH server.” | The [SSH workflow](../skills/ovh-remote/SKILL.md) checks and bootstraps that host. It does not create or manage OVH resources through the OVH API. |
 
 **New resource path:** after credentials are available through `/env`, probe
@@ -196,15 +196,25 @@ If one or more probes succeed, select a successful endpoint, report the detected
 region, and ask only for a simple confirmation. If none succeeds, give a clear
 setup error. The account/API region is separate from the preferred Public Cloud
 deployment region. Ask for the deployment region only when it is genuinely
-unknown. After
-read-only project, quota, image, flavor, network, SSH key, and existing-instance
-checks, GoAster must use `web_search` and `web_fetch` to check current official
-OVH prices for the selected region and options.
-Before creation approval, give a brief broad estimate with its official source
-and any region, currency, or VAT context needed to interpret it. If pricing
-cannot be verified, say the cost is unknown and get the user's acknowledgment
-before requesting explicit approval. Apply the US$8/month ceiling when a
-price is known. GoAster then carries the exact instance ID, current public IP,
+unknown. After read-only project, quota, image, flavor, network, SSH key, and
+existing-instance checks, GoAster uses this rough estimate for the standard
+d2-2 plus pay-as-you-go public IPv4 configuration without requiring web
+search. The official [OVH US Public Cloud price list](https://us.ovhcloud.com/public-cloud/prices/),
+dated 2026-11-05, lists d2-2 at US$0.0129/hour and IPv4 at US$0.00319/hour.
+Their US$0.01609/hour total with a 20% buffer is US$0.019308/hour, shown as
+roughly US$0.02/hour; at 730 hours, US$14.095/month is rounded up to roughly
+US$15/month. This is before tax, assumes no Savings Plan, and is an illustrative
+US-list estimate, not an exact quote or guaranteed ceiling. Prices vary by
+account and region; other resources (including storage) and tax are extra.
+For a test under one hour, the cost may be roughly US$0.02 if deleted promptly,
+but this is not guaranteed. The IPv4 address or other retained resources may
+continue to cost after deleting the server, so clean up all billable resources.
+Do not apply this estimate to other configurations. If applicable official
+prices for another configuration are not verified, say its cost is unknown
+and get the user's acknowledgment before requesting exact creation approval.
+No web search is mandatory. The US$8/month ceiling applies; the US$15/month
+estimate requires an explicit budget override, followed by exact billable
+configuration approval. GoAster then carries the exact instance ID, current public IP,
 and approved SSH identity from the successful create operation into the remote
 SSH workflow. It automatically establishes trust for that newly created and
 verified instance during the same provisioning flow, without asking you to
