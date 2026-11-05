@@ -579,7 +579,7 @@ func httpStatusErrorMessage(prefix, status string, body []byte) string {
 func readLimited(reader io.Reader) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(reader, maxResponseBody+1))
 	if err != nil {
-		return nil, err
+		return data, err
 	}
 	if len(data) > maxResponseBody {
 		return nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
@@ -823,6 +823,7 @@ func (p *CodexProvider) modelReply(ctx context.Context, model string, history []
 		}
 		retryReply, retryStatus, retryErr := p.requestReply(ctx, refreshed, model, history, allowTools)
 		if retryErr != nil {
+			status = retryStatus
 			combinedErr := errors.Join(firstUnauthorizedErr, retryErr)
 			if PostToolAuthenticationMessage(retryErr) != "" {
 				err = postToolAuthenticationError{cause: combinedErr}
@@ -1553,12 +1554,15 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 		return codexParsedResponse{}, 0, fmt.Errorf("Codex request: %w", err)
 	}
 	defer response.Body.Close()
-	body, err := readLimited(response.Body)
-	if err != nil {
-		return codexParsedResponse{}, response.StatusCode, fmt.Errorf("read Codex response: %w", err)
-	}
+	body, readErr := readLimited(response.Body)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if readErr != nil {
+			return codexParsedResponse{}, response.StatusCode, fmt.Errorf("%s: read Codex response: %w", httpStatusErrorMessage("Codex backend request failed", response.Status, body), readErr)
+		}
 		return codexParsedResponse{}, response.StatusCode, errors.New(httpStatusErrorMessage("Codex backend request failed", response.Status, body))
+	}
+	if readErr != nil {
+		return codexParsedResponse{}, response.StatusCode, fmt.Errorf("read Codex response: %w", readErr)
 	}
 	parsed, err := parseCodexResponseResult(body)
 	if err != nil {
@@ -1598,6 +1602,7 @@ func (p *CodexProvider) client() *http.Client {
 type codexResponse struct {
 	Output     []codexOutputItem `json:"output"`
 	OutputText string            `json:"output_text"`
+	Error      codexEventError   `json:"error"`
 }
 
 type codexOutputItem struct {
@@ -1629,6 +1634,7 @@ type codexStreamEvent struct {
 }
 
 type codexEventError struct {
+	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
@@ -1720,6 +1726,7 @@ func parseCodexStreamResponse(body []byte) (codexParsedResponse, error) {
 	var output strings.Builder
 	sawDelta := false
 	sawItem := false
+	sawCompletion := false
 	var toolCalls []codexFunctionCall
 	seenCalls := make(map[string]struct{})
 	pendingCalls := make(map[string]*codexPendingFunctionCall)
@@ -1812,7 +1819,11 @@ func parseCodexStreamResponse(body []byte) (codexParsedResponse, error) {
 
 	process := func(data string) error {
 		data = strings.TrimSpace(data)
-		if data == "" || data == "[DONE]" {
+		if data == "" {
+			return nil
+		}
+		if data == "[DONE]" {
+			sawCompletion = true
 			return nil
 		}
 		var event codexStreamEvent
@@ -1821,10 +1832,22 @@ func parseCodexStreamResponse(body []byte) (codexParsedResponse, error) {
 		}
 		switch event.Type {
 		case "response.failed", "response.incomplete", "error":
-			if event.Error != nil && event.Error.Message != "" {
-				return fmt.Errorf("Codex response failed: %s", event.Error.Message)
+			failure := ""
+			if event.Error != nil {
+				failure = codexEventErrorMessage(*event.Error)
+			}
+			if failure == "" && event.Response != nil {
+				failure = codexEventErrorMessage(event.Response.Error)
+			}
+			if failure != "" {
+				return fmt.Errorf("Codex response failed: %s", failure)
 			}
 			return fmt.Errorf("Codex response failed")
+		case "response.completed":
+			sawCompletion = true
+			if err := processResponse(event.Response); err != nil {
+				return err
+			}
 		case "response.output_text.delta":
 			output.WriteString(event.Delta)
 			sawDelta = true
@@ -1963,10 +1986,25 @@ func parseCodexStreamResponse(body []byte) (codexParsedResponse, error) {
 			return codexParsedResponse{}, err
 		}
 	}
+	if !sawCompletion {
+		return codexParsedResponse{}, fmt.Errorf("Codex response stream ended before completion")
+	}
 	if output.Len() == 0 && len(toolCalls) == 0 {
 		return codexParsedResponse{}, fmt.Errorf("Codex response contained no output text")
 	}
 	return codexParsedResponse{Text: output.String(), ToolCalls: toolCalls}, nil
+}
+
+func codexEventErrorMessage(eventError codexEventError) string {
+	code := strings.TrimSpace(eventError.Code)
+	message := strings.TrimSpace(eventError.Message)
+	if code != "" && message != "" {
+		return code + ": " + message
+	}
+	if message != "" {
+		return message
+	}
+	return code
 }
 
 func codexFunctionCallFromItem(item codexOutputItem) (codexFunctionCall, error) {

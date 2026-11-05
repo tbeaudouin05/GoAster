@@ -377,7 +377,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 			wantErr: `unsupported tool call type "web_search_call"`,
 		},
 	} {
-		stream := "data: " + test.event + "\n\ndata: " + `{"type":"response.output_text.delta","delta":"Hello"}` + "\n\n"
+		stream := "data: " + test.event + "\n\ndata: " + `{"type":"response.output_text.delta","delta":"Hello"}` + "\n\ndata: {\"type\":\"response.completed\"}\n\n"
 		parsed, err := parseCodexStreamResponse([]byte(stream))
 		if test.wantErr != "" {
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
@@ -478,6 +478,81 @@ func TestCodexProviderIncludesNonSuccessResponseBody(t *testing.T) {
 	if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, body) {
 		t.Fatalf("request diagnostic = %q, want response body", diagnostic)
 	}
+}
+
+func TestCodexProviderPreservesInterruptedNonSuccessResponse(t *testing.T) {
+	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
+	if err := store.Save(Credential{
+		AccessToken: "access-token",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const body = `{"error":{"message":"partial backend detail"}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)+1))
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider(store)
+	provider.backendURL = server.URL
+	provider.httpClient = server.Client()
+	_, err := provider.Reply(context.Background(), "gpt-test", "hello")
+	if err == nil || !strings.Contains(err.Error(), "Codex backend request failed with status 502 Bad Gateway") || !strings.Contains(err.Error(), body) {
+		t.Fatalf("interrupted response error = %v, want status and partial response body", err)
+	}
+}
+
+func TestParseCodexSSEFailureDetailsAndCompletion(t *testing.T) {
+	t.Run("nested failure details", func(t *testing.T) {
+		body := []byte("data: " + `{"type":"response.failed","response":{"error":{"code":"server_error","message":"nested backend detail"}}}` + "\n\n")
+		_, err := parseCodexResponseResult(body)
+		if err == nil || !strings.Contains(err.Error(), "server_error") || !strings.Contains(err.Error(), "nested backend detail") {
+			t.Fatalf("nested failure error = %v, want nested error details", err)
+		}
+	})
+
+	t.Run("partial output requires completion", func(t *testing.T) {
+		body := []byte("data: " + `{"type":"response.output_text.delta","delta":"partial"}` + "\n\n")
+		_, err := parseCodexResponseResult(body)
+		if err == nil || !strings.Contains(err.Error(), "ended before completion") {
+			t.Fatalf("partial stream error = %v, want incomplete stream error", err)
+		}
+	})
+}
+
+func TestParseCodexSSECompletedResponseOutput(t *testing.T) {
+	t.Run("final text", func(t *testing.T) {
+		body := []byte("data: " + `{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final answer"}]}]}}` + "\n\n")
+		parsed, err := parseCodexResponseResult(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parsed.Text != "final answer" || len(parsed.ToolCalls) != 0 {
+			t.Fatalf("completed response = %+v, want final text only", parsed)
+		}
+	})
+
+	t.Run("tool call", func(t *testing.T) {
+		body := []byte("data: " + `{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":"call-1","name":"web_search","arguments":{"query":"hello"}}]}}` + "\n\n")
+		parsed, err := parseCodexResponseResult(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parsed.Text != "" || !reflect.DeepEqual(parsed.ToolCalls, []codexFunctionCall{{CallID: "call-1", Name: "web_search", Arguments: `{"query":"hello"}`}}) {
+			t.Fatalf("completed response = %+v, want web_search call", parsed)
+		}
+	})
+
+	t.Run("tool call validation", func(t *testing.T) {
+		body := []byte("data: " + `{"type":"response.completed","response":{"output":[{"type":"function_call","name":"web_search","arguments":{"query":"hello"}}]}}` + "\n\n")
+		_, err := parseCodexResponseResult(body)
+		if err == nil || !strings.Contains(err.Error(), "missing call_id") {
+			t.Fatalf("completed tool call error = %v, want missing call_id validation", err)
+		}
+	})
 }
 
 func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
@@ -608,6 +683,9 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 		_, err := NewSession(Config{Model: "gpt-test"}, provider).Reply(context.Background(), "hello")
 		if err == nil || !strings.Contains(err.Error(), firstBody) || !strings.Contains(err.Error(), retryBody) {
 			t.Fatalf("retry failure error = %v, want initial and retry errors", err)
+		}
+		if errors.Is(err, ErrLoginRequired) || errors.Is(err, errRequestAuthentication) {
+			t.Fatalf("retry failure was classified as authentication: %v", err)
 		}
 		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, firstBody) || !strings.Contains(diagnostic, retryBody) {
 			t.Fatalf("retry failure diagnostic = %q", diagnostic)
