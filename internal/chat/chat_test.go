@@ -849,6 +849,42 @@ func TestOVHProjectDiscoveryAcceptsNameMismatchAndWaitsForConfirmation(t *testin
 	}
 }
 
+func TestOVHInstanceCreationUsesVerifiedDirectRequestAndReconcilesAmbiguity(t *testing.T) {
+	provisioningSkill := readRepositorySkill(t, "ovh")
+	policy := strings.Join(strings.Fields(provisioningSkill), " ")
+	for _, requirement := range []string{
+		"Do not download the complete OVH API specification, schema bundle, SDK, or CLI as a prerequisite for ordinary onboarding.",
+		"POST /1.0/cloud/project/{serviceName}/instance",
+		"\"name\": \"<selected instance name>\"",
+		"\"flavorId\": \"<selected flavor id>\"",
+		"\"imageId\": \"<selected image id>\"",
+		"\"region\": \"<selected deployment region>\"",
+		"\"sshKeyId\": \"<registered project SSH key id>\"",
+		"\"monthlyBilling\": false",
+		"The schema marks `name`, `flavorId`, and `region` as required",
+		"GET /1.0/cloud/project/{serviceName}/instance/{instanceId}",
+		"GET /1.0/cloud/project/{serviceName}/instance?region=<selected deployment region>",
+		"A name alone is never enough",
+		"Never blindly repeat the POST.",
+		"If the POST times out, the transport fails, returns a non-success result, or returns no usable instance ID, treat the outcome as ambiguous.",
+		"If reconciliation finds exactly one attributable instance, verify that exact ID",
+		"If it finds none, more than one, a mismatch, or the read-only verification is unavailable, stop and report the missing or ambiguous evidence",
+	} {
+		if !strings.Contains(policy, requirement) {
+			t.Errorf("OVH instance creation policy is missing %q", requirement)
+		}
+	}
+	for _, unsafe := range []string{
+		"Download the complete OVH API specification",
+		"blindly retry the POST",
+		"retry the POST immediately",
+	} {
+		if strings.Contains(policy, unsafe) {
+			t.Errorf("OVH instance creation policy contains unsafe prerequisite or retry guidance %q", unsafe)
+		}
+	}
+}
+
 func TestOVHRemoteNewInstanceUsesScopedTrustOnFirstUse(t *testing.T) {
 	remoteSkill := readRepositorySkill(t, "ovh-remote")
 	policy := strings.Join(strings.Fields(remoteSkill), " ")

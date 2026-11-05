@@ -50,7 +50,7 @@ user's explicit approval for that creation.
 
 Use GoAster's built-in `shell_execute` tool to create and run a temporary script on the host. Its input is a JSON object with required string `command` and optional string `cwd` and integer `timeout_ms` (omitted or zero uses GoAster's fixed safety timeout; choose a positive bounded timeout for longer work). `command` runs through the host's native shell. Use a platform-matched script (`.sh` for a POSIX shell, `.ps1` for PowerShell on Windows) in the host temporary directory; create, run, and remove it in one call when practical. Do not create provisioning files in the repository.
 
-Read the complete result: `stdout`, `stderr`, and `exit_code`; an `execution_error` may also be present. Treat a nonzero exit or timeout as a failure or uncertain result, not success. After an uncertain create request, inspect OVH state before retrying so you do not create a second paid resource. Never print credentials or include them in script text, command arguments, or reports.
+Read the complete result: `stdout`, `stderr`, and `exit_code`; an `execution_error` may also be present. Treat a nonzero exit or timeout as a failure or uncertain result, not success. After an uncertain create request, reconcile OVH state with read-only calls before considering any retry so you do not create a second paid resource. Never print credentials or include them in script text, command arguments, or reports.
 
 ## Provisioning workflow
 
@@ -195,6 +195,66 @@ the read-only project verification workflow above; `POST /cloud/project/*` is
 for later project-scoped provisioning operations. The user does not enter a
 project ID on the Create API Keys screen.
 
+### Verified instance creation request
+
+Do not download the complete OVH API specification, schema bundle, SDK, or CLI
+as a prerequisite for ordinary onboarding. Use the verified v1 request below
+with the account/API endpoint selected by the read-only credential probe. The
+official [OVHcloud instance guide](https://docs.ovhcloud.com/en/guides/public-cloud/compute/getting-started)
+documents this route and these main fields; the production API schema confirms
+the request model and field types. The deployment region is a request field,
+not a replacement for the selected account/API endpoint.
+
+Create the instance only after the exact billable configuration and action have
+been explicitly approved:
+
+```text
+POST /1.0/cloud/project/{serviceName}/instance
+Content-Type: application/json
+
+{
+  "name": "<selected instance name>",
+  "flavorId": "<selected flavor id>",
+  "imageId": "<selected image id>",
+  "region": "<selected deployment region>",
+  "sshKeyId": "<registered project SSH key id>",
+  "monthlyBilling": false
+}
+```
+
+In this request, `serviceName` is the selected project ID. The schema marks
+`name`, `flavorId`, and `region` as required; `imageId`, `sshKeyId`, and
+`monthlyBilling` are supported fields used here for the selected image,
+registered SSH key, and hourly billing. Populate every value from the preceding
+read-only project, region, image, flavor, and SSH-key checks. Do not copy the
+nested `bootFrom`, `flavor`, or `network` shape from a different OVH route into
+this request, and do not invent a public-network field. If public connectivity
+requires an additional `networks` value for the selected project, first verify
+the exact public network ID and the schema-supported shape with read-only
+checks; otherwise stop and report that the requested public access cannot yet
+be verified. Never put credentials or private-key material in the body.
+
+The successful response for this route is an instance object. Retain its
+non-empty `id` and verify it with the read-only
+`GET /1.0/cloud/project/{serviceName}/instance/{instanceId}` route. Check the
+returned `id`, `name`, `flavorId`, `imageId`, `region`, `sshKeyId` when present,
+`status`, and `ipAddresses` against the approved configuration before treating
+the instance as ready or handing it to the remote SSH workflow.
+
+If the POST times out, the transport fails, returns a non-success result, or
+returns no usable instance ID, treat the outcome as ambiguous. Do not retry,
+delete, or create a replacement. Reconcile first using read-only calls: use the
+exact returned ID when one exists; otherwise list instances with
+`GET /1.0/cloud/project/{serviceName}/instance?region=<selected deployment region>`
+and compare the returned `name`, `region`, `flavorId`, `imageId`, and `sshKeyId`
+with the approved request. A name alone is never enough, and a pre-existing
+matching instance must remain distinguishable from the attempted creation. If
+reconciliation finds exactly one attributable instance, verify that exact ID
+and keep the flow partial until its readiness and address are confirmed. If it
+finds none, more than one, a mismatch, or the read-only verification is
+unavailable, stop and report the missing or ambiguous evidence; ask before any
+retry or cleanup. Never blindly repeat the POST.
+
 ### Optional Public Cloud instance backup
 
 The three rows above also cover documented Public Cloud instance backup
@@ -316,13 +376,17 @@ secret values belong only in the local `/env` flow.
    not exceed the US$8/month default ceiling when a known estimate is available
    without an explicit budget override.
    Confirmation for one action does not authorize a different action.
-5. After the relevant confirmation, run the requested OVH API or installed
-   client steps through `shell_execute`. Wait for the resource to become ready,
-   then verify its ID, state, address, and requested access or setup. Retain
-   the selected project, exact instance ID returned by the successful create
-   operation, current public IP returned and verified during provisioning, and
-   approved local SSH identity for the remote SSH handoff. Do not retry an
-   uncertain mutation blindly or delete a partially provisioned resource
+5. After the relevant confirmation, send the verified direct instance request
+   above through `shell_execute`; an already-installed client is acceptable
+   only if it sends that exact endpoint and body without broadening scope. Do
+   not download the API specification or install a client as a prerequisite.
+   Wait for the resource to become ready, then verify its ID, state, address,
+   and requested access or setup with the read-only exact-instance route.
+   Retain the selected project, exact instance ID returned by the successful
+   create operation, current public IP returned and verified during
+   provisioning, and approved local SSH identity for the remote SSH handoff.
+   On any ambiguous POST result, follow the reconciliation procedure above
+   before considering a retry; do not delete a partially provisioned resource
    without confirmation.
 6. Remove temporary scripts when finished. Do not install tools or add repository dependencies as part of provisioning without the user's approval.
 
