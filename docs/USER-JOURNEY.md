@@ -325,10 +325,10 @@ user's behalf or ask them to send it back. The separate profile-based
 
 ## 5. Complete the remote agent login
 
-The remote agent starts without a ChatGPT subscription credential. After its
-approved installation and agent service setup, GoAster automatically invokes
-the existing SSH-backed login flow through the generic `process_handoff` tool
-with its fixed `openai` profile, targeting
+After installation, GoAster checks the remote agent's existing credential and
+retains it if ready. A fresh remote agent starts without one. When login is
+needed and approved, GoAster invokes the SSH-backed flow through the generic
+`process_handoff` tool with its fixed `openai` profile, targeting
 `root`, the account that runs both remote GoAster services. The normal path must not create or use a separate unprivileged runtime
 account. After the exact host and local key are approved in chat, the handoff displays them in the local terminal and
 requires the administrator to type `YES` before connecting. It then attaches
@@ -420,23 +420,37 @@ That check can refresh and write the remote credential.
 Continue to Telegram setup only when this check returns `ok`; this marks the
 remote agent ready, not the full onboarding complete.
 
-The agent must pass the health check before Telegram chat can work. If login is
-canceled or the check fails, inspect the remote service before retrying. For
-later reauthentication, keep the agent service running so the command's
-built-in health check can reach it, and have GoAster invoke the same
-interactive flow again. Any separate agent or adapter service restart requires
-its own explicit approval.
+The agent must pass the health check before Telegram chat can work. A locally
+unexpired credential, including one with no recorded expiry, can pass without
+contacting OpenAI; a real message can still reveal an authentication failure.
+Keep onboarding partial in that case, investigate without exposing credentials,
+and obtain approval for a re-login if needed.
+
+Before login or reauthentication, stop the adapter and agent, wait for the
+agent's processes and in-flight requests to end, and quiesce other clients,
+health checks, and independent credential writers. Start the agent while those
+clients remain quiesced, verify `/livez`, and keep them quiesced through the
+interactive login and its built-in `/healthz` check. This prevents an older
+in-flight refresh from overwriting the new login. Service stops and starts must
+be approved. Let active work finish before stopping when possible: an agent
+stop interrupts requests and clears in-memory Telegram conversation history.
+On a verified fresh install without an existing credential or
+other writers, the first agent may remain running once prior requests have
+finished. If login or its check fails, inspect before retrying; the login may
+already have saved a credential. The [OVH remote skill](../skills/ovh-remote/SKILL.md#telegram-setup)
+has the operator procedure.
 
 ## 6. Set up Telegram and verify the full path
 
 Full onboarding stays **partial** until all four Telegram gates are complete:
-the bot token is supplied through the approved local `/env` flow and installed
-by the separately approved remote setup, the adapter reports ready after a
-successful Telegram poll, the intended account is paired, and that user
+the existing bot token is retained or a new token is supplied through the
+approved local `/env` flow and installed by the separately approved remote
+setup, the adapter reports ready after a successful Telegram poll, the intended account is paired, and that user
 completes a real Telegram message/reply smoke test. GoAster keeps prompting for
 the next pending step; agent-ready with Telegram incomplete is still partial.
 
-Create or select a bot with `@BotFather` and keep its bot token private. Use
+Keep an existing token and pairing. For a fresh setup, create or select a bot
+with `@BotFather` and keep its bot token private. Use
 GoAster's local `/env` flow for the token; do not put it in a chat message,
 SSH argument, or script. Ask GoAster to continue Telegram setup; it follows the
 [OVH remote SSH skill](../skills/ovh-remote/SKILL.md). That setup stores the
@@ -450,6 +464,10 @@ For a fresh root-run Linux systemd setup, the agent and adapter use the same
 `GOASTER_AGENT_SOCKET` path in the agent's root-owned, mode `0700` runtime
 directory. See the [socket setup](../README.md#protected-agent-socket-for-ovh-systemd-setups)
 for the unit settings and coordinated migration of existing services.
+
+Never reset or remove Telegram token or pairing state while an adapter instance
+is running. Stop all instances and prevent restarts until the reset and any
+subsequent setup are complete. The setup command does not enforce this rule.
 
 After the agent passes `/healthz`, start the separately approved Telegram
 adapter service. With systemd, configure the adapter as `Type=notify`; it
@@ -505,10 +523,10 @@ normal model replies; the adapter can still receive `/clear` while model
 authentication is unavailable. If the adapter starts before the agent process
 is available, restart it after the agent service is running.
 
-Remote credentials refresh when needed. To reauthenticate, have GoAster invoke
-the same interactive SSH-backed login flow with its service-account target
-while the agent service is running. Wait for the administrator to approve
-device authorization and for the built-in `/healthz` check to return `ok`.
-Obtain separate approval before any agent or adapter service restart. The
+Remote credentials refresh when needed. To reauthenticate, follow the
+quiescence procedure above, then have GoAster invoke the interactive
+SSH-backed login. Wait for the administrator to approve device authorization
+and for the built-in `/healthz` check to return `ok`. Include service stops and
+starts in the approved checklist or obtain separate approval. The
 remote bootstrap does not add self-updating behavior; a future remote build or
 install follows the reviewed steps in the OVH remote SSH skill.

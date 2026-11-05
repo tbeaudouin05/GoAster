@@ -61,6 +61,43 @@ func TestTokenValidation(t *testing.T) {
 }
 
 func TestSetupProtectsFilesAndNeverReplacesPair(t *testing.T) {
+	replacement, err := json.Marshal(SetupInput{Token: "999999:" + strings.Repeat("b", 32), PairingHash: testHash("another-code")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, existing := range [][3]bool{
+		{true, true, false},  // Pending pairing.
+		{true, false, false}, // Interrupted after saving the token.
+		{false, true, false}, // An existing verifier without a token.
+		{false, false, true}, // An existing paired user.
+	} {
+		paths := testPaths(t)
+		files := []string{paths.Token, paths.PairingHash, paths.UserID}
+		contents := []string{testToken, testHash(testCode), "42"}
+		for i, path := range files {
+			if existing[i] {
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(contents[i]), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := Setup(bytes.NewReader(replacement), paths); err == nil {
+			t.Fatalf("setup accepted existing state %v", existing)
+		}
+		for i, path := range files {
+			data, err := os.ReadFile(path)
+			if existing[i] && (err != nil || string(data) != contents[i]) {
+				t.Fatalf("setup changed existing state %v at %s", existing, path)
+			}
+			if !existing[i] && !os.IsNotExist(err) {
+				t.Fatalf("setup created new state for %v at %s", existing, path)
+			}
+		}
+	}
+
 	paths := testPaths(t)
 	setupTest(t, paths)
 	for _, path := range []string{paths.Token, paths.PairingHash} {
@@ -103,6 +140,29 @@ func TestSetupProtectsFilesAndNeverReplacesPair(t *testing.T) {
 	}
 	if token, err := os.ReadFile(paths.Token); err != nil || string(token) != testToken {
 		t.Fatal("refused setup changed the token")
+	}
+	if err := writePrivate(paths.Token, []byte("replacement")); err == nil {
+		t.Fatal("private file creation replaced an existing token")
+	}
+	if token, err := os.ReadFile(paths.Token); err != nil || string(token) != testToken {
+		t.Fatal("private file creation changed an existing token")
+	}
+
+	linkPaths := testPaths(t)
+	if err := os.MkdirAll(filepath.Dir(linkPaths.Token), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing", linkPaths.Token); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := Setup(bytes.NewReader(replacement), linkPaths); err == nil {
+		t.Fatal("setup accepted a dangling token symlink")
+	}
+	if info, err := os.Lstat(linkPaths.Token); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("setup changed the existing token symlink")
+	}
+	if _, err := os.Lstat(linkPaths.PairingHash); !os.IsNotExist(err) {
+		t.Fatal("setup created pairing state despite the existing token symlink")
 	}
 }
 

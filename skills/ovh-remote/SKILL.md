@@ -14,7 +14,8 @@ workflow does not provision, resize, delete, or otherwise manage OVH
 resources through the OVH API. Use the host's OpenSSH client through GoAster's
 `shell_execute` tool for non-interactive bootstrap and verification. After
 bootstrap and agent service setup, the onboarder invokes GoAster's dedicated
-`process_handoff` tool with the fixed `openai` profile and `interactive` mode.
+`process_handoff` tool with the fixed `openai` profile and `interactive` mode
+when login is needed and approved.
 This is an internal handoff using the SSH-backed `goaster remote-login`
 implementation with the administrator's terminal attached. The command is for
 exceptional manual use; users should not normally type either name. Never run
@@ -484,11 +485,11 @@ Treat a canceled login or failed health check as a failure or uncertain result.
 Do not relay the device code, login output, or tokens to the model or chat. The
 remote login writes only root's separate
 `/root/.goaster/agent-auth.json`; it never copies the local `/root/.goaster/auth.json`.
-For reauthentication, keep the agent service running so the command's
-built-in health check can reach it, invoke the same interactive
-flow, and wait for administrator approval and a successful health check. A
-service restart during reauthentication still needs separate explicit
-approval unless that exact restart is included in a new routine checklist.
+Before this flow, follow the credential-writer quiescence procedure in
+Telegram setup below. The agent must be running during the handoff so its
+built-in health check can reach it, with the adapter and other clients still
+quiesced. Include any service stops and starts in the approved checklist or
+obtain the required separate approval.
 
 ## Safe workflow
 
@@ -611,14 +612,19 @@ coordinated, with the agent verified before starting the adapter. Existing
 conversations with changed selected skills need `/clear` or their exact prior
 files restored before continuing.
 
-After cloning and before building or installing anything, verify that this
-source revision includes the current asset packaging checks and all required
-tracked assets. Inspect the checkout's asset-check script against the reviewed
-source before executing it. From the checkout, run:
+After cloning and before building or installing anything, review the captured
+main commit and verify that it includes this workflow's socket and shared
+control-secret support in both the agent and adapter, the Telegram setup that
+preserves existing token and pairing state, and the current asset packaging
+checks and required tracked assets. Stop if the checked-out revision lacks
+these features; do not assume an unmerged or different revision is present.
+Inspect the checkout's asset-check script against that reviewed commit before
+executing it. From the checkout, run:
 
 ```sh
-test -f packaging/assets.sh && test ! -L packaging/assets.sh
+test -f "$SOURCE_DIR/packaging/assets.sh" && test ! -L "$SOURCE_DIR/packaging/assets.sh"
 git -C "$SOURCE_DIR" ls-files --error-unmatch -- packaging/assets.sh >/dev/null
+git -C "$SOURCE_DIR" ls-files --error-unmatch -- cmd/goaster-agent/main.go internal/controltransport/transport.go internal/controlsecret/secret.go internal/telegram/adapter.go internal/telegram/secrets.go >/dev/null
 test "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$SOURCE_COMMIT"
 SOURCE_STATUS="$(git -C "$SOURCE_DIR" status --porcelain)"
 test -z "$SOURCE_STATUS"
@@ -720,10 +726,12 @@ after verifying its version and architecture. Create the source parent
 `$HOME/src`, then clone the `main` branch:
 
 ```sh
+SOURCE_DIR="$HOME/src/GoAster"
 git clone --single-branch --branch main https://github.com/tbeaudouin05/GoAster.git "$SOURCE_DIR"
 test "$(git -C "$SOURCE_DIR" branch --show-current)" = main
 SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
 test "$SOURCE_COMMIT" = "$(git -C "$SOURCE_DIR" rev-parse refs/remotes/origin/main)"
+printf 'Cloned main commit: %s\n' "$SOURCE_COMMIT"
 ```
 
 Set `SOURCE_DIR` to `$HOME/src/GoAster`. `SOURCE_COMMIT` identifies the
@@ -766,21 +774,66 @@ reviewed and that action is listed; otherwise get separate explicit approval.
 For a fresh systemd agent unit, include these service settings:
 
 ```ini
+[Unit]
+StartLimitIntervalSec=5min
+StartLimitBurst=3
+
 [Service]
 User=root
 RuntimeDirectory=goaster-agent
 RuntimeDirectoryMode=0700
-RuntimeDirectoryPreserve=no
+RuntimeDirectoryPreserve=yes
 Environment=GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock
 ExecStart=/usr/bin/env HOME=/root GOASTER_STARTER_DIR=/usr/local/share/goaster/skills /usr/local/bin/goaster-agent
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-Set the same `Environment=GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock`
-in the Telegram unit's `[Service]` section, which also runs as `root`. The
-agent unit owns the runtime directory; systemd creates it as root with mode
-`0700` before launch and removes it when the service stops. Do not create a
-second runtime directory with the Telegram unit. Both units must see the same
-directory even with filesystem namespaces or bind mounts. Ensure every parent
+For a fresh `goaster-telegram.service`, use the following settings, substituting
+the reviewed agent unit name if it differs:
+
+```ini
+[Unit]
+Wants=goaster-agent.service network-online.target
+After=goaster-agent.service network-online.target
+StartLimitIntervalSec=5min
+StartLimitBurst=3
+
+[Service]
+Type=notify
+User=root
+Environment=HOME=/root
+Environment=GOASTER_AGENT_SOCKET=/run/goaster-agent/agent.sock
+ExecStartPre=/usr/bin/timeout 60s /bin/sh -c 'until /usr/local/bin/goaster-agent live >/dev/null 2>&1; do /usr/bin/sleep 2; done'
+ExecStart=/usr/local/bin/goaster-telegram
+TimeoutStartSec=120s
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable both reviewed units for boot after Telegram state is installed and that
+action is approved. `After=` alone does not mean the agent's socket is ready:
+the adapter's bounded
+`ExecStartPre` waits for `/livez`, which does not refresh credentials. The
+adapter reports ready only after a successful Telegram poll. Each unit retries
+failures with a rate limit; if it reaches the limit, inspect the failure before
+an approved restart. `network-online.target` does not prove Telegram is
+reachable. If the agent stops or restarts later, verify the adapter and restart
+it if needed, then repeat the real message/reply check. An unclean agent exit
+may leave a stale socket and prevent automatic recovery.
+
+The agent unit owns the runtime directory; systemd creates it as root with mode
+`0700` before launch and preserves it across service stops and failures.
+The directory is under `/run` and is not preserved across reboot. Review
+effective units, drop-ins, and cleanup jobs for other automatic removal. Do not
+create a second runtime directory with the Telegram unit. Both units must see
+the same directory even with filesystem namespaces or bind mounts. Ensure every parent
 is root-owned and has no symlinks or untrusted writable access (a root-owned
 sticky directory protects root-owned children). The socket is created with
 mode `0600`; the adapter verifies its root owner and kernel-reported root peer
@@ -872,9 +925,9 @@ another directory. An existing unit used for this fresh installation is
 suitable only if it provides the same binding and protections; changing it
 still needs separate explicit approval.
 
-Start the agent first, then have the onboarder
-invoke the remote OpenAI login flow below and wait for its `/healthz` check
-before starting the Telegram adapter. Configure its systemd unit as
+Start the agent first and check its `/healthz` before starting the Telegram
+adapter. If login is needed, follow the remote OpenAI login flow below.
+Configure the adapter's systemd unit as
 `Type=notify`.
 Use the Telegram token/pairing flow below; include it in the routine checklist
 only when the token was already supplied through local `/env`. This bootstrap
@@ -917,23 +970,45 @@ the URL and completes the device authorization in a browser. Never relay a
 device code, login output, OAuth token, or saved credential file through
 GoAster or Telegram chat.
 
-After installation and agent service setup, the onboarder invokes the local
-OpenAI remote login flow with `process_handoff` using profile `openai` and
-mode `interactive`; the administrator does not type
-the command during normal onboarding. The onboarder waits for the
-administrator's approval and the command's health check to return
-`ok` before continuing with Telegram setup. The login writes root's `/root/.goaster/agent-auth.json` with `0600`
-permissions in a `0700` directory. For reauthentication, keep the root-run
-agent service running while the
-onboarder invokes the same interactive flow, wait for device approval and
-health-check success. A restart is covered only if that exact service restart
-is included in the approved routine checklist; otherwise obtain separate
-explicit approval before restarting an agent or adapter service.
+After installation and agent service setup, check the running agent's
+readiness using its reviewed transport. The check may refresh an existing
+credential. If it succeeds, keep that credential and proceed to the real
+message test; do not initiate a new login solely because onboarding is being
+repeated. A nonempty, locally unexpired token, or a token with no recorded
+expiry, can pass without contacting OpenAI, so the check cannot establish that
+the credential has not been revoked.
 
-Do not claim the agent is ready for Telegram chat until remote login succeeds
-and the running agent's `/healthz` returns `ok` over its configured transport.
-That check verifies the stored credential and refreshes it if needed; it is not
-a successful model request. Configure a systemd adapter service as
+If login is needed, obtain the required approval before replacing an existing
+credential. Before login or reauthentication, stop the Telegram adapter if it
+is running and prevent automatic or manual starts. Quiesce all other clients,
+health checks, and independent processes that could refresh or write the same
+credential. Stop the agent and wait until its processes and in-flight requests
+have ended, then start it again with all clients still quiesced. Let active
+work finish before stopping where possible; stopping interrupts requests and
+clears the agent's in-memory Telegram conversation history. Persisted memory
+and pairing state remain. Include that impact in the approval. On a verified
+fresh install with no existing credential or other credential writers, the
+first agent may remain running if all prior requests have finished. In either
+case, verify only `/livez` and keep the isolation through login and the
+handoff's own `/healthz` check. If those conditions cannot be established,
+do not log in: the running agent or another process could otherwise overwrite
+the new credential with an older refresh. Include each stop and start in the
+approved checklist or obtain the required separate approval. The agent must be
+running for the handoff's health check.
+
+When approved and quiescent, the onboarder invokes `process_handoff` with
+profile `openai` and mode `interactive`; the administrator does not type the
+command during normal onboarding. Wait for device approval and the command's
+health check to return `ok`, then start the adapter when approved. Login writes
+root's `/root/.goaster/agent-auth.json` with `0600` permissions in a `0700`
+directory. If login or its health check fails, inspect before retrying: a
+completed login may already have saved a new credential.
+
+Do not claim the agent is ready for Telegram chat until the existing or newly
+authorized credential passes the running agent's `/healthz` check over its
+configured transport.
+That check loads the stored credential and refreshes it if locally needed; it
+is not a successful model request. Configure a systemd adapter service as
 `Type=notify` for readiness reporting; the adapter checks agent liveness and
 requires an initial successful poll before sending its ready notification. It
 checks authentication before telling a paired user that chat is ready. If it was
@@ -997,18 +1072,27 @@ An `/healthz` result of `ok` means only that the remote agent is ready. It does
 not complete end-to-end onboarding. Keep the user-facing onboarding status
 `partial` until all four Telegram gates have been verified:
 
-1. The bot token was supplied through the local `/env` flow and installed by
-   the approved remote setup.
+1. The existing bot token is retained, or a new token was supplied through
+   the local `/env` flow and installed by the approved remote setup.
 2. The Telegram adapter reports ready after the agent health check and a real
    successful Telegram poll. A successful poll confirms token and connection
    readiness, but does not prove that a paired user's message gets a reply.
-3. The intended Telegram account completed private pairing and received the
-   pairing confirmation.
+3. The intended Telegram account is already paired, or completed private
+   pairing and received the pairing confirmation.
 4. That paired user sent a fresh ordinary text message from a real Telegram
    chat and confirmed that a reply from the remote agent arrived in the same
    chat. This real message/reply smoke test is required; `/healthz`, adapter
    readiness, a pairing confirmation, an API probe, or a simulated test does
    not satisfy it.
+
+If the real request reports an authentication failure despite `/healthz`
+returning `ok`, keep onboarding `partial` and inspect the failure without
+exposing credentials. Distinguish authentication rejection from network or
+other errors; do not assume that a second health check proves the token works.
+If re-login is needed, obtain approval and use the quiescent handoff above,
+then repeat the real message/reply test. Preserve the existing credential until
+replacement is approved, and do not retry a request that may have already
+performed side effects without first reviewing them.
 
 While onboarding is active, keep the gate open until every item is verified.
 At each interaction that leaves an item incomplete, state that setup is
@@ -1024,6 +1108,24 @@ bot token, pairing code, or the paired user's numeric ID in a status report.
 Use the “Waiting for Telegram pairing” wording above when the bot is ready.
 The numbered steps below are operator guidance; do not send their setup
 mechanics or internal details to the user.
+
+First check for existing token and pairing-state paths without displaying
+their contents. If a token and paired user already exist, retain them and use
+the existing pairing; confirm the intended user through the final message and
+reply. If a token and pending verifier exist, retain them and continue with the
+existing pairing code when the intended user still has it. If state is partial
+or the pending code is unavailable, stop and inspect before any separately
+approved recovery. Do not run fresh setup or replace the token or pairing
+state in these cases.
+
+Never reset or remove Telegram token, verifier, or paired-user state while
+any adapter instance is running. For a separately approved reset, stop the
+adapter, verify all its processes have exited, and prevent automatic or manual
+restarts until the reset and subsequent setup are complete. This also applies
+to fresh setup if an adapter could still hold old state. A running adapter can
+commit a pairing using a verifier already in memory and remove a new verifier;
+setup does not enforce this operational precondition. If quiescence cannot be
+verified, stop and investigate without changing state.
 
 1. The user creates or selects a bot with `@BotFather` and keeps the returned
    bot token private. The token is not a Telegram pairing code or an OpenAI
@@ -1051,9 +1153,10 @@ mechanics or internal details to the user.
 
 The code has no automatic expiration; it remains usable until one account
 successfully pairs or an administrator performs a separately approved reset.
-Treat it as a bearer secret while it is pending. Setup refuses to replace
-existing pairing state. After pairing, only the saved numeric Telegram user ID
-is allowed. The adapter forwards that account's ordinary text messages from
+Treat it as a bearer secret while it is pending. Setup refuses to replace an
+existing token, verifier, or paired user. If setup is interrupted, inspect any
+partial state before recovery. After pairing, only the saved numeric Telegram
+user ID is allowed. The adapter forwards that account's ordinary text messages from
 private chats or groups it receives to the local agent and returns replies
 to the originating chat. Other users, bot senders, and group messages from a
 different account are ignored. A pairing does not grant SSH access or host

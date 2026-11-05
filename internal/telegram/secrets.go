@@ -59,7 +59,9 @@ type SetupInput struct {
 }
 
 // Setup reads its bounded input from stdin and writes root-owned 0600 files.
-// An existing pairing is never replaced by a subsequent setup attempt.
+// Existing token or pairing state is never replaced by a setup attempt.
+// Callers must keep all adapters stopped across any reset and subsequent setup;
+// setup does not synchronize with a running adapter's pairing operation.
 func Setup(input io.Reader, paths Paths) error {
 	var payload SetupInput
 	data, err := io.ReadAll(io.LimitReader(input, 2049))
@@ -80,13 +82,15 @@ func Setup(input io.Reader, paths Paths) error {
 	if !validHash(payload.PairingHash) {
 		return fmt.Errorf("invalid Telegram pairing verifier")
 	}
+	for _, path := range []string{paths.Token, paths.PairingHash, paths.UserID} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("Telegram token or pairing state already exists or is unavailable")
+		}
+	}
 	for _, dir := range []string{filepath.Dir(paths.Token), filepath.Dir(paths.PairingHash), filepath.Dir(paths.UserID)} {
 		if err := privateDirectory(dir); err != nil {
 			return fmt.Errorf("could not protect Telegram state directory")
 		}
-	}
-	if _, err := os.Lstat(paths.UserID); err == nil || !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("Telegram is already paired or its pairing state is unavailable")
 	}
 	if err := writePrivate(paths.Token, []byte(payload.Token)); err != nil {
 		return fmt.Errorf("could not save Telegram token")
@@ -141,7 +145,9 @@ func writePrivate(path string, data []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	// Linking a completed private file fails if the destination appeared after
+	// the preflight, instead of replacing another setup's token or verifier.
+	return os.Link(name, path)
 }
 
 func readPrivate(path string) ([]byte, error) {
