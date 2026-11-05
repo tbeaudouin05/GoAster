@@ -310,7 +310,7 @@ func TestProcessHandoffRunsNewInstanceFirstContactBeforeStrictVerification(t *te
 		return nil
 	}
 	tool := newProcessHandoffTool(newProtectedProcessHandoff(testTerminalOpener(strings.NewReader("YES\n"), io.Discard), runner))
-	result, err := tool.Handler(context.Background(), `{"agent_transport":"tcp","profile":"openai","target":"root@203.0.113.10","key":"~/.ssh/goaster-ovh","provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`)
+	result, err := tool.Handler(context.Background(), `{"agent_transport":"tcp","profile":"openai","target":"root@203.0.113.10","key":"~/.ssh/goaster-ovh","mode":null,"port":null,"known_hosts":null,"agent_socket":null,"provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10"}}`)
 	if err != nil || result != processHandoffToolSucceeded {
 		t.Fatalf("process handoff result = %q, error = %v", result, err)
 	}
@@ -332,5 +332,139 @@ func TestProcessHandoffRunsNewInstanceFirstContactBeforeStrictVerification(t *te
 	}
 	if loaded.KnownHosts != "~/.ssh/goaster-ovh-instance-123.known_hosts" {
 		t.Fatalf("handoff connection record known_hosts = %q", loaded.KnownHosts)
+	}
+}
+
+func TestProcessHandoffNullableOptionalArguments(t *testing.T) {
+	base := `"profile":"openai","target":"root@host.example","key":"/tmp/key","agent_transport":"tcp"`
+	request, err := parseProcessHandoffToolRequest(`{` + base + `,"mode":null,"port":null,"known_hosts":null,"agent_socket":null,"provisioned_target":null}`)
+	if err != nil || request.Mode != processHandoffModeInteractive || request.Port != 22 || request.KnownHostsFile != "" || request.AgentSocket != "" || request.HasProvisionedTarget {
+		t.Fatalf("nullable request = %+v, error %v", request, err)
+	}
+	for _, field := range []string{
+		`"mode":""`, `"mode":42`, `"port":0`, `"port":"22"`, `"known_hosts":42`,
+		`"agent_socket":""`, `"agent_socket":42`, `"provisioned_target":{}`,
+		`"provisioned_target":false`, `"provisioned_target":{"instance_id":"id","public_ip":"203.0.113.10","extra":true}`,
+	} {
+		t.Run(field, func(t *testing.T) {
+			args := `{` + base + `,` + field + `}`
+			if _, err := parseProcessHandoffToolRequest(args); err == nil {
+				t.Fatalf("accepted %s", args)
+			}
+			calls := 0
+			result, err := newProcessHandoffTool(func(context.Context, processHandoffRequest) string { calls++; return processHandoffToolSucceeded }).Handler(context.Background(), args)
+			if err != nil || result != processHandoffToolInvalid || calls != 0 {
+				t.Fatalf("result %q, error %v, calls %d", result, err, calls)
+			}
+		})
+	}
+	for _, socket := range []string{`null`, `""`} {
+		args := `{"profile":"openai","target":"root@host.example","key":"/tmp/key","agent_transport":"socket","agent_socket":` + socket + `}`
+		if _, err := parseProcessHandoffToolRequest(args); err == nil {
+			t.Errorf("socket transport accepted %s", socket)
+		}
+	}
+	properties := newProcessHandoffTool(nil).Parameters["properties"].(map[string]any)
+	for _, name := range []string{"mode", "port", "known_hosts", "agent_socket", "provisioned_target"} {
+		types := properties[name].(map[string]any)["type"].([]string)
+		if len(types) != 2 || types[1] != "null" {
+			t.Errorf("schema for %s = %v", name, types)
+		}
+	}
+}
+
+func TestProcessHandoffRejectsDuplicateKeysWithoutHandoff(t *testing.T) {
+	base := `"profile":"openai","target":"root@203.0.113.10","key":"/tmp/key","agent_transport":"tcp"`
+	target := `{"instance_id":"instance-123","public_ip":"203.0.113.10"}`
+	for _, field := range []string{
+		`"provisioned_target":` + target + `,"provisioned_target":null`,
+		`"provisioned_target":null,"provisioned_target":` + target,
+		`"provisioned_target":` + target + `,"Provisioned_Target":null`,
+		`"provisioned_target":{"instance_id":"instance-123","instance_id":null,"public_ip":"203.0.113.10"}`,
+		`"provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10","PUBLIC_IP":"203.0.113.10"}`,
+		`"Provisioned_Target":` + target,
+	} {
+		t.Run(field, func(t *testing.T) {
+			args := `{` + base + `,` + field + `}`
+			if _, err := parseProcessHandoffToolRequest(args); err == nil {
+				t.Fatalf("accepted %s", args)
+			}
+			calls := 0
+			tool := newProcessHandoffTool(func(context.Context, processHandoffRequest) string {
+				calls++
+				return processHandoffToolSucceeded
+			})
+			result, err := tool.Handler(context.Background(), args)
+			if err != nil || result != processHandoffToolInvalid || calls != 0 {
+				t.Fatalf("result %q, error %v, handoff calls %d", result, err, calls)
+			}
+		})
+	}
+}
+
+func TestProcessHandoffExistingHostWithNullsUsesStrictVerification(t *testing.T) {
+	home := t.TempDir()
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.Mkdir(sshDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "key"), []byte("test key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	var calls [][]string
+	runner := func(_ context.Context, args []string, _ io.Reader, _ io.Writer, _ io.Writer) error {
+		calls = append(calls, append([]string(nil), args...))
+		return nil
+	}
+	tool := newProcessHandoffTool(newProtectedProcessHandoff(testTerminalOpener(strings.NewReader("YES\n"), io.Discard), runner))
+	result, err := tool.Handler(context.Background(), `{"profile":"openai","target":"root@host.example","key":"~/.ssh/key","agent_transport":"tcp","mode":null,"port":null,"known_hosts":null,"agent_socket":null,"provisioned_target":null}`)
+	if err != nil || result != processHandoffToolSucceeded || len(calls) != 2 {
+		t.Fatalf("result %q, error %v, calls %v", result, err, calls)
+	}
+	for _, call := range calls {
+		args := strings.Join(call, " ")
+		if !strings.Contains(args, "StrictHostKeyChecking=yes") || strings.Contains(args, "accept-new") || !strings.Contains(args, "-p 22") {
+			t.Errorf("unexpected SSH arguments: %s", args)
+		}
+	}
+}
+
+func TestProcessHandoffRejectsNonSchemaPropertyNames(t *testing.T) {
+	base := `"profile":"openai","target":"root@203.0.113.10","key":"/tmp/key","agent_transport":"tcp"`
+	for _, name := range []string{"profile", "target", "key", "agent_transport"} {
+		t.Run("alias for "+name, func(t *testing.T) {
+			args := strings.Replace(`{`+base+`}`, `"`+name+`"`, `"`+strings.ToUpper(name)+`"`, 1)
+			calls := 0
+			tool := newProcessHandoffTool(func(context.Context, processHandoffRequest) string {
+				calls++
+				return processHandoffToolSucceeded
+			})
+			result, err := tool.Handler(context.Background(), args)
+			if err != nil || result != processHandoffToolInvalid || calls != 0 {
+				t.Fatalf("result %q, error %v, handoff calls %d", result, err, calls)
+			}
+		})
+	}
+	for _, field := range []string{
+		`"PORT":2222`, `"MODE":"background"`, `"AGENT_SOCKET":"/run/agent.sock"`,
+		`"Known_Hosts":"/tmp/hosts"`,
+		`"Provisioned_Target":null`, `"unexpected":true`,
+		`"provisioned_target":{"INSTANCE_ID":"instance-123","public_ip":"203.0.113.10"}`,
+		`"provisioned_target":{"instance_id":"instance-123","PUBLIC_IP":"203.0.113.10"}`,
+		`"provisioned_target":{"instance_id":"instance-123","public_ip":"203.0.113.10","unexpected":true}`,
+	} {
+		t.Run(field, func(t *testing.T) {
+			calls := 0
+			tool := newProcessHandoffTool(func(context.Context, processHandoffRequest) string {
+				calls++
+				return processHandoffToolSucceeded
+			})
+			result, err := tool.Handler(context.Background(), `{`+base+`,`+field+`}`)
+			if err != nil || result != processHandoffToolInvalid || calls != 0 {
+				t.Fatalf("result %q, error %v, handoff calls %d", result, err, calls)
+			}
+		})
 	}
 }

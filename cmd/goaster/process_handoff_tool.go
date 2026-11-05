@@ -102,8 +102,8 @@ func newProcessHandoffTool(handoff processHandoff) chat.Tool {
 					"description": "Fixed handoff profile; currently only openai is allowlisted",
 				},
 				"mode": map[string]any{
-					"type":        "string",
-					"enum":        []string{string(processHandoffModeInteractive), string(processHandoffModeBackground)},
+					"type":        []string{"string", "null"},
+					"enum":        []any{string(processHandoffModeInteractive), string(processHandoffModeBackground), nil},
 					"default":     string(processHandoffModeInteractive),
 					"description": "Handoff mode; interactive is the only mode this chat tool can invoke, while background is reserved and rejected",
 				},
@@ -116,11 +116,11 @@ func newProcessHandoffTool(handoff processHandoff) chat.Tool {
 					"description": "Path to the approved local SSH private key; a leading ~/ is expanded locally",
 				},
 				"known_hosts": map[string]any{
-					"type":        "string",
+					"type":        []string{"string", "null"},
 					"description": "Optional local known_hosts file containing the already verified host key",
 				},
 				"agent_socket": map[string]any{
-					"type":        "string",
+					"type":        []string{"string", "null"},
 					"description": "Required with socket transport: exact absolute Unix socket path from the reviewed running agent configuration; omit for tcp",
 				},
 				"agent_transport": map[string]any{
@@ -129,7 +129,7 @@ func newProcessHandoffTool(handoff processHandoff) chat.Tool {
 					"description": "Required: inspect the running remote agent configuration and select socket or tcp; never infer tcp from a missing socket path",
 				},
 				"provisioned_target": map[string]any{
-					"type": "object",
+					"type": []string{"object", "null"},
 					"properties": map[string]any{
 						"instance_id": map[string]any{
 							"type":        "string",
@@ -145,7 +145,7 @@ func newProcessHandoffTool(handoff processHandoff) chat.Tool {
 					"description":          "Use only for the exact newly provisioned OVH instance verified in the same provisioning flow; omit for existing or provenance-unclear hosts",
 				},
 				"port": map[string]any{
-					"type":        "integer",
+					"type":        []string{"integer", "null"},
 					"minimum":     1,
 					"maximum":     65535,
 					"description": "SSH port, default 22",
@@ -185,6 +185,9 @@ func parseProcessHandoffToolRequest(arguments string) (processHandoffRequest, er
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return processHandoffRequest{}, fmt.Errorf("process_handoff arguments must be a JSON object")
 	}
+	if err := rejectDuplicateProcessHandoffKeys(trimmed); err != nil {
+		return processHandoffRequest{}, fmt.Errorf("decode process_handoff arguments: %w", err)
+	}
 
 	decoder := json.NewDecoder(strings.NewReader(trimmed))
 	decoder.DisallowUnknownFields()
@@ -201,13 +204,31 @@ func parseProcessHandoffToolRequest(arguments string) (processHandoffRequest, er
 	if err := json.Unmarshal([]byte(trimmed), &fields); err != nil {
 		return processHandoffRequest{}, fmt.Errorf("read process_handoff argument fields: %w", err)
 	}
-	if _, exists := fields["mode"]; !exists {
+	for name := range fields {
+		switch name {
+		case "profile", "mode", "target", "key", "known_hosts", "agent_transport", "agent_socket", "port", "provisioned_target":
+		default:
+			return processHandoffRequest{}, fmt.Errorf("invalid process_handoff argument field")
+		}
+	}
+	if processHandoffFieldPresent(fields, "provisioned_target") {
+		var targetFields map[string]json.RawMessage
+		if err := json.Unmarshal(fields["provisioned_target"], &targetFields); err != nil {
+			return processHandoffRequest{}, fmt.Errorf("invalid provisioned target")
+		}
+		for name := range targetFields {
+			if name != "instance_id" && name != "public_ip" {
+				return processHandoffRequest{}, fmt.Errorf("invalid provisioned target field")
+			}
+		}
+	}
+	if !processHandoffFieldPresent(fields, "mode") {
 		parsed.Mode = string(processHandoffModeInteractive)
 	}
-	if _, exists := fields["port"]; !exists {
+	if !processHandoffFieldPresent(fields, "port") {
 		parsed.Port = 22
 	}
-	if _, exists := fields["agent_socket"]; exists && !validRemoteAgentSocket(parsed.AgentSocket) {
+	if processHandoffFieldPresent(fields, "agent_socket") && !validRemoteAgentSocket(parsed.AgentSocket) {
 		return processHandoffRequest{}, fmt.Errorf("remote agent socket path is invalid")
 	}
 	key, err := expandProcessHandoffPath(parsed.Key)
@@ -218,7 +239,7 @@ func parseProcessHandoffToolRequest(arguments string) (processHandoffRequest, er
 	if err != nil {
 		return processHandoffRequest{}, err
 	}
-	_, hasProvisionedTarget := fields["provisioned_target"]
+	hasProvisionedTarget := processHandoffFieldPresent(fields, "provisioned_target")
 	request := processHandoffRequest{
 		Profile:              strings.TrimSpace(parsed.Profile),
 		Mode:                 processHandoffMode(strings.TrimSpace(parsed.Mode)),
@@ -237,6 +258,60 @@ func parseProcessHandoffToolRequest(arguments string) (processHandoffRequest, er
 	return request, nil
 }
 
+func rejectDuplicateProcessHandoffKeys(arguments string) error {
+	decoder := json.NewDecoder(strings.NewReader(arguments))
+	var readValue func() error
+	readValue = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delim, ok := token.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delim {
+		case '{':
+			var seen []string
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return fmt.Errorf("invalid object key")
+				}
+				for _, previous := range seen {
+					if strings.EqualFold(previous, key) {
+						return fmt.Errorf("duplicate object key %q", key)
+					}
+				}
+				seen = append(seen, key)
+				if err := readValue(); err != nil {
+					return err
+				}
+			}
+		case '[':
+			for decoder.More() {
+				if err := readValue(); err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("unexpected JSON delimiter")
+		}
+		_, err = decoder.Token()
+		return err
+	}
+	return readValue()
+}
+
+func processHandoffFieldPresent(fields map[string]json.RawMessage, name string) bool {
+	value, exists := fields[name]
+	return exists && strings.TrimSpace(string(value)) != "null"
+}
+
 func validateProcessHandoffRequest(request processHandoffRequest) error {
 	profile, ok := processHandoffProfileFor(request.Profile)
 	if !ok {
@@ -246,6 +321,8 @@ func validateProcessHandoffRequest(request processHandoffRequest) error {
 		if err := validateRemoteProvisionedTarget(request.ProvisionedTarget, request.Target); err != nil {
 			return err
 		}
+	} else if request.ProvisionedTarget != (remoteProvisionedTarget{}) {
+		return fmt.Errorf("provisioned target must be explicitly present")
 	}
 	switch request.Mode {
 	case processHandoffModeInteractive:
