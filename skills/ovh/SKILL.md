@@ -234,12 +234,27 @@ the exact public network ID and the schema-supported shape with read-only
 checks; otherwise stop and report that the requested public access cannot yet
 be verified. Never put credentials or private-key material in the body.
 
-The successful response for this route is an instance object. Retain its
+Observed live evidence on 2026-11-05: one POST through an OVH Canada account
+endpoint with exactly the six fields shown above succeeded with `region` set
+to `BHS5`. Its response returned an instance ID, `planCode` of
+`d2-2.consumption`, and `status` of `BUILD`. A later exact-instance GET showed
+public IPv4 and IPv6 in nested `ipAddresses` data even though the POST body had
+no `networks` field. This is one result for the tested account and project;
+do not generalize it to other projects or report this `BUILD` result as
+`ACTIVE` or ready. The returned `monthlyBilling` value was `null`, so verify
+billing with `planCode`, not a returned `monthlyBilling` boolean or null value.
+
+The successful response is an instance object with a top-level `id` and
+nested `flavor`, `image`, `sshKey`, and `ipAddresses` data. Retain its
 non-empty `id` and verify it with the read-only
 `GET /1.0/cloud/project/{serviceName}/instance/{instanceId}` route. Check the
-returned `id`, `name`, `flavorId`, `imageId`, `region`, `sshKeyId` when present,
-`status`, and `ipAddresses` against the approved configuration before treating
-the instance as ready or handing it to the remote SSH workflow.
+returned `id`, `name`, `flavorId`, `imageId`, `region`,
+`sshKeyId` when present, `status`, `planCode`, and nested `ipAddresses` entries
+against the approved configuration. Verify the current public address entries
+and report their actual values only in the provisioning result. Treat `BUILD`
+as the observed status, not as `ACTIVE` or readiness; do not hand the instance
+to the remote SSH workflow until a later exact-instance check confirms
+readiness and the required public address.
 
 If the POST times out, the transport fails, returns a non-success result, or
 returns no usable instance ID, treat the outcome as ambiguous. Do not retry,
