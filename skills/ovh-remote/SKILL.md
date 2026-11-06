@@ -13,7 +13,7 @@ from the request and available context, clarify it before proceeding. This
 workflow does not provision, resize, delete, or otherwise manage OVH
 resources through the OVH API. Use the host's OpenSSH client through GoAster's
 `shell_execute` tool for non-interactive bootstrap and verification. After
-bootstrap and agent service setup, the onboarder invokes GoAster's dedicated
+bootstrap and agent service setup, the assistant invokes GoAster's dedicated
 `process_handoff` tool with the fixed `openai` profile and `interactive` mode
 when login is needed and approved.
 This is an internal handoff using the SSH-backed `goaster remote-login`
@@ -393,10 +393,10 @@ administrator's browser/device authorization. Keep both safeguards.
 ## Orchestrate the interactive remote login
 
 After the agent is installed and the root account is ready for SSH, the
-onboarder must use the dedicated `process_handoff` tool with profile `openai`,
+assistant must use the dedicated `process_handoff` tool with profile `openai`,
 mode `interactive`, and `root` as the SSH target. Keep the administrator's terminal attached while they complete OpenAI
 device authorization. The administrator must approve the authorization in the
-browser; the onboarder waits for the interactive login to finish before
+browser; the assistant waits for the interactive login to finish before
 continuing. That approval is required before the separate remote root
 credential is saved. Do not relay the login URL, one-time code, terminal
 output, or credentials through chat.
@@ -422,7 +422,7 @@ If approval is declined or no protected terminal is available, stop without
 connecting.
 
 For reference, the underlying exceptional-use command has this shape. The
-onboarder invokes `process_handoff` itself during normal onboarding; do not ask
+assistant invokes `process_handoff` itself during normal onboarding; do not ask
 the user to type this command:
 
 ```text
@@ -996,7 +996,7 @@ the new credential with an older refresh. Include each stop and start in the
 approved checklist or obtain the required separate approval. The agent must be
 running for the handoff's health check.
 
-When approved and quiescent, the onboarder invokes `process_handoff` with
+When approved and quiescent, the assistant invokes `process_handoff` with
 profile `openai` and mode `interactive`; the administrator does not type the
 command during normal onboarding. Wait for device approval and the command's
 health check to return `ok`, then start the adapter when approved. Login writes
