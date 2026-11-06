@@ -20,25 +20,7 @@ Check the relevant service docs or dashboard for each variable's purpose and whe
 Enter secret values only through this local environment-file flow; never paste them into chat.
 GoAster masks values and saves confirmed settings locally.`
 
-const ovhOnboardingStart = `OVH setup has started.
-
-I can list your existing OVH servers using read-only checks. A missing GoAster connection record on this computer does not mean that no server exists. Would you like to connect to an existing server or create a new one?
-
-If you choose an existing server, I will list servers read-only and ask you to select the exact one before preparing a connection. If you choose a new server, I will show its exact configuration and cost before asking for your explicit approval to create it. Starting this screen does not create or change anything.
-
-For the server you select, I will include its exact address in the routine checklist and ask once for approval before contacting it. Selecting or checking an existing server never creates one.
-
-Approval applies only to the listed actions and that server. If anything unexpected or outside the plan comes up, I will pause and ask only for the needed input or approval. Approval does not guarantee setup will succeed. I will report progress as I go.
-
-If the selected server is ready, I will say one of these:
-- “The server is ready. Please approve the sign-in in the terminal.”
-- “The server is ready, but Telegram still needs setup. Do not test Telegram yet.”
-- “Setup is complete. Please send one normal message to the Telegram bot and check that it replies.”
-
-Creating an OVH resource, making a change that could cost money, or making another high-impact change always needs separate explicit approval.`
-
 const environmentFileCommand = "/env-file"
-const getEnvironmentFileCommand = "/get-env"
 const fileCommand = "/file"
 const uploadCommand = "/upload"
 const fileInspectionMessage = "Please inspect the attached file and explain what it shows, what I should do next, and any risks. Do not ask for, transcribe, or reveal secrets found in the file."
@@ -149,19 +131,7 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 			continue
 		}
 		if message == "/env" {
-			if err := runEnvironmentFileSetupWithUI(terminalInput, w, store, picker, "", "", ui); err != nil {
-				if flushErr := w.Flush(); flushErr != nil {
-					return flushErr
-				}
-				return err
-			}
-			if err := w.Flush(); err != nil {
-				return err
-			}
-			continue
-		}
-		if message == getEnvironmentFileCommand {
-			if err := runGetEnvironmentFileWithUI(w, store, picker, ui); err != nil {
+			if err := runEnvironmentFileSetupWithUI(terminalInput, w, store, picker, "", ui); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -184,7 +154,7 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 				}
 				continue
 			}
-			if err := runEnvironmentFileSetupWithUI(terminalInput, w, store, picker, path, "", ui); err != nil {
+			if err := runEnvironmentFileSetupWithUI(terminalInput, w, store, picker, path, ui); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
 				}
@@ -194,12 +164,6 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 				return err
 			}
 			continue
-		}
-		if message == "/ovh" {
-			fmt.Fprintln(w, ovhOnboardingStart)
-			if err := w.Flush(); err != nil {
-				return err
-			}
 		}
 		userMessage := message
 		var attachments []attachment.Metadata
@@ -426,11 +390,11 @@ func environmentFileCommandPath(message string) (string, bool) {
 	return fields[0], true
 }
 
-func runEnvironmentFileSetup(input TerminalInput, output terminalOutput, store environmentValueStore, picker EnvironmentFilePicker, path string, next string) error {
-	return runEnvironmentFileSetupWithUI(input, output, store, picker, path, next, terminalUI{})
+func runEnvironmentFileSetup(input TerminalInput, output terminalOutput, store environmentValueStore, picker EnvironmentFilePicker, path string) error {
+	return runEnvironmentFileSetupWithUI(input, output, store, picker, path, terminalUI{})
 }
 
-func runEnvironmentFileSetupWithUI(input TerminalInput, output terminalOutput, store environmentValueStore, picker EnvironmentFilePicker, path string, next string, ui terminalUI) error {
+func runEnvironmentFileSetupWithUI(input TerminalInput, output terminalOutput, store environmentValueStore, picker EnvironmentFilePicker, path string, ui terminalUI) error {
 	if path == "" {
 		ui.renderInfo(output, environmentFileGuidance)
 		if err := output.Flush(); err != nil {
@@ -461,74 +425,14 @@ func runEnvironmentFileSetupWithUI(input TerminalInput, output terminalOutput, s
 		ui.renderError(output, fmt.Sprintf("Environment file rejected: %v", err))
 		return nil
 	}
-	return reviewEnvironmentValuesWithUI(input, output, store, values, next, ui)
+	return reviewEnvironmentValuesWithUI(input, output, store, values, ui)
 }
 
-type savedEnvironmentFileStore interface {
-	Load() error
-	Values() map[string]string
-	HasSavedFile() bool
+func reviewEnvironmentValues(input TerminalInput, output terminalOutput, store environmentValueStore, values map[string]string) error {
+	return reviewEnvironmentValuesWithUI(input, output, store, values, terminalUI{})
 }
 
-func runGetEnvironmentFileWithUI(output terminalOutput, store environmentValueStore, picker EnvironmentFilePicker, ui terminalUI) error {
-	fileStore, ok := store.(savedEnvironmentFileStore)
-	if !ok || fileStore.Load() != nil {
-		ui.renderError(output, "Could not read the saved environment file.")
-		return nil
-	}
-
-	hasSavedFile := fileStore.HasSavedFile()
-	values := fileStore.Values()
-	if !hasSavedFile {
-		values = localenv.RequiredTemplateValues()
-		ui.renderInfo(output, "No saved environment file was found. Choose where to save a blank template.")
-	} else {
-		ui.renderInfo(output, "Choose where to save your current environment file.")
-	}
-	if err := output.Flush(); err != nil {
-		return err
-	}
-
-	saver, ok := picker.(EnvironmentFileSavePicker)
-	if !ok {
-		ui.renderWarning(output, "Environment file save dialog unavailable.")
-		return nil
-	}
-	path, err := saver.PickSavePath()
-	if err != nil {
-		if errors.Is(err, ErrEnvironmentFilePickerCanceled) {
-			ui.renderOutcome(output, "Environment file download canceled.")
-			return nil
-		}
-		if errors.Is(err, errEnvironmentFilePickerUnavailable) {
-			ui.renderWarning(output, "File picker unavailable. Install zenity (or a compatible package such as qarma or matedialog); for example: sudo apt install zenity")
-			return nil
-		}
-		ui.renderError(output, "Environment file save failed.")
-		return nil
-	}
-	if strings.TrimSpace(path) == "" {
-		ui.renderOutcome(output, "Environment file download canceled.")
-		return nil
-	}
-	if err := localenv.NewStoreAt(path).Save(values); err != nil {
-		ui.renderError(output, "Could not save the environment file.")
-		return nil
-	}
-	if hasSavedFile {
-		ui.renderOutcome(output, fmt.Sprintf("Environment file saved to: %s", path))
-		return nil
-	}
-	ui.renderOutcome(output, fmt.Sprintf("Blank environment template saved to: %s", path))
-	ui.renderInfo(output, "Fill in the values, then re-upload the completed file with /env.")
-	return nil
-}
-
-func reviewEnvironmentValues(input TerminalInput, output terminalOutput, store environmentValueStore, values map[string]string, next string) error {
-	return reviewEnvironmentValuesWithUI(input, output, store, values, next, terminalUI{})
-}
-
-func reviewEnvironmentValuesWithUI(input TerminalInput, output terminalOutput, store environmentValueStore, values map[string]string, next string, ui terminalUI) error {
+func reviewEnvironmentValuesWithUI(input TerminalInput, output terminalOutput, store environmentValueStore, values map[string]string, ui terminalUI) error {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
@@ -561,9 +465,6 @@ func reviewEnvironmentValuesWithUI(input TerminalInput, output terminalOutput, s
 	}
 	ui.renderOutcome(output, "Environment values saved locally.")
 	ui.renderOutcome(output, "The imported file replaces the previous saved set.")
-	if next != "" {
-		ui.renderInfo(output, next)
-	}
 	return nil
 }
 

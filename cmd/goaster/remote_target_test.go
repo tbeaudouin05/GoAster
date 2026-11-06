@@ -17,7 +17,7 @@ func prepareRemoteTargetFiles(t *testing.T) (string, string, string) {
 	if err := os.Mkdir(sshDirectory, 0755); err != nil {
 		t.Fatal(err)
 	}
-	identityFile := filepath.Join(sshDirectory, "goaster-ovh")
+	identityFile := filepath.Join(sshDirectory, "goaster-remote")
 	if err := os.WriteFile(identityFile, []byte("TEST-IDENTITY-CONTENT-MUST-NOT-BE-SAVED"), 0600); err != nil {
 		t.Fatal(err)
 	}

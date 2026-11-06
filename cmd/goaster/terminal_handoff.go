@@ -145,13 +145,8 @@ func approveProcessHandoff(ctx context.Context, request processHandoffRequest, t
 	knownHosts := "default known_hosts file"
 	if request.KnownHostsFile != "" {
 		knownHosts = strconv.Quote(request.KnownHostsFile)
-	} else if !request.ProvisionedTarget.isZero() {
-		knownHosts = "automatic target-specific known_hosts file"
 	}
 	hostKeyPolicy := "strict; an unknown or changed key will stop the connection"
-	if !request.ProvisionedTarget.isZero() {
-		hostKeyPolicy = "one automatic first-contact acceptance, then strict; a changed key will stop the connection"
-	}
 	transport := request.AgentTransport
 	if request.AgentTransport == remoteTransportSocket {
 		transport += " " + strconv.Quote(request.AgentSocket)

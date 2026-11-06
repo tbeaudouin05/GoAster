@@ -6,7 +6,7 @@ stop; do not deploy. Exclude credentials, environment files, tokens, private
 keys, and other secrets by default. Including any secret requires explicit
 approval naming the data, purpose, protection, retention, and deletion plan.
 
-OVH backup is optional. The existing project-scoped provisioning GET and POST
+OVH backup is optional. The existing project-scoped GET and POST
 rows cover documented Public Cloud instance backup creation and inspection;
 they do not themselves approve those actions. Verify the current endpoint,
 method/path, and rights against official OVH documentation and the project UI.

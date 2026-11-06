@@ -47,7 +47,6 @@ func TestTerminalUIIntroListsSlashCommandsWithoutQuitLine(t *testing.T) {
 			result := strings.Join(strings.Fields(output.String()), " ")
 			for _, want := range []string{
 				"- /env: securely import environment variables.",
-				"- /get-env: edit the current env file or get a blank template.",
 				"- /file: inspect non-secret files.",
 				"- /clear: clear this conversation's history.",
 			} {

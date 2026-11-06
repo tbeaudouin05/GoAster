@@ -42,7 +42,7 @@ service. Keep existing bundles; do not delete them automatically.
 ## Optional OVH snapshot or backup
 
 Only after the local bundle passes, ask whether the user wants the optional OVH
-path. It is not part of the essential workflow. The existing provisioning rows
+path. It is not part of the essential workflow. The existing project-scoped rows
 `GET /cloud/project`, `GET /cloud/project/*`, and `POST /cloud/project/*`
 cover documented Public Cloud instance backup creation and inspection. The
 [OVH instance-backup guide](https://docs.ovhcloud.com/en/guides/public-cloud/compute/save-an-instance)

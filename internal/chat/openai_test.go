@@ -438,7 +438,7 @@ func TestOpenAIInstructionsGuideAccurateMultiStepProgress(t *testing.T) {
 		"If discovery changes the plan, briefly explain the finding, revise the numbered plan and total, and report subsequent progress against that revision.",
 		"Do not count individual shell commands as business steps.",
 		"Keep single-step questions and tasks concise, without a plan or progress banner.",
-		"Progress reporting does not change or replace existing plain-text, approval, safety, secret-handling, or partial-onboarding rules.",
+		"Progress reporting does not change or replace existing plain-text, approval, safety, or secret-handling rules.",
 	} {
 		if !strings.Contains(openAIInstructions, want) {
 			t.Errorf("OpenAI instructions missing multi-step progress guidance %q", want)
@@ -522,7 +522,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode Codex request: %v", err)
 		}
-		if request.Model != "gpt-test" || request.Instructions == "" || !request.Stream || request.Store || len(request.Input) != 1 || request.Input[0].Type != "message" || request.Input[0].Content[0].Text != "Install GoAster on my existing OVH server." {
+		if request.Model != "gpt-test" || request.Instructions == "" || !request.Stream || request.Store || len(request.Input) != 1 || request.Input[0].Type != "message" || request.Input[0].Content[0].Text != "Review this local project." {
 			t.Errorf("Codex request = %+v", request)
 		}
 		for _, want := range []string{
@@ -549,7 +549,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 	provider := NewCodexProvider(store)
 	provider.backendURL = server.URL + "/responses"
 	provider.httpClient = server.Client()
-	reply, err := provider.Reply(context.Background(), "gpt-test", "Install GoAster on my existing OVH server.")
+	reply, err := provider.Reply(context.Background(), "gpt-test", "Review this local project.")
 	if err != nil {
 		t.Fatal(err)
 	}

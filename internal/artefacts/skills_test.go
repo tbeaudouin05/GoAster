@@ -81,14 +81,14 @@ func TestInstallBundledStartersOnce(t *testing.T) {
 	if err := os.WriteFile(memoryPath, []byte("user memory"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, "skills", "ovh", "SKILL.md")
+	path := filepath.Join(root, "skills", "project-memory", "SKILL.md")
 	if err := os.WriteFile(path, []byte("custom workflow"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// A release containing revised OVH guidance must not overwrite any part
+	// A release containing revised starter guidance must not overwrite any part
 	// of an already installed, user-edited workflow.
 	for _, filename := range []string{"META.md", "SKILL.md", "AUTH.md"} {
-		file := filepath.Join(root, "skills", "ovh-remote", filename)
+		file := filepath.Join(root, "skills", "ripgrep-search", filename)
 		if err := os.WriteFile(file, []byte("user edit in "+filename), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -103,9 +103,9 @@ func TestInstallBundledStartersOnce(t *testing.T) {
 		t.Fatalf("existing memory changed: %q, %v", got, err)
 	}
 	for _, filename := range []string{"META.md", "SKILL.md", "AUTH.md"} {
-		file := filepath.Join(root, "skills", "ovh-remote", filename)
+		file := filepath.Join(root, "skills", "ripgrep-search", filename)
 		if got, err := os.ReadFile(file); err != nil || string(got) != "user edit in "+filename {
-			t.Fatalf("existing ovh-remote %s changed: %q, %v", filename, got, err)
+			t.Fatalf("existing ripgrep-search %s changed: %q, %v", filename, got, err)
 		}
 	}
 	checkConcurrentStarterInstallation(t)
@@ -282,7 +282,7 @@ func checkConcurrentStarterInstallation(t interface {
 	case <-time.After(10 * time.Second):
 		t.Fatal("concurrent installer did not finish")
 	}
-	if _, err := os.Stat(filepath.Join(root, "skills", "ovh", "SKILL.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "skills", "project-memory", "SKILL.md")); err != nil {
 		t.Fatalf("starter installation missing after concurrent startups: %v", err)
 	}
 }
@@ -425,7 +425,7 @@ func TestStarterInstallationReportsFinalDirectorySyncFailure(t *testing.T) {
 	if !errors.Is(err, failure) {
 		t.Fatalf("final sync error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "skills", "ovh", "SKILL.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "skills", "project-memory", "SKILL.md")); err != nil {
 		t.Fatalf("installed skill missing: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(root, ".skills-installing")); !errors.Is(err, os.ErrNotExist) {

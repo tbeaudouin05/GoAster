@@ -9,43 +9,17 @@ import (
 )
 
 func TestParse(t *testing.T) {
-	values, err := Parse("OVH_REGION=gva\nAPI_TOKEN=sample-value=with-equals\nEMPTY=")
+	values, err := Parse("SERVICE_REGION=west\nAPI_TOKEN=sample-value=with-equals\nEMPTY=")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"OVH_REGION": "gva",
-		"API_TOKEN":  "sample-value=with-equals",
-		"EMPTY":      "",
+		"SERVICE_REGION": "west",
+		"API_TOKEN":      "sample-value=with-equals",
+		"EMPTY":          "",
 	}
 	if !reflect.DeepEqual(values, want) {
 		t.Fatalf("parsed variable names do not match: got %v, want %v", mapKeys(values), mapKeys(want))
-	}
-}
-
-func TestRequiredTemplateValuesAndSavedFileState(t *testing.T) {
-	want := map[string]string{
-		"OVH_APPLICATION_KEY":    "",
-		"OVH_APPLICATION_SECRET": "",
-		"OVH_CONSUMER_KEY":       "",
-		"TELEGRAM_BOT_TOKEN":     "",
-	}
-	if !reflect.DeepEqual(RequiredTemplateValues(), want) {
-		t.Fatal("required template names did not match")
-	}
-
-	store := NewStoreAt(filepath.Join(t.TempDir(), "env"))
-	if err := store.Load(); err != nil {
-		t.Fatal(err)
-	}
-	if store.HasSavedFile() {
-		t.Fatal("missing environment file was reported as saved")
-	}
-	if err := store.Save(want); err != nil {
-		t.Fatal(err)
-	}
-	if !store.HasSavedFile() {
-		t.Fatal("saved environment file was not reported")
 	}
 }
 
@@ -70,7 +44,7 @@ func TestParseRejectsInvalidInputWithoutEchoingValues(t *testing.T) {
 
 func TestLoadFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.txt")
-	if err := os.WriteFile(path, []byte("OVH_REGION=gva\nAPI_TOKEN=sample-value=with-equals\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("SERVICE_REGION=west\nAPI_TOKEN=sample-value=with-equals\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,7 +52,7 @@ func TestLoadFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"OVH_REGION": "gva", "API_TOKEN": "sample-value=with-equals"}
+	want := map[string]string{"SERVICE_REGION": "west", "API_TOKEN": "sample-value=with-equals"}
 	if !reflect.DeepEqual(values, want) {
 		t.Fatalf("loaded variable names do not match: got %v, want %v", mapKeys(values), mapKeys(want))
 	}
@@ -143,7 +117,7 @@ func TestLoadFileRejectsMalformedAndUnsafeInput(t *testing.T) {
 func TestStoreRoundTripAndPermissions(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), directoryName)
 	store := NewStoreAt(filepath.Join(directory, fileName))
-	values := map[string]string{"OVH_REGION": "gva", "API_TOKEN": "sample-value"}
+	values := map[string]string{"SERVICE_REGION": "west", "API_TOKEN": "sample-value"}
 	if err := store.Save(values); err != nil {
 		t.Fatal(err)
 	}

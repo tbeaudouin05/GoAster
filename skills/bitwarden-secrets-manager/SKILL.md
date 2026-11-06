@@ -5,10 +5,10 @@ Bitwarden Secrets Manager. This skill describes the workflow and safety rules;
 it does not contain credentials, secret values, server-specific paths, or an
 embedded implementation.
 
-## Onboarding policy
+## Initial setup policy
 
-Bitwarden is optional. Do not add Bitwarden to initial GoAster onboarding or
-block a successful installation on Bitwarden setup. GoAster may start with its
+Bitwarden is optional. Do not make Bitwarden a prerequisite for normal GoAster
+operation or block a successful installation on Bitwarden setup. GoAster may start with its
 existing server-local environment source and offer migration after installation
 and health verification.
 

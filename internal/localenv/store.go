@@ -13,21 +13,16 @@ import (
 )
 
 const (
-	directoryName            = ".goaster"
-	fileName                 = "env"
-	maxLineSize              = 1024 * 1024
-	maxFileSize              = 1024 * 1024
-	ovhApplicationKeyName    = "OVH_APPLICATION_KEY"
-	ovhApplicationSecretName = "OVH_APPLICATION_SECRET"
-	ovhConsumerKeyName       = "OVH_CONSUMER_KEY"
-	telegramBotTokenName     = "TELEGRAM_BOT_TOKEN"
+	directoryName = ".goaster"
+	fileName      = "env"
+	maxLineSize   = 1024 * 1024
+	maxFileSize   = 1024 * 1024
 )
 
 // Store keeps environment settings separate from chat messages and providers.
 type Store struct {
-	path      string
-	values    map[string]string
-	savedFile bool
+	path   string
+	values map[string]string
 }
 
 // NewStore locates the default settings file at ~/.goaster/env.
@@ -47,44 +42,6 @@ func NewStoreAt(path string) *Store {
 // Values returns a copy of the values loaded or saved by this store.
 func (s *Store) Values() map[string]string {
 	return clone(s.values)
-}
-
-// HasSavedFile reports whether the most recent Load or Save found a saved env file.
-func (s Store) HasSavedFile() bool {
-	return s.savedFile
-}
-
-// RequiredTemplateValues returns the blank integration settings GoAster asks
-// users to configure through the local environment-file flow.
-func RequiredTemplateValues() map[string]string {
-	values := make(map[string]string, len(requiredTemplateNames()))
-	for _, name := range requiredTemplateNames() {
-		values[name] = ""
-	}
-	return values
-}
-
-func requiredTemplateNames() [4]string {
-	return [4]string{
-		ovhApplicationKeyName,
-		ovhApplicationSecretName,
-		ovhConsumerKeyName,
-		telegramBotTokenName,
-	}
-}
-
-func isBlankRequiredTemplate(values map[string]string) bool {
-	names := requiredTemplateNames()
-	if len(values) != len(names) {
-		return false
-	}
-	for _, name := range names {
-		value, exists := values[name]
-		if !exists || value != "" {
-			return false
-		}
-	}
-	return true
 }
 
 // LoadFile reads and validates KEY=VALUE settings from a local regular file.
@@ -165,7 +122,6 @@ func (s *Store) Load() error {
 	info, err := os.Lstat(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		s.values = make(map[string]string)
-		s.savedFile = false
 		return nil
 	}
 	if err != nil {
@@ -199,7 +155,6 @@ func (s *Store) Load() error {
 		return fmt.Errorf("parse environment settings: %w", err)
 	}
 	s.values = values
-	s.savedFile = true
 	return nil
 }
 
@@ -259,7 +214,6 @@ func (s *Store) Save(values map[string]string) error {
 		return fmt.Errorf("replace environment settings: %w", err)
 	}
 	s.values = clone(values)
-	s.savedFile = true
 	return nil
 }
 
@@ -326,17 +280,11 @@ func validateValues(values map[string]string) error {
 }
 
 func encode(values map[string]string) []byte {
-	var keys []string
-	if isBlankRequiredTemplate(values) {
-		templateNames := requiredTemplateNames()
-		keys = templateNames[:]
-	} else {
-		keys = make([]string, 0, len(values))
-		for key := range values {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
 	}
+	sort.Strings(keys)
 	var data strings.Builder
 	for _, key := range keys {
 		data.WriteString(key)

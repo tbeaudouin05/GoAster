@@ -17,7 +17,7 @@ const (
 )
 
 // Load retains the original environment setting for existing deployments. A
-// configured file must instead contain the provisioned 32-byte hex secret;
+// configured file must instead contain the configured 32-byte hex secret;
 // it never falls back to an environment value if the file is unusable.
 func Load() (string, error) {
 	path, fileConfigured := os.LookupEnv(FileEnv)

@@ -33,31 +33,28 @@ const (
 )
 
 type processHandoffToolArguments struct {
-	Profile           string                  `json:"profile"`
-	Mode              string                  `json:"mode,omitempty"`
-	Target            string                  `json:"target"`
-	Key               string                  `json:"key"`
-	KnownHosts        string                  `json:"known_hosts,omitempty"`
-	AgentTransport    string                  `json:"agent_transport"`
-	AgentSocket       string                  `json:"agent_socket,omitempty"`
-	Port              int                     `json:"port,omitempty"`
-	ProvisionedTarget remoteProvisionedTarget `json:"provisioned_target,omitempty"`
+	Profile        string `json:"profile"`
+	Mode           string `json:"mode,omitempty"`
+	Target         string `json:"target"`
+	Key            string `json:"key"`
+	KnownHosts     string `json:"known_hosts,omitempty"`
+	AgentTransport string `json:"agent_transport"`
+	AgentSocket    string `json:"agent_socket,omitempty"`
+	Port           int    `json:"port,omitempty"`
 }
 
 // processHandoffRequest is deliberately a profile request, not a command
 // request. The profile selects fixed local behavior; the model cannot provide
 // an executable, command, or argument list.
 type processHandoffRequest struct {
-	Profile              string
-	Mode                 processHandoffMode
-	Target               string
-	IdentityFile         string
-	KnownHostsFile       string
-	AgentTransport       string
-	AgentSocket          string
-	Port                 int
-	ProvisionedTarget    remoteProvisionedTarget
-	HasProvisionedTarget bool
+	Profile        string
+	Mode           processHandoffMode
+	Target         string
+	IdentityFile   string
+	KnownHostsFile string
+	AgentTransport string
+	AgentSocket    string
+	Port           int
 }
 
 // processHandoff is owned by the local CLI. Only a generic status crosses this
@@ -92,7 +89,7 @@ func registerProcessHandoffTool(registrar chat.ToolRegistrar, handoff processHan
 func newProcessHandoffTool(handoff processHandoff) chat.Tool {
 	return chat.Tool{
 		Name:        processHandoffToolName,
-		Description: "This is an internal profile-based process handoff; invoke it yourself and do not ask the user to type its name or the goaster remote-login command during normal onboarding. Only the fixed openai profile is currently available, and only interactive mode can run through this chat tool; background mode is not supported by process_handoff. Use the separate background_command tool only for names in the local background-command allowlist. For the openai profile, after the user has explicitly approved the exact remote host in chat and its GoAster service account is verified ready, start the protected local interactive login and health check. For an exact newly provisioned OVH instance verified in the same flow, include its provisioned_target instance ID and public IP; the fixed handoff performs one automatic first-contact host-key acceptance in a target-specific local known_hosts file before the strict login and health check. For an existing or provenance-unclear host, omit provisioned_target and use a pre-trusted known_hosts entry. It asks for a separate YES approval in the local terminal, attaches the login directly to the terminal, and returns only a generic status. It uses the controlling terminal when available; otherwise it uses inherited stdin and stdout only when both are the same actual terminal device. If no protected terminal is available, it stops without connecting. Never use this for provisioning, an unverified host, or a host that is not ready. The profile fixes the executable and remote operations; this tool never accepts a command or executable string.",
+		Description: "This is an internal profile-based process handoff; invoke it yourself and do not ask the user to type its name or the goaster remote-login command. Only the fixed openai profile is currently available, and only interactive mode can run through this chat tool; background mode is not supported by process_handoff. Use the separate background_command tool only for names in the local background-command allowlist. For the openai profile, after the user has explicitly approved the exact remote host in chat and its GoAster service account is verified ready, start the protected local interactive login and health check using a pre-trusted known_hosts entry. It asks for a separate YES approval in the local terminal, attaches the login directly to the terminal, and returns only a generic status. It uses the controlling terminal when available; otherwise it uses inherited stdin and stdout only when both are the same actual terminal device. If no protected terminal is available, it stops without connecting. Never use this for an unverified host or a host that is not ready. The profile fixes the executable and remote operations; this tool never accepts a command or executable string.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -127,22 +124,6 @@ func newProcessHandoffTool(handoff processHandoff) chat.Tool {
 					"type":        "string",
 					"enum":        []string{remoteTransportSocket, remoteTransportTCP},
 					"description": "Required: inspect the running remote agent configuration and select socket or tcp; never infer tcp from a missing socket path",
-				},
-				"provisioned_target": map[string]any{
-					"type": []string{"object", "null"},
-					"properties": map[string]any{
-						"instance_id": map[string]any{
-							"type":        "string",
-							"description": "Exact OVH instance ID returned by the successful create and verification flow",
-						},
-						"public_ip": map[string]any{
-							"type":        "string",
-							"description": "Current public IP returned and verified for that exact OVH instance",
-						},
-					},
-					"required":             []string{"instance_id", "public_ip"},
-					"additionalProperties": false,
-					"description":          "Use only for the exact newly provisioned OVH instance verified in the same provisioning flow; omit for existing or provenance-unclear hosts",
 				},
 				"port": map[string]any{
 					"type":        []string{"integer", "null"},
@@ -206,20 +187,9 @@ func parseProcessHandoffToolRequest(arguments string) (processHandoffRequest, er
 	}
 	for name := range fields {
 		switch name {
-		case "profile", "mode", "target", "key", "known_hosts", "agent_transport", "agent_socket", "port", "provisioned_target":
+		case "profile", "mode", "target", "key", "known_hosts", "agent_transport", "agent_socket", "port":
 		default:
 			return processHandoffRequest{}, fmt.Errorf("invalid process_handoff argument field")
-		}
-	}
-	if processHandoffFieldPresent(fields, "provisioned_target") {
-		var targetFields map[string]json.RawMessage
-		if err := json.Unmarshal(fields["provisioned_target"], &targetFields); err != nil {
-			return processHandoffRequest{}, fmt.Errorf("invalid provisioned target")
-		}
-		for name := range targetFields {
-			if name != "instance_id" && name != "public_ip" {
-				return processHandoffRequest{}, fmt.Errorf("invalid provisioned target field")
-			}
 		}
 	}
 	if !processHandoffFieldPresent(fields, "mode") {
@@ -239,18 +209,15 @@ func parseProcessHandoffToolRequest(arguments string) (processHandoffRequest, er
 	if err != nil {
 		return processHandoffRequest{}, err
 	}
-	hasProvisionedTarget := processHandoffFieldPresent(fields, "provisioned_target")
 	request := processHandoffRequest{
-		Profile:              strings.TrimSpace(parsed.Profile),
-		Mode:                 processHandoffMode(strings.TrimSpace(parsed.Mode)),
-		Target:               parsed.Target,
-		IdentityFile:         key,
-		KnownHostsFile:       knownHosts,
-		AgentTransport:       parsed.AgentTransport,
-		AgentSocket:          parsed.AgentSocket,
-		Port:                 parsed.Port,
-		ProvisionedTarget:    parsed.ProvisionedTarget,
-		HasProvisionedTarget: hasProvisionedTarget,
+		Profile:        strings.TrimSpace(parsed.Profile),
+		Mode:           processHandoffMode(strings.TrimSpace(parsed.Mode)),
+		Target:         parsed.Target,
+		IdentityFile:   key,
+		KnownHostsFile: knownHosts,
+		AgentTransport: parsed.AgentTransport,
+		AgentSocket:    parsed.AgentSocket,
+		Port:           parsed.Port,
 	}
 	if err := validateProcessHandoffRequest(request); err != nil {
 		return processHandoffRequest{}, err
@@ -317,13 +284,6 @@ func validateProcessHandoffRequest(request processHandoffRequest) error {
 	if !ok {
 		return fmt.Errorf("unknown process handoff profile %q", request.Profile)
 	}
-	if request.HasProvisionedTarget {
-		if err := validateRemoteProvisionedTarget(request.ProvisionedTarget, request.Target); err != nil {
-			return err
-		}
-	} else if request.ProvisionedTarget != (remoteProvisionedTarget{}) {
-		return fmt.Errorf("provisioned target must be explicitly present")
-	}
 	switch request.Mode {
 	case processHandoffModeInteractive:
 		if profile.interactive == nil {
@@ -342,13 +302,12 @@ func validateProcessHandoffRequest(request processHandoffRequest) error {
 
 func (request processHandoffRequest) remoteLoginOptions() remoteLoginOptions {
 	return remoteLoginOptions{
-		Target:            request.Target,
-		IdentityFile:      request.IdentityFile,
-		KnownHostsFile:    request.KnownHostsFile,
-		AgentTransport:    request.AgentTransport,
-		AgentSocket:       request.AgentSocket,
-		Port:              request.Port,
-		ProvisionedTarget: request.ProvisionedTarget,
+		Target:         request.Target,
+		IdentityFile:   request.IdentityFile,
+		KnownHostsFile: request.KnownHostsFile,
+		AgentTransport: request.AgentTransport,
+		AgentSocket:    request.AgentSocket,
+		Port:           request.Port,
 	}
 }
 

@@ -27,10 +27,9 @@ const (
 	ansiStatus      = "\x1b[38;5;249m"
 	ansiDescription = "\x1b[38;5;245m"
 
-	terminalEnvHelp    = "- /env: securely import environment variables."
-	terminalGetEnvHelp = "- /get-env: edit the current env file or get a blank template."
-	terminalFileHelp   = "- /file: inspect non-secret files."
-	terminalClearHelp  = "- /clear: clear this conversation's history."
+	terminalEnvHelp   = "- /env: securely import environment variables."
+	terminalFileHelp  = "- /file: inspect non-secret files."
+	terminalClearHelp = "- /clear: clear this conversation's history."
 )
 
 // terminalUI keeps the interactive presentation separate from the line-based
@@ -136,7 +135,7 @@ func (ui terminalUI) renderIntro(output io.Writer, description string) {
 }
 
 func (ui terminalUI) renderIntroHelp(output io.Writer, width int) {
-	for _, line := range [...]string{terminalEnvHelp, terminalGetEnvHelp, terminalFileHelp, terminalClearHelp} {
+	for _, line := range [...]string{terminalEnvHelp, terminalFileHelp, terminalClearHelp} {
 		ui.renderWrapped(output, "  ", line, width, ansiDescription)
 	}
 }

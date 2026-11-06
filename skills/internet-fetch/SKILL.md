@@ -19,10 +19,10 @@ Before using the generic workflow below, check whether the endpoint or task
 has an explicit address-family requirement. If one applies, use that family
 from the first request and on every request in its approved redirect chain;
 this takes precedence over normal-first retrieval and diagnostic fallback.
-For the official pinned Go archive bootstrap in the OVH remote skill, use
-per-request IPv4 from the initial archive request through each validated HTTPS
-redirect and any separately retrieved official checksum. Never make a
-dual-stack first request or switch a redirected request to a default client
+For an official pinned Go archive download, use per-request IPv4 from the
+initial archive request through each validated HTTPS redirect and any
+separately retrieved official checksum. Never make a dual-stack first request
+or switch a redirected request to a default client
 for this workaround. Keep the existing timeout, retry, redirect, destination,
 credential, and integrity safeguards. Validate redirect destinations as
 public before requesting them, preserve the hostname and TLS checks, do not

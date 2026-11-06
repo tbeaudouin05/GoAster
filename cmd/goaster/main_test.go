@@ -26,7 +26,6 @@ func TestRunDoesNotAcceptLoginCommand(t *testing.T) {
 	for _, want := range []string{
 		"Describe what you want in chat",
 		"/env: securely import environment variables.",
-		"/get-env: edit the current env file or get a blank template.",
 		"/file: inspect non-secret files.",
 	} {
 		if !strings.Contains(help, want) {
@@ -38,7 +37,7 @@ func TestRunDoesNotAcceptLoginCommand(t *testing.T) {
 		t.Fatalf("remote-login help error = %v", err)
 	}
 	remoteHelp := remoteHelpOutput.String()
-	if !strings.Contains(remoteHelp, "internal command for exceptional use") || !strings.Contains(remoteHelp, "ask GoAster in chat") {
-		t.Errorf("remote-login help does not explain the normal chat flow: %s", remoteHelp)
+	if !strings.Contains(remoteHelp, "internal command for exceptional use") || !strings.Contains(remoteHelp, "protected process handoff") {
+		t.Errorf("remote-login help does not explain the protected handoff: %s", remoteHelp)
 	}
 }
