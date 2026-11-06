@@ -7,22 +7,21 @@ The repository also contains the remote agent and Telegram runtime.
 The repository contains the local chat application, authentication, packaging,
 remote runtime, Telegram runtime, and other operational tools.
 
-## Install and launch
+## Build and run
 
-Use the packaged entrypoint for the target platform:
+Build all Go commands directly from the repository:
 
-- macOS: launch `GoAster.app`.
-- Windows: launch `GoAster.cmd`.
-- Linux: launch `GoAster.desktop`.
+```sh
+go build ./...
+```
 
-The entrypoint opens a terminal and starts the package's GoAster binary.
-On first launch, starter skills are copied from the package's `skills/` tree
-to `~/.goaster/artefacts/skills/`, and a missing
-`~/.goaster/artefacts/memory/MEMORY.md` is initialized. Existing user files
-are preserved. Installation is local and does not require network access.
+Run the local terminal application with the starter skills from this checkout:
+
+```sh
+GOASTER_STARTER_DIR="$(pwd)/skills" go run ./cmd/goaster
+```
 
 The local app and remote agent each keep their own runtime skill directory.
-Updating a package does not overwrite an existing user-edited runtime skill.
 Review and merge skill changes manually when needed.
 
 Authentication uses the ChatGPT subscription OAuth device flow in the terminal.
@@ -122,29 +121,6 @@ configuration is kept at
 normal requests. Telegram users can use `/m` to view the current model and
 `/m MODEL_OR_ALIAS` to select a configured model for that chat.
 
-## Build packages
-
-Packaging requires Git, Go 1.22+, Python 3, and a POSIX-compatible shell:
-
-```sh
-./packaging/build.sh all
-./packaging/validate.sh dist
-./packaging/test.sh
-```
-
-The build creates macOS, Windows, and Linux packages under `dist/`.
-Package validation checks launcher wiring, tracked regular assets, starter
-skill contents, and archive structure. For source development, point the app
-at this checkout's skills explicitly:
-
-```sh
-GOASTER_STARTER_DIR="$(pwd)/skills" go run ./cmd/goaster
-```
-
-The package contains only the maintained starter skills listed by
-`packaging/assets.sh`. The packaging tests also check local Markdown links
-and reject stale or unexpected starter assets.
-
 ## User-owned source workflow
 
 The [fork workflow](skills/goaster-fork/SKILL.md), [source
@@ -159,13 +135,18 @@ backup, deployment, and verification stages.
 
 ## Tests
 
-Run the core Go tests and packaging checks from the repository root:
+Run the core Go tests from the repository root:
 
 ```sh
-gofmt -w <changed-go-files>
-go test ./...
-./packaging/test-skill-assets.sh
-./packaging/validate.sh dist
+go test ./cmd/goaster ./cmd/goaster-agent ./config \
+  ./internal/artefacts ./internal/attachment ./internal/chat \
+  ./internal/command ./internal/controlsecret ./internal/controltransport \
+  ./internal/filesync ./internal/localenv \
+  ./internal/scheduler ./packaging/cmd/archive
+go test ./internal/chat -run '^TestLoop$' -count=1
 ```
+
+The [build/test workflow](skills/goaster-build-test/SKILL.md) also describes
+the isolated binary-start check and Linux temporary-directory requirements.
 
 Remote and Telegram runtime code remain available alongside the local app.

@@ -59,9 +59,6 @@ if [ ! -d "$dist_dir" ]; then
 fi
 
 if [ -d "$dist_dir" ]; then
-	if ! sh -n "$script_dir/build.sh"; then
-		fail "packaging/build.sh has shell syntax errors"
-	fi
 	if ! sh -n "$script_dir/macos/launcher.sh"; then
 		fail "macOS launcher has shell syntax errors"
 	fi
