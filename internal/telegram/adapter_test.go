@@ -133,6 +133,170 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 	}
 }
 
+func TestPairCommandIsPrimaryAndRejectsInvalidPairingMessages(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	p, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	a := &adapter{
+		token: testToken, pairing: p, apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+			}
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			sent = append(sent, payload.Text)
+			return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+		}),
+	}
+
+	group := textMessage(22, -100123, "group", "/pair "+testCode)
+	legacyGroup := textMessage(23, -100123, "group", "/start "+testCode)
+	spoof := privateMessage(24, "/pair "+testCode)
+	spoof.Chat.ID = 25
+	bot := privateMessage(26, "/pair "+testCode)
+	bot.From.IsBot = true
+	senderChat := privateMessage(27, "/start "+testCode)
+	senderChat.SenderChat = json.RawMessage(`{"id":27}`)
+	a.handle(context.Background(), group)
+	a.handle(context.Background(), legacyGroup)
+	a.handle(context.Background(), spoof)
+	a.handle(context.Background(), bot)
+	a.handle(context.Background(), senderChat)
+	a.handle(context.Background(), privateMessage(28, "hello"))
+	a.handle(context.Background(), privateMessage(29, "/pair wrong"))
+	a.handle(context.Background(), privateMessage(30, "/pair "+testCode+" extra"))
+	a.handle(context.Background(), privateMessage(31, "/pair\t"+testCode))
+	a.handle(context.Background(), privateMessage(32, "/pair@goaster "+testCode))
+	if p.userID != 0 || len(sent) != 0 {
+		t.Fatalf("invalid or non-private pairing message changed authorization: user=%d sent=%q", p.userID, sent)
+	}
+
+	a.handle(context.Background(), privateMessage(20, "/start"))
+	a.handle(context.Background(), privateMessage(20, "/pair"))
+	if len(sent) != 2 || !strings.Contains(sent[0], "/pair") || !strings.Contains(sent[1], "/pair") ||
+		strings.Contains(sent[0], testCode) || strings.Contains(sent[1], testCode) {
+		t.Fatalf("pairing instructions were not primary and code-free: %q", sent)
+	}
+
+	a.handle(context.Background(), privateMessage(42, "/pair "+testCode))
+	if p.userID != 42 || len(sent) != 3 || !strings.Contains(sent[2], "Paired") {
+		t.Fatalf("valid /pair did not authorize the private user: user=%d sent=%q", p.userID, sent)
+	}
+	a.handle(context.Background(), privateMessage(99, "/start "+testCode))
+	if p.userID != 42 || len(sent) != 3 {
+		t.Fatal("a consumed code or legacy command authorized another user")
+	}
+	a.handle(context.Background(), privateMessage(42, "/start"))
+	if len(sent) != 4 || !strings.Contains(sent[3], "not ready") {
+		t.Fatalf("normal /start did not retain paired-user behavior: %q", sent)
+	}
+}
+
+func TestLegacyStartPairingRemainsCompatible(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	p, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	a := &adapter{
+		pairing: p, apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			sent = append(sent, payload.Text)
+			return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+		}),
+	}
+
+	a.handle(context.Background(), privateMessage(42, "/start "+testCode))
+	if p.userID != 42 || len(sent) != 1 || !strings.Contains(sent[0], "Paired") || strings.Contains(sent[0], testCode) {
+		t.Fatalf("legacy /start pairing was not preserved safely: user=%d sent=%q", p.userID, sent)
+	}
+}
+
+func TestPairedPairCommandIsNotForwardedOrEchoed(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	p, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.userID = 42
+	var sent []string
+	var forwarded []string
+	a := adapter{
+		token: testToken, pairing: p, apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var payload struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				sent = append(sent, payload.Text)
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+				return response(http.StatusOK, "ok\n"), nil
+			}
+			if r.Method != http.MethodPost || r.URL.Path != "/chat" {
+				t.Fatalf("unexpected agent request %s %s", r.Method, r.URL)
+			}
+			var request struct {
+				Message string `json:"message"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			forwarded = append(forwarded, request.Message)
+			return response(http.StatusOK, `{"type":"final","reply":"agent response"}`+"\n"), nil
+		}),
+	}
+
+	for _, text := range []string{"/start", "/pair", "/pair " + testCode} {
+		a.handle(context.Background(), privateMessage(42, text))
+	}
+	if p.userID != 42 {
+		t.Fatalf("pairing command changed authorization: user=%d", p.userID)
+	}
+	if len(forwarded) != 0 {
+		t.Fatalf("pairing commands reached the agent: %#v", forwarded)
+	}
+	const readyMessage = "GoAster is ready for text messages, images, and documents. Use /m to view the model, /m MODEL_OR_ALIAS to select one, and /clear to clear this chat's history."
+	if len(sent) != 3 {
+		t.Fatalf("expected a safe command response for each command, got %#v", sent)
+	}
+	for _, reply := range sent {
+		if reply != readyMessage || strings.Contains(reply, testCode) {
+			t.Fatalf("pairing command response was not safe: %q", reply)
+		}
+	}
+}
+
 func TestClearCommandUsesOnlyItsTelegramChatWithoutProviderReadiness(t *testing.T) {
 	paths := testPaths(t)
 	setupTest(t, paths)

@@ -101,6 +101,8 @@ const (
 	telegramTypingActionTimeout   = 2 * time.Second
 	telegramAgentRequestTimeout   = 20 * time.Minute
 	telegramAuthControlHeader     = "X-GoAster-GitHub-Auth-Control"
+	telegramPairCommand           = "/pair"
+	telegramStartCommand          = "/start"
 )
 
 // Run starts polling only after the token and pairing state are protected.
@@ -264,6 +266,16 @@ func (a *adapter) call(ctx context.Context, method string, payload any, result a
 	return nil
 }
 
+func pairingCommandCode(text string) (string, bool) {
+	for _, command := range []string{telegramPairCommand, telegramStartCommand} {
+		prefix := command + " "
+		if strings.HasPrefix(text, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(text, prefix)), true
+		}
+	}
+	return "", false
+}
+
 func (a *adapter) handle(ctx context.Context, m *message) {
 	if m == nil || m.From == nil || m.From.IsBot || m.From.ID <= 0 || m.Chat.ID == 0 || len(m.SenderChat) != 0 && string(m.SenderChat) != "null" {
 		return
@@ -285,16 +297,18 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	a.pairingMu.Lock()
 	pairedUserID := a.pairing.userID
 	paired := false
-	if pairedUserID == 0 && m.Chat.Type == "private" && strings.HasPrefix(text, "/start ") {
-		paired = a.pairing.tryPair(m.From.ID, strings.TrimSpace(strings.TrimPrefix(text, "/start ")))
+	if pairedUserID == 0 && m.Chat.Type == "private" {
+		if code, recognized := pairingCommandCode(text); recognized {
+			paired = a.pairing.tryPair(m.From.ID, code)
+		}
 	}
 	a.pairingMu.Unlock()
 	if pairedUserID == 0 {
 		if m.Chat.Type != "private" {
 			return
 		}
-		if text == "/start" {
-			a.send(ctx, m.Chat.ID, "Send /start followed by the one-time pairing code shown in GoAster.")
+		if text == telegramPairCommand || text == telegramStartCommand {
+			a.send(ctx, m.Chat.ID, "Send /pair followed by the one-time pairing code shown in GoAster.")
 			return
 		}
 		if paired {
@@ -342,7 +356,8 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		}
 		return
 	}
-	if text == "/start" || strings.HasPrefix(text, "/start ") {
+	if text == telegramPairCommand || strings.HasPrefix(text, telegramPairCommand+" ") ||
+		text == telegramStartCommand || strings.HasPrefix(text, telegramStartCommand+" ") {
 		if a.agentEndpointAvailable(ctx, "/healthz") {
 			a.send(ctx, m.Chat.ID, "GoAster is ready for text messages, images, and documents. Use /m to view the model, /m MODEL_OR_ALIAS to select one, and /clear to clear this chat's history.")
 		} else {

@@ -107,11 +107,17 @@ the originating chat. Pairing binds one numeric Telegram user ID; other
 accounts are ignored. The adapter supports private chats and groups subject
 to Telegram's group privacy setting.
 
+To pair the first account, send `/pair TOKEN` in a private chat, where `TOKEN`
+is the one-time code shown by GoAster. The older `/start TOKEN` form remains
+accepted for compatibility. Pairing binds the first valid numeric user ID and
+consumes the code once; other users and group messages are ignored.
+
 The adapter handles ordinary text, one image or document attachment, and
 `/clear`. Media is validated and bounded before the current turn; temporary
 files are private and removed after the request. Telegram bot tokens and
-pairing material are operational secrets and must remain outside chat,
-command lines, logs, and the repository.
+stored pairing material are operational secrets and must remain outside chat,
+command lines, logs, and the repository; the one-time pairing code is accepted
+only through the private-chat pairing flow.
 
 ## Models
 
