@@ -103,7 +103,7 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 	if len(sent) != 1 || !strings.Contains(sent[0].Text, "pairing code") || sent[0].ParseMode != "HTML" || p.userID != 0 {
 		t.Fatal("/start did not explain pairing without authorizing anyone")
 	}
-	a.handle(context.Background(), privateMessage(42, "/start "+testCode))
+	a.handle(context.Background(), privateMessage(42, "/pair "+testCode))
 	if p.userID != 42 || len(sent) != 2 || !strings.Contains(sent[1].Text, "Paired") || sent[1].ParseMode != "HTML" {
 		t.Fatal("valid private pairing failed")
 	}
@@ -159,7 +159,7 @@ func TestPairCommandIsPrimaryAndRejectsInvalidPairingMessages(t *testing.T) {
 	}
 
 	group := textMessage(22, -100123, "group", "/pair "+testCode)
-	legacyGroup := textMessage(23, -100123, "group", "/start "+testCode)
+	startWithCodeGroup := textMessage(23, -100123, "group", "/start "+testCode)
 	spoof := privateMessage(24, "/pair "+testCode)
 	spoof.Chat.ID = 25
 	bot := privateMessage(26, "/pair "+testCode)
@@ -167,7 +167,7 @@ func TestPairCommandIsPrimaryAndRejectsInvalidPairingMessages(t *testing.T) {
 	senderChat := privateMessage(27, "/start "+testCode)
 	senderChat.SenderChat = json.RawMessage(`{"id":27}`)
 	a.handle(context.Background(), group)
-	a.handle(context.Background(), legacyGroup)
+	a.handle(context.Background(), startWithCodeGroup)
 	a.handle(context.Background(), spoof)
 	a.handle(context.Background(), bot)
 	a.handle(context.Background(), senderChat)
@@ -176,6 +176,7 @@ func TestPairCommandIsPrimaryAndRejectsInvalidPairingMessages(t *testing.T) {
 	a.handle(context.Background(), privateMessage(30, "/pair "+testCode+" extra"))
 	a.handle(context.Background(), privateMessage(31, "/pair\t"+testCode))
 	a.handle(context.Background(), privateMessage(32, "/pair@goaster "+testCode))
+	a.handle(context.Background(), privateMessage(33, "/start "+testCode))
 	if p.userID != 0 || len(sent) != 0 {
 		t.Fatalf("invalid or non-private pairing message changed authorization: user=%d sent=%q", p.userID, sent)
 	}
@@ -201,7 +202,7 @@ func TestPairCommandIsPrimaryAndRejectsInvalidPairingMessages(t *testing.T) {
 	}
 }
 
-func TestLegacyStartPairingRemainsCompatible(t *testing.T) {
+func TestStartCodeIsRejectedBeforeAndAfterPairing(t *testing.T) {
 	paths := testPaths(t)
 	setupTest(t, paths)
 	p, err := loadPairing(paths)
@@ -209,9 +210,13 @@ func TestLegacyStartPairingRemainsCompatible(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sent []string
-	a := &adapter{
-		pairing: p, apiBase: "https://example.invalid",
+	var forwarded []string
+	a := adapter{
+		token: testToken, pairing: p, apiBase: "https://example.invalid",
 		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+			}
 			var payload struct {
 				Text string `json:"text"`
 			}
@@ -221,11 +226,39 @@ func TestLegacyStartPairingRemainsCompatible(t *testing.T) {
 			sent = append(sent, payload.Text)
 			return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
 		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+				return response(http.StatusOK, "ok\n"), nil
+			}
+			if r.Method != http.MethodPost || r.URL.Path != "/chat" {
+				t.Fatalf("unexpected agent request %s %s", r.Method, r.URL)
+			}
+			var request struct {
+				Message string `json:"message"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			forwarded = append(forwarded, request.Message)
+			return response(http.StatusOK, `{"type":"final","reply":"unexpected"}`+"\n"), nil
+		}),
 	}
 
 	a.handle(context.Background(), privateMessage(42, "/start "+testCode))
-	if p.userID != 42 || len(sent) != 1 || !strings.Contains(sent[0], "Paired") || strings.Contains(sent[0], testCode) {
-		t.Fatalf("legacy /start pairing was not preserved safely: user=%d sent=%q", p.userID, sent)
+	if p.userID != 0 || len(sent) != 0 || len(forwarded) != 0 {
+		t.Fatalf("/start CODE was accepted or forwarded before pairing: user=%d sent=%q forwarded=%q", p.userID, sent, forwarded)
+	}
+	a.handle(context.Background(), privateMessage(42, "/start"))
+	if len(sent) != 1 || !strings.Contains(sent[0], "/pair") || strings.Contains(sent[0], testCode) || p.userID != 0 {
+		t.Fatalf("bare /start did not retain its code-free welcome: user=%d sent=%q", p.userID, sent)
+	}
+	a.handle(context.Background(), privateMessage(42, "/pair "+testCode))
+	if p.userID != 42 || len(sent) != 2 || len(forwarded) != 0 || strings.Contains(sent[1], testCode) {
+		t.Fatalf("/pair CODE did not authorize without exposing the code: user=%d sent=%q forwarded=%q", p.userID, sent, forwarded)
+	}
+	a.handle(context.Background(), privateMessage(42, "/start "+testCode))
+	if p.userID != 42 || len(forwarded) != 0 || len(sent) != 3 || strings.Contains(sent[2], testCode) {
+		t.Fatalf("rejected /start CODE reached the model or exposed the code after pairing: user=%d sent=%q forwarded=%q", p.userID, sent, forwarded)
 	}
 }
 
@@ -762,7 +795,7 @@ func TestPairingDoesNotAnnounceChatWhenAgentIsUnavailable(t *testing.T) {
 			return response(200, `{"ok":true,"result":{}}`), nil
 		}),
 	}
-	a.handle(context.Background(), privateMessage(42, "/start "+testCode))
+	a.handle(context.Background(), privateMessage(42, "/pair "+testCode))
 	if p.userID != 42 || !strings.Contains(message, "Paired") || !strings.Contains(message, "not ready") {
 		t.Fatalf("pairing readiness message = %q", message)
 	}

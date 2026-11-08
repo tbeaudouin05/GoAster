@@ -108,9 +108,11 @@ accounts are ignored. The adapter supports private chats and groups subject
 to Telegram's group privacy setting.
 
 To pair the first account, send `/pair TOKEN` in a private chat, where `TOKEN`
-is the one-time code shown by GoAster. The older `/start TOKEN` form remains
-accepted for compatibility. Pairing binds the first valid numeric user ID and
-consumes the code once; other users and group messages are ignored.
+is the one-time code provided by GoAsterWeb setup. Bare `/start` remains a welcome command,
+but `/start TOKEN` is not a pairing command: it is rejected without pairing
+and is never forwarded to the remote agent. Pairing binds the first valid
+numeric user ID and consumes the code once; other users and group messages are
+ignored.
 
 The adapter handles ordinary text, one image or document attachment, and
 `/clear`. Media is validated and bounded before the current turn; temporary

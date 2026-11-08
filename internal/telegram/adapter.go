@@ -267,11 +267,9 @@ func (a *adapter) call(ctx context.Context, method string, payload any, result a
 }
 
 func pairingCommandCode(text string) (string, bool) {
-	for _, command := range []string{telegramPairCommand, telegramStartCommand} {
-		prefix := command + " "
-		if strings.HasPrefix(text, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(text, prefix)), true
-		}
+	prefix := telegramPairCommand + " "
+	if strings.HasPrefix(text, prefix) {
+		return strings.TrimSpace(strings.TrimPrefix(text, prefix)), true
 	}
 	return "", false
 }
