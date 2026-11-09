@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	DefaultModel           = "gpt-6.1-sol"
+	DefaultModel           = "gpt-6.1-terra"
 	EmergencyModel         = "gpt-6.1-terra"
 	modelConfigFilename    = "openai-models.json"
 	maxModelConfigBytes    = 64 << 10
@@ -367,6 +367,12 @@ func validModelName(value string) bool {
 
 func selectionForChat(config ModelConfig, chatID int64) ModelSelection {
 	modelID := config.Models[0].ID
+	for _, model := range config.Models {
+		if model.ID == DefaultModel {
+			modelID = DefaultModel
+			break
+		}
+	}
 	if chatID != 0 {
 		if selected := config.Chats[strconv.FormatInt(chatID, 10)]; selected != "" {
 			modelID = selected

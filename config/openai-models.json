@@ -2,12 +2,12 @@
   "provider": "openai",
   "models": [
     {
-      "id": "gpt-6.1-sol",
-      "alias": "sol"
-    },
-    {
       "id": "gpt-6.1-terra",
       "alias": "terra"
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "alias": "sol"
     },
     {
       "id": "gpt-5.6-luna",

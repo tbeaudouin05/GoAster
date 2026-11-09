@@ -199,7 +199,7 @@ func TestAgentLoopbackHandler(t *testing.T) {
 		{name: "reject missing chat ID", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello"}`, status: 400},
 		{name: "reject unknown fields", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","extra":true}`, status: 400},
 		{name: "credential error redacted", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","chat_id":42}`, provider: fakeProvider{err: errors.New("fake-secret")}, status: 503},
-		{name: "selected model error is direct", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","chat_id":42}`, provider: fakeProvider{err: chat.ErrModelUnavailable}, status: 503, want: "model gpt-6.1-sol"},
+		{name: "selected model error is direct", method: "POST", path: "/chat", host: "127.0.0.1:8765", contentType: "application/json", body: `{"message":"hello","chat_id":42}`, provider: fakeProvider{err: chat.ErrModelUnavailable}, status: 503, want: "model " + chat.DefaultModel},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(tc.method, "http://"+tc.host+tc.path, strings.NewReader(tc.body))
@@ -783,15 +783,19 @@ func TestAgentModelCommandResolvesAliasPersistsChatSelectionAndSkipsAuth(t *test
 	h := handlerWithMemoryAndRegistry(fakeProvider{}, nil, checkAuth, registry)
 
 	current := postChat(t, h, 101, "/m")
-	if current.Code != http.StatusOK || !strings.Contains(current.Body.String(), `"reply":"Current model: gpt-6.1-sol (sol)"`) {
+	if current.Code != http.StatusOK || !strings.Contains(current.Body.String(), `"reply":"Current model: gpt-6.1-terra (terra)"`) {
 		t.Fatalf("current model response = %d %q", current.Code, current.Body.String())
 	}
-	selected := postChat(t, h, 101, "/m terra")
-	if selected.Code != http.StatusOK || !strings.Contains(selected.Body.String(), `"reply":"Selected model: gpt-6.1-terra (terra)"`) {
+	selected := postChat(t, h, 101, "/m sol")
+	if selected.Code != http.StatusOK || !strings.Contains(selected.Body.String(), `"reply":"Selected model: gpt-6.1-sol (sol)"`) {
 		t.Fatalf("alias selection response = %d %q", selected.Code, selected.Body.String())
 	}
+	current = postChat(t, h, 101, "/m")
+	if current.Code != http.StatusOK || !strings.Contains(current.Body.String(), `"reply":"Current model: gpt-6.1-sol (sol)"`) {
+		t.Fatalf("persisted model response = %d %q", current.Code, current.Body.String())
+	}
 	other := postChat(t, h, 202, "/m")
-	if other.Code != http.StatusOK || !strings.Contains(other.Body.String(), `"reply":"Current model: gpt-6.1-sol (sol)"`) {
+	if other.Code != http.StatusOK || !strings.Contains(other.Body.String(), `"reply":"Current model: gpt-6.1-terra (terra)"`) {
 		t.Fatalf("other chat response = %d %q", other.Code, other.Body.String())
 	}
 
@@ -803,8 +807,8 @@ func TestAgentModelCommandResolvesAliasPersistsChatSelectionAndSkipsAuth(t *test
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	if config.Chats["101"] != chat.EmergencyModel {
-		t.Fatalf("persisted model = %q, want %q", config.Chats["101"], chat.EmergencyModel)
+	if config.Chats["101"] != "gpt-6.1-sol" {
+		t.Fatalf("persisted model = %q, want %q", config.Chats["101"], "gpt-6.1-sol")
 	}
 	for message, want := range map[string]string{
 		"/m gpt-5.6-luna": "Selected model: gpt-5.6-luna (luna)",
@@ -827,7 +831,7 @@ func TestAgentReportsModelRecoveryEventOnceAndUsesEmergencyModel(t *testing.T) {
 	provider := &historyProvider{}
 	h := handlerWithMemoryAndRegistry(provider, nil, readyAuth, registry)
 	command := postChat(t, h, 303, "/m")
-	if command.Code != http.StatusOK || !strings.Contains(command.Body.String(), "gpt-6.1-terra") {
+	if command.Code != http.StatusOK || !strings.Contains(command.Body.String(), chat.EmergencyModel) {
 		t.Fatalf("model command during recovery = %d %q", command.Code, command.Body.String())
 	}
 	clear := postChat(t, h, 303, "/clear")
@@ -858,7 +862,7 @@ func TestAgentReloadsUpdatedModelForExistingChat(t *testing.T) {
 	provider := recordingModelProvider(func(model string) (string, error) { return model, nil })
 	h := handlerWithMemoryAndRegistry(provider, nil, readyAuth, registry)
 	before := postChat(t, h, 101, "before")
-	if before.Code != http.StatusOK || !strings.Contains(before.Body.String(), `"reply":"gpt-6.1-sol"`) {
+	if before.Code != http.StatusOK || !strings.Contains(before.Body.String(), `"reply":"`+chat.DefaultModel+`"`) {
 		t.Fatalf("before update = %d %q", before.Code, before.Body.String())
 	}
 	temporary := filepath.Join(filepath.Dir(pathName), "updated.json")

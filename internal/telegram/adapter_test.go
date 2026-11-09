@@ -427,7 +427,7 @@ func TestModelCommandsReachAgentAndReturnSelectionReply(t *testing.T) {
 				t.Fatalf("model command chat ID = %d", request.ChatID)
 			}
 			forwarded = append(forwarded, request.Message)
-			reply := "Current model: gpt-6.1-sol (sol)"
+			reply := "Current model: gpt-6.1-terra (terra)"
 			if request.Message == "/m terra" {
 				reply = "Selected model: gpt-6.1-terra (terra)"
 			}
@@ -441,7 +441,7 @@ func TestModelCommandsReachAgentAndReturnSelectionReply(t *testing.T) {
 	if len(forwarded) != 2 || forwarded[0] != "/m" || forwarded[1] != "/m terra" {
 		t.Fatalf("forwarded model commands = %#v", forwarded)
 	}
-	if len(sent) != 2 || sent[0] != "Current model: gpt-6.1-sol (sol)" || sent[1] != "Selected model: gpt-6.1-terra (terra)" {
+	if len(sent) != 2 || sent[0] != "Current model: gpt-6.1-terra (terra)" || sent[1] != "Selected model: gpt-6.1-terra (terra)" {
 		t.Fatalf("model command replies = %#v", sent)
 	}
 }

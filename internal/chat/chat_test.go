@@ -221,10 +221,10 @@ func TestLoop(t *testing.T) {
 		"- /env: securely import environment variables.",
 		"- /file: inspect non-secret files.",
 		"- /clear: clear this conversation's history.",
-		"Active model: gpt-6.1-sol", "you> ", "assistant [gpt-6.1-sol]> received hello",
-		"assistant [gpt-6.1-sol]> received /history", "Conversation history cleared.",
-		"assistant [gpt-6.1-sol]> received /quit", "assistant [gpt-6.1-sol]> received /exit",
-		"assistant [gpt-6.1-sol]> received second",
+		"Active model: gpt-6.1-terra", "you> ", "assistant [gpt-6.1-terra]> received hello",
+		"assistant [gpt-6.1-terra]> received /history", "Conversation history cleared.",
+		"assistant [gpt-6.1-terra]> received /quit", "assistant [gpt-6.1-terra]> received /exit",
+		"assistant [gpt-6.1-terra]> received second",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, &output)
@@ -710,7 +710,7 @@ func TestFileCommandForwardsSelectedImageAndCleansTemporaryCopy(t *testing.T) {
 	if _, err := os.Stat(temporaryPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("temporary attachment still exists after the turn: %v", err)
 	}
-	for _, want := range []string{"Choose a local file to inspect.", "assistant [gpt-6.1-sol]> File inspected."} {
+	for _, want := range []string{"Choose a local file to inspect.", "assistant [gpt-6.1-terra]> File inspected."} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q: %s", want, output)
 		}

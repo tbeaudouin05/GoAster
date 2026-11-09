@@ -24,7 +24,7 @@ func TestShippedModelConfigIsInstalledAndUsed(t *testing.T) {
 		t.Fatalf("runtime path = %q, want %q", registry.Path, want)
 	}
 	state, err := registry.Current(42)
-	if err != nil || state.Selection.ID != "gpt-6.1-sol" {
+	if err != nil || state.Selection.ID != DefaultModel {
 		t.Fatalf("installed selection = %+v, %v", state, err)
 	}
 	embedded, err := ParseModelConfig(appconfig.OpenAIModels)
@@ -32,8 +32,8 @@ func TestShippedModelConfigIsInstalledAndUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ConfiguredModel{
-		{ID: "gpt-6.1-sol", Alias: "sol"},
 		{ID: "gpt-6.1-terra", Alias: "terra"},
+		{ID: "gpt-6.1-sol", Alias: "sol"},
 		{ID: "gpt-5.6-luna", Alias: "luna"},
 	}
 	if !reflect.DeepEqual(embedded.Models, want) {
@@ -89,8 +89,8 @@ func TestParseModelConfigAcceptsOpenAIModelsAndRejectsInvalidRegistry(t *testing
 	config, err := ParseModelConfig([]byte(`{
         "provider":"openai",
         "models":[
-            {"id":"gpt-6.1-sol","alias":"sol"},
             {"id":"gpt-6.1-terra","alias":"terra"},
+            {"id":"gpt-6.1-sol","alias":"sol"},
             {"id":"gpt-5.6-luna","alias":"luna"}
         ],
         "chats":{"42":"gpt-6.1-terra"}
@@ -98,7 +98,7 @@ func TestParseModelConfigAcceptsOpenAIModelsAndRejectsInvalidRegistry(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.Models) != 3 || config.Models[1].ID != EmergencyModel || config.Chats["42"] != EmergencyModel {
+	if len(config.Models) != 3 || config.Models[0].ID != DefaultModel || config.Chats["42"] != DefaultModel {
 		t.Fatalf("parsed model config = %+v", config)
 	}
 
@@ -124,22 +124,22 @@ func TestModelRegistryResolvesAliasesAndPersistsExactChatModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Selection.ID != "gpt-6.1-sol" || state.Selection.Alias != "sol" {
+	if state.Selection.ID != DefaultModel || state.Selection.Alias != "terra" {
 		t.Fatalf("default selection = %+v", state.Selection)
 	}
 	selected, err := registry.Select(42, "terra")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selected.ID != EmergencyModel || selected.Alias != "terra" {
+	if selected.ID != DefaultModel || selected.Alias != "terra" {
 		t.Fatalf("alias selection = %+v", selected)
 	}
 	state, err = registry.Current(42)
-	if err != nil || state.Selection.ID != EmergencyModel {
+	if err != nil || state.Selection.ID != DefaultModel {
 		t.Fatalf("selected chat state = %+v, %v", state, err)
 	}
 	other, err := registry.Current(99)
-	if err != nil || other.Selection.ID != "gpt-6.1-sol" {
+	if err != nil || other.Selection.ID != DefaultModel {
 		t.Fatalf("other chat state = %+v, %v", other, err)
 	}
 
@@ -151,8 +151,8 @@ func TestModelRegistryResolvesAliasesAndPersistsExactChatModel(t *testing.T) {
 	if err := json.Unmarshal(data, &disk); err != nil {
 		t.Fatal(err)
 	}
-	if disk.Chats["42"] != EmergencyModel {
-		t.Fatalf("persisted chat model = %q, want exact ID %q", disk.Chats["42"], EmergencyModel)
+	if disk.Chats["42"] != DefaultModel {
+		t.Fatalf("persisted chat model = %q, want exact ID %q", disk.Chats["42"], DefaultModel)
 	}
 	if _, err := registry.Select(42, "gpt-5.6-luna"); err != nil {
 		t.Fatal(err)
@@ -160,6 +160,68 @@ func TestModelRegistryResolvesAliasesAndPersistsExactChatModel(t *testing.T) {
 	state, err = registry.Current(42)
 	if err != nil || state.Selection.ID != "gpt-5.6-luna" || state.Selection.Alias != "luna" {
 		t.Fatalf("exact ID selection = %+v, %v", state, err)
+	}
+}
+
+func TestModelRegistryUsesTerraDefaultAndPreservesExplicitLegacySelections(t *testing.T) {
+	pathName := filepath.Join(t.TempDir(), "openai-models.json")
+	legacy := ModelConfig{
+		Provider: "openai",
+		Models: []ConfiguredModel{
+			{ID: "gpt-6.1-sol", Alias: "sol"},
+			{ID: "gpt-6.1-terra", Alias: "terra"},
+		},
+		Chats: map[string]string{"42": "gpt-6.1-sol"},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pathName, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewModelRegistryAt(pathName)
+
+	existing, err := registry.Current(42)
+	if err != nil || existing.Selection.ID != "gpt-6.1-sol" {
+		t.Fatalf("existing explicit selection = %+v, %v", existing, err)
+	}
+	newChat, err := registry.Current(99)
+	if err != nil || newChat.Selection.ID != DefaultModel {
+		t.Fatalf("new chat selection = %+v, %v; want %s", newChat, err, DefaultModel)
+	}
+
+	selected, err := registry.Select(99, "sol")
+	if err != nil || selected.ID != "gpt-6.1-sol" {
+		t.Fatalf("select sol = %+v, %v", selected, err)
+	}
+	newChat, err = registry.Current(99)
+	if err != nil || newChat.Selection.ID != "gpt-6.1-sol" {
+		t.Fatalf("switched chat selection = %+v, %v", newChat, err)
+	}
+	if stillExisting, err := registry.Current(42); err != nil || stillExisting.Selection.ID != "gpt-6.1-sol" {
+		t.Fatalf("other explicit selection changed = %+v, %v", stillExisting, err)
+	}
+
+	selected, err = registry.Select(99, "terra")
+	if err != nil || selected.ID != DefaultModel {
+		t.Fatalf("switch back to terra = %+v, %v", selected, err)
+	}
+}
+
+func TestSelectionForChatWithoutTerra(t *testing.T) {
+	config := ModelConfig{
+		Models: []ConfiguredModel{
+			{ID: "gpt-6.1-sol", Alias: "sol"},
+			{ID: "gpt-5.6-luna", Alias: "luna"},
+		},
+		Chats: map[string]string{"42": "gpt-5.6-luna"},
+	}
+	if got := selectionForChat(config, 99); got.ID != "gpt-6.1-sol" || got.Alias != "sol" {
+		t.Fatalf("default selection = %+v", got)
+	}
+	if got := selectionForChat(config, 42); got.ID != "gpt-5.6-luna" || got.Alias != "luna" {
+		t.Fatalf("saved selection = %+v", got)
 	}
 }
 
@@ -179,7 +241,7 @@ func TestModelRegistryReloadsChangedRuntimeConfigWithoutRestart(t *testing.T) {
 		Provider: "openai",
 		Models: []ConfiguredModel{
 			{ID: "gpt-test-orbit", Alias: "orbit"},
-			{ID: EmergencyModel, Alias: "terra"},
+			{ID: DefaultModel, Alias: "terra"},
 		},
 		Chats: map[string]string{"7": "gpt-test-orbit"},
 	}
@@ -197,7 +259,7 @@ func TestModelRegistryReloadsChangedRuntimeConfigWithoutRestart(t *testing.T) {
 	if _, err := session.Reply(context.Background(), "after update"); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"gpt-6.1-sol", "gpt-test-orbit"}; !reflect.DeepEqual(models, want) {
+	if want := []string{DefaultModel, "gpt-test-orbit"}; !reflect.DeepEqual(models, want) {
 		t.Fatalf("models used across update = %v, want %v", models, want)
 	}
 }
