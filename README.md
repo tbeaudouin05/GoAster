@@ -68,8 +68,10 @@ unconfirmed writes.
 Never enter passwords, passphrases, tokens, API keys, one-time codes, private
 keys, or other secrets through `background_command`. The bundled `github-login`
 profile is the only narrow authentication exception: it uses the fixed GitHub
-browser flow, accepts only enter/return or ctrl-c/c-c keys, and discards command
-output. All other login or authentication commands remain prohibited.
+browser flow, accepts only enter/return or ctrl-c/c-c keys, and exposes the
+terminal output needed to relay GitHub's official verification URL and one-time
+code. Never relay passwords, tokens, credentials, or other secrets. All other
+login or authentication commands remain prohibited.
 
 The conversation is saved under
 `~/.goaster/artefacts/state/sessions/session.json`. Markdown memory lives

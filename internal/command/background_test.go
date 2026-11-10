@@ -398,7 +398,7 @@ func exerciseBackgroundConfig(t testing.TB) {
 	}
 	defaultCommand := config.Commands[0]
 	wantArgs := []string{"auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"}
-	if defaultCommand.Name != appconfig.GitHubLoginCommandName || defaultCommand.Executable != "/usr/bin/gh" || !equalStrings(defaultCommand.Args, wantArgs) || !defaultCommand.Interactive || !defaultCommand.PTY || !defaultCommand.KeysOnly || !defaultCommand.RedactOutput {
+	if defaultCommand.Name != appconfig.GitHubLoginCommandName || defaultCommand.Executable != "/usr/bin/gh" || !equalStrings(defaultCommand.Args, wantArgs) || !defaultCommand.Interactive || !defaultCommand.PTY || !defaultCommand.KeysOnly || defaultCommand.RedactOutput {
 		t.Fatalf("default GitHub login command = %+v", defaultCommand)
 	}
 	data, err := os.ReadFile(path)
@@ -504,7 +504,7 @@ func TestBundledGitHubLoginProfileMatchesSkill(t *testing.T) {
 		t.Fatalf("bundled background commands = %+v, error = %v", config, err)
 	}
 	profile := config.Commands[0]
-	if profile.Name != appconfig.GitHubLoginCommandName || !profile.Interactive || !profile.PTY || !profile.KeysOnly || !profile.RedactOutput {
+	if profile.Name != appconfig.GitHubLoginCommandName || !profile.Interactive || !profile.PTY || !profile.KeysOnly || profile.RedactOutput {
 		t.Fatalf("bundled GitHub login profile = %+v", profile)
 	}
 	skill, err := os.ReadFile(filepath.Join("..", "..", "skills", "github-cli", "SKILL.md"))
@@ -516,7 +516,7 @@ func TestBundledGitHubLoginProfileMatchesSkill(t *testing.T) {
 	if !strings.Contains(text, start) || !strings.Contains(text, "gh auth login --hostname github.com --git-protocol https --web") {
 		t.Fatalf("GitHub CLI skill does not use the bundled login profile: %q", text)
 	}
-	for _, required := range []string{"send-keys", "never use `input`", "browser", "without\nrequesting `output`", "gh auth status --hostname github.com", "Stop a still-running"} {
+	for _, required := range []string{"send-keys", "never use `input`", "browser", "read\n`output` only as needed", "gh auth status --hostname github.com", "Stop a still-running"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("GitHub CLI skill is missing %q", required)
 		}

@@ -65,9 +65,10 @@ expose input. Use it only for non-secret control text. Never enter passwords,
 passphrases, tokens, API keys, one-time codes, private keys, or other secrets,
 and do not add arbitrary login or authentication commands here. The bundled
 `github-login` entry is the narrow exception: it is fixed to the GitHub browser
-flow, accepts only enter/return or ctrl-c/c-c keys, and discards command output.
-Do not alter that profile's executable, arguments, input policy, or output
-policy.
+flow, accepts only enter/return or ctrl-c/c-c keys, and exposes terminal output
+so GitHub's official verification URL and one-time code can be relayed to the
+user. Never relay passwords, tokens, credentials, or other secrets. Do not
+alter that profile's executable, arguments, input policy, or output policy.
 
 ## Add, change, or remove a command
 

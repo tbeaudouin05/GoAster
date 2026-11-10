@@ -13,4 +13,6 @@ saved. Never enter passwords, passphrases, tokens, API keys, one-time codes,
 private keys, or other secrets, and do not use this workflow to add arbitrary
 login or authentication commands. The bundled `github-login` profile is the
 only narrow exception; keep its fixed browser-login arguments, enter/return or
-ctrl-c/c-c input policy, and output redaction unchanged.
+ctrl-c/c-c input policy, and output visibility unchanged. Its terminal output
+may be read only to relay GitHub's official verification URL and one-time code;
+never relay passwords, tokens, credentials, or other secrets.

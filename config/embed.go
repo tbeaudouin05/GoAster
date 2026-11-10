@@ -12,7 +12,7 @@ var OpenAIModels []byte
 const GitHubLoginCommandName = "github-login"
 
 // BackgroundCommands is the initial background-command allowlist. It contains
-// only the fixed, output-redacted GitHub browser-login profile.
+// only the fixed GitHub browser-login profile.
 //
 //go:embed background-commands.json
 var BackgroundCommands []byte

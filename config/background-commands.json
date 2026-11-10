@@ -17,7 +17,7 @@
       "interactive": true,
       "pty": true,
       "keys_only": true,
-      "redact_output": true
+      "redact_output": false
     }
   ]
 }

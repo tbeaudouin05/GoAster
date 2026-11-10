@@ -21,16 +21,19 @@ gh auth login --hostname github.com --git-protocol https --web
 ```
 
 The profile uses a PTY, accepts only `enter`/`return` or `ctrl-c`/`c-c`, and
-discards its output. Use `send-keys` only for `enter` to continue the browser
-flow or `ctrl-c` to cancel; never use `input`, paste, enter a password, token,
-device code, or any other secret. Tell the user to complete verification in the
-browser that GitHub CLI opens. Do not ask the user to paste credentials or
-device information into chat. After `start`, send one named `enter` key to the
-returned session if GitHub CLI is waiting to open the browser; then leave the
+exposes terminal output. Use `send-keys` only for `enter` to continue the
+browser flow or `ctrl-c` to cancel; never use `input`, paste, or enter a
+password, token, device code, or any other user secret. After `start`, send one
+named `enter` key to the returned session if GitHub CLI is waiting to open the
+browser. Read the terminal output and relay GitHub's official verification URL
+and one-time code to the user so they can complete verification themselves.
+Do not relay passwords, tokens, credentials, or any other secrets, and never
+ask the user to paste credentials or device information into chat. Leave the
 session running while the user completes verification.
 
-After the user finishes, poll the returned session with `status` without
-requesting `output`. Verify only non-secret state with:
+After the user finishes, poll the returned session with `status` and read
+`output` only as needed to complete the browser verification handoff. Verify
+authentication state without exposing the credential itself with:
 
 ```sh
 gh auth status --hostname github.com

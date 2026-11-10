@@ -10,9 +10,11 @@ for them in chat, read credential files, put them in arguments or URLs, or
 include them in output.
 
 The only interactive login profile is the private allowlisted `github-login`
-command. It accepts only `enter`/`return` or `ctrl-c`/`c-c` and discards command
-output; the user completes verification in the browser. Do not use `input`,
-paste, request its output, or substitute another login command.
+command. It accepts only `enter`/`return` or `ctrl-c`/`c-c` and exposes terminal
+output. Read that output to relay GitHub's official verification URL and
+one-time code so the user can complete verification in their browser. Do not
+relay passwords, tokens, credentials, or other secrets. Never use `input`,
+paste, enter user secrets, or substitute another login command.
 
 Treat upstream repositories as read-only unless a separate request explicitly
 approves a precise upstream action. A write requires the exact account,
