@@ -1,15 +1,37 @@
 package chat
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"goaster/internal/command"
 )
+
+func TestBackgroundCommandToolHelper(t *testing.T) {
+	marker := false
+	for _, argument := range os.Args {
+		if argument == "--goaster-background-tool-helper" {
+			marker = true
+			break
+		}
+	}
+	if !marker {
+		return
+	}
+	fmt.Print("tool-ready")
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return
+	}
+	fmt.Printf("tool-received:%s", strings.TrimSuffix(line, "\n"))
+}
 
 type backgroundCommandToolRegistrar struct {
 	register func(Tool) error
@@ -47,6 +69,11 @@ func exerciseBackgroundCommandTool(t testing.TB) {
 	}
 	if registered.Name != backgroundCommandToolName || registered.Handler == nil || registered.Parameters["additionalProperties"] != false {
 		t.Fatalf("registered tool = %+v", registered)
+	}
+	if !strings.Contains(registered.Description, "not secret-safe") ||
+		!strings.Contains(registered.Description, "never use input") ||
+		!strings.Contains(registered.Description, "PTY echo") {
+		t.Fatalf("background tool description omits the non-secret boundary: %q", registered.Description)
 	}
 	properties, ok := registered.Parameters["properties"].(map[string]any)
 	if !ok {
@@ -90,11 +117,86 @@ func exerciseBackgroundCommandTool(t testing.TB) {
 	for _, arguments := range []string{
 		`{"action":"list","action":"start"}`,
 		`{"action":"list","command":"echo injected"}`,
+		`{"action":"start","name":"preview","pty":true}`,
 		`{"action":"list"} {}`,
 		`[]`,
 	} {
 		if _, err := parseBackgroundCommandToolArguments(arguments); err == nil {
 			t.Fatalf("parseBackgroundCommandToolArguments(%s) error = nil", arguments)
+		}
+	}
+}
+
+func TestBackgroundCommandToolSupportsAllowlistedInput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "background-commands.json")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(command.BackgroundCommandConfig{Version: 1, Commands: []command.BackgroundCommandDefinition{
+		{
+			Name: "interactive", Executable: executable,
+			Args: []string{"-test.run=^TestBackgroundCommandToolHelper$", "--", "--goaster-background-tool-helper"}, Interactive: true,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager := command.NewBackgroundCommandManagerAt(path)
+	defer manager.Close()
+	registered := Tool{}
+	registrar := backgroundCommandToolRegistrar{register: func(tool Tool) error {
+		registered = tool
+		return nil
+	}}
+	if err := RegisterBackgroundCommandTool(registrar, manager); err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := registered.Handler(context.Background(), `{"action":"list"}`)
+	if err != nil || !strings.Contains(listed, `"interactive":true`) {
+		t.Fatalf("interactive list = %q, error = %v", listed, err)
+	}
+	started, err := registered.Handler(context.Background(), `{"action":"start","name":"interactive"}`)
+	if err != nil || !strings.Contains(started, `"status":"started"`) {
+		t.Fatalf("interactive start = %q, error = %v", started, err)
+	}
+	input, err := registered.Handler(context.Background(), `{"action":"input","id":"bg-000001","data":"hello\n"}`)
+	if err != nil || !strings.Contains(input, `"status":"input_queued"`) {
+		t.Fatalf("interactive input = %q, error = %v", input, err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var output string
+	for time.Now().Before(deadline) {
+		output, err = registered.Handler(context.Background(), `{"action":"output","id":"bg-000001"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(output, "tool-received:hello") && strings.Contains(output, `"state":"exited"`) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(output, "tool-received:hello") || !strings.Contains(output, `"state":"exited"`) {
+		t.Fatalf("interactive tool output = %q", output)
+	}
+	completed, err := registered.Handler(context.Background(), `{"action":"write","id":"bg-000001","data":"late"}`)
+	if err != nil || !strings.Contains(completed, `"status":"completed"`) {
+		t.Fatalf("late interactive input = %q, error = %v", completed, err)
+	}
+
+	for _, arguments := range []string{
+		`{"action":"input","id":"bg-999999","data":"x"}`,
+		`{"action":"start","name":"interactive","pty":true}`,
+		`{"action":"input","id":"bg-000001","data":"x","keys":"enter"}`,
+	} {
+		result, err := registered.Handler(context.Background(), arguments)
+		if err != nil || !strings.Contains(result, `"status":"`) || strings.Contains(result, "input_queued") {
+			t.Fatalf("authorization/input boundary for %s returned %q, error = %v", arguments, result, err)
 		}
 	}
 }

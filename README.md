@@ -34,7 +34,7 @@ the local credential file.
 
 Describe a task in ordinary language. The local chat can use the installed
 skills, public web search and fetch, bounded shell execution, named background
-commands, memory, and scheduling.
+commands (including owner-enabled interactive sessions), memory, and scheduling.
 
 Terminal commands:
 
@@ -47,6 +47,13 @@ Environment values are reviewed and stored separately in
 `~/.goaster/env` with private permissions. Values are masked in terminal
 output. Do not paste secrets into chat or select secret-containing files for
 `/file`.
+
+Owner-enabled interactive background commands accept non-secret control text
+only. Input and named keys are model-visible tool arguments and may be saved in
+conversation state; PTY echo and captured output can expose what was typed.
+Never enter passwords, passphrases, tokens, API keys, one-time codes, private
+keys, or other secrets through `background_command`, and do not use it for
+login or authentication.
 
 The conversation is saved under
 `~/.goaster/artefacts/state/sessions/session.json`. Markdown memory lives

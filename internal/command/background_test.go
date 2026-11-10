@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -62,6 +63,26 @@ func backgroundTestHelper() {
 	case "mark-ready":
 		_ = os.WriteFile(args[0], []byte("ready"), 0600)
 		time.Sleep(30 * time.Second)
+	case "interactive-input":
+		fmt.Print("input-ready")
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil {
+			os.Exit(2)
+		}
+		fmt.Printf("input-received:%s", strings.TrimSuffix(line, "\n"))
+	case "interactive-no-read":
+		fmt.Print("input-ready")
+		time.Sleep(1500 * time.Millisecond)
+	case "pty-key":
+		fmt.Print("pty-key-ready")
+		key, err := bufio.NewReader(os.Stdin).ReadByte()
+		if err != nil {
+			os.Exit(2)
+		}
+		fmt.Printf("pty-key-received:%d", key)
+	case "pty-exit-output":
+		fmt.Print(strings.Repeat("x", 8192))
+		fmt.Print("pty-exit-output")
 	case "signal-host":
 		manager := NewBackgroundCommandManagerAt(args[0])
 		unregister := manager.CloseOnSignal()
@@ -160,6 +181,10 @@ func exerciseBackgroundCommandSupport(t testing.TB) {
 	exerciseBackgroundConfig(t)
 	exerciseBackgroundExactArgvAndReload(t)
 	exerciseBackgroundLifecycle(t)
+	exerciseBackgroundInteractiveInput(t)
+	exerciseBackgroundInputDoesNotBlockManager(t)
+	exerciseBackgroundPTYInput(t)
+	exerciseBackgroundKeyEncoding(t)
 	exerciseBackgroundCompletionTime(t)
 	exerciseBackgroundCloseDeadline(t)
 	exerciseBackgroundCanceledStart(t)
@@ -239,6 +264,18 @@ func exerciseBackgroundConfig(t testing.TB) {
 		t.Fatal(err)
 	}
 	valid := `{"name":"server","executable":` + string(executable) + `,"args":[]}`
+	interactive := `{"name":"interactive","executable":` + string(executable) + `,"args":[],"interactive":true,"pty":true}`
+	config, err = LoadBackgroundCommandConfig(path)
+	if err != nil || config.Version != 1 || len(config.Commands) != 0 {
+		t.Fatalf("initial background config = %+v, error = %v", config, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":1,"commands":[`+interactive+`]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, err = LoadBackgroundCommandConfig(path)
+	if err != nil || len(config.Commands) != 1 || !config.Commands[0].Interactive || !config.Commands[0].PTY {
+		t.Fatalf("interactive background config = %+v, error = %v", config, err)
+	}
 	tests := []struct{ name, data string }{
 		{"unknown config field", `{"version":1,"commands":[],"enabled":true}`},
 		{"duplicate field", `{"version":1,"version":1,"commands":[]}`},
@@ -252,6 +289,8 @@ func exerciseBackgroundConfig(t testing.TB) {
 		{"NUL argument", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":["\u0000"]}]}`},
 		{"invalid name", `{"version":1,"commands":[{"name":"../server","executable":` + string(executable) + `,"args":[]}]}`},
 		{"unknown entry field", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":[],"command":"echo ready"}]}`},
+		{"interactive flag is not boolean", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":[],"interactive":"yes"}]}`},
+		{"pty flag is not boolean", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":[],"pty":1}]}`},
 	}
 	for _, test := range tests {
 		if err := os.WriteFile(path, []byte(test.data), 0600); err != nil {
@@ -277,6 +316,243 @@ func exerciseBackgroundConfig(t testing.TB) {
 		if _, err := LoadBackgroundCommandConfig(path); err == nil {
 			t.Fatal("accepted a symbolic-link config")
 		}
+	}
+}
+
+func exerciseBackgroundInteractiveInput(t testing.TB) {
+	t.Helper()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "background-commands.json")
+	executable := backgroundTestExecutable(t)
+	writeBackgroundConfig(t, path,
+		BackgroundCommandDefinition{
+			Name: "input", Executable: executable, Args: backgroundHelperArgs("interactive-input"), Interactive: true,
+		},
+		BackgroundCommandDefinition{Name: "plain", Executable: executable, Args: backgroundHelperArgs("hold")},
+	)
+	manager := NewBackgroundCommandManagerAt(path)
+	defer manager.Close()
+
+	configured, err := manager.Configured(context.Background())
+	if err != nil || len(configured) != 2 || !configured[0].Interactive && !configured[1].Interactive {
+		t.Fatalf("configured interactive commands = %+v, error = %v", configured, err)
+	}
+
+	interactive, err := manager.Start(context.Background(), "input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundOutput(t, manager, interactive.ID, "input-ready")
+	if _, err := manager.Input(context.Background(), interactive.ID, "hello\n"); err != nil {
+		t.Fatalf("interactive input error = %v", err)
+	}
+	finished := waitBackgroundState(t, manager, interactive.ID, "exited", "failed")
+	if finished.State != "exited" || finished.ExitCode != 0 {
+		captured, _ := manager.Output(context.Background(), interactive.ID)
+		t.Fatalf("interactive session = %+v, output = %+v", finished, captured)
+	}
+	output, err := manager.Output(context.Background(), interactive.ID)
+	if err != nil || !strings.Contains(output.Stdout, "input-received:hello") {
+		t.Fatalf("interactive output = %+v, error = %v", output, err)
+	}
+	if _, err := manager.Input(context.Background(), interactive.ID, "late\n"); !errors.Is(err, ErrBackgroundSessionDone) {
+		t.Fatalf("late input error = %v, want ErrBackgroundSessionDone", err)
+	}
+
+	plain, err := manager.Start(context.Background(), "plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundOutput(t, manager, plain.ID, "session-ready")
+	if _, err := manager.Input(context.Background(), plain.ID, "not-accepted\n"); !errors.Is(err, ErrBackgroundSessionNotInteractive) {
+		t.Fatalf("noninteractive input error = %v, want ErrBackgroundSessionNotInteractive", err)
+	}
+	if _, err := manager.SendKeys(context.Background(), interactive.ID, "enter"); !errors.Is(err, ErrBackgroundSessionDone) {
+		t.Fatalf("non-PTY key error = %v, want completed session error", err)
+	}
+	if _, err := manager.Stop(context.Background(), plain.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundState(t, manager, plain.ID, "stopped", "failed")
+}
+
+func exerciseBackgroundInputDoesNotBlockManager(t testing.TB) {
+	t.Helper()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "background-commands.json")
+	executable := backgroundTestExecutable(t)
+	writeBackgroundConfig(t, path, BackgroundCommandDefinition{
+		Name: "no-read", Executable: executable, Args: backgroundHelperArgs("interactive-no-read"), Interactive: true,
+	})
+	manager := NewBackgroundCommandManagerAt(path)
+	defer manager.Close()
+	session, err := manager.Start(context.Background(), "no-read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundOutput(t, manager, session.ID, "input-ready")
+
+	data := strings.Repeat("x", MaxSessionInputBytes)
+	timedOut := false
+	busySeen := false
+	for index := 0; index < backgroundInputQueueSize+32; index++ {
+		result := make(chan error, 1)
+		go func() {
+			_, inputErr := manager.Input(context.Background(), session.ID, data)
+			result <- inputErr
+		}()
+		select {
+		case inputErr := <-result:
+			if errors.Is(inputErr, ErrBackgroundSessionInputBusy) {
+				busySeen = true
+			}
+		case <-time.After(300 * time.Millisecond):
+			timedOut = true
+			break
+		}
+		if timedOut {
+			break
+		}
+	}
+	if !timedOut {
+		statusDone := make(chan error, 1)
+		go func() {
+			_, statusErr := manager.Get(context.Background(), session.ID)
+			statusDone <- statusErr
+		}()
+		select {
+		case err := <-statusDone:
+			if err != nil {
+				t.Fatalf("status after queued input = %v", err)
+			}
+		case <-time.After(300 * time.Millisecond):
+			timedOut = true
+		}
+	}
+	finished := waitBackgroundState(t, manager, session.ID, "exited", "failed")
+	if finished.State != "exited" {
+		t.Fatalf("non-reading input session = %+v", finished)
+	}
+	if !busySeen {
+		t.Fatal("unbounded input queue accepted every write")
+	}
+	if timedOut {
+		t.Fatal("manager blocked on input to a child that was not reading")
+	}
+}
+
+func exerciseBackgroundPTYInput(t testing.TB) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	executable := backgroundTestExecutable(t)
+	probe, err := StartBackground(BackgroundRequest{
+		Executable:  executable,
+		Args:        backgroundHelperArgs("pty-key"),
+		Interactive: true,
+		PTY:         true,
+	})
+	if errors.Is(err, ErrPTYNotSupported) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("PTY probe error = %v", err)
+	}
+	probe.Stop()
+	select {
+	case <-probe.Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("PTY probe did not clean up")
+	}
+	outputProcess, err := StartBackground(BackgroundRequest{
+		Executable: executable,
+		Args:       backgroundHelperArgs("pty-exit-output"),
+		PTY:        true,
+	})
+	if errors.Is(err, ErrPTYNotSupported) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("PTY output process error = %v", err)
+	}
+	select {
+	case execution := <-outputProcess.Done:
+		if !strings.Contains(execution.Result.Stdout, "pty-exit-output") {
+			t.Fatalf("PTY output after exit = %q", execution.Result.Stdout)
+		}
+	case <-time.After(3 * time.Second):
+		outputProcess.Stop()
+		t.Fatal("PTY output process did not finish")
+	}
+
+	directory := t.TempDir()
+	path := filepath.Join(directory, "background-commands.json")
+	writeBackgroundConfig(t, path, BackgroundCommandDefinition{
+		Name: "pty", Executable: executable, Args: backgroundHelperArgs("pty-key"), PTY: true,
+	})
+	manager := NewBackgroundCommandManagerAt(path)
+	defer manager.Close()
+	session, err := manager.Start(context.Background(), "pty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.Interactive || !session.PTY {
+		t.Fatalf("PTY session metadata = %+v", session)
+	}
+	waitBackgroundOutput(t, manager, session.ID, "pty-key-ready")
+	if _, err := manager.SendKeys(context.Background(), session.ID, "enter"); err != nil {
+		t.Fatalf("send PTY key error = %v", err)
+	}
+	finished := waitBackgroundState(t, manager, session.ID, "exited", "failed")
+	if finished.State != "exited" || finished.ExitCode != 0 {
+		t.Fatalf("PTY session = %+v", finished)
+	}
+	output, err := manager.Output(context.Background(), session.ID)
+	if err != nil || !strings.Contains(output.Stdout, "pty-key-received:") {
+		t.Fatalf("PTY output = %+v, error = %v", output, err)
+	}
+}
+
+func exerciseBackgroundKeyEncoding(t testing.TB) {
+	t.Helper()
+	cases := []struct {
+		name string
+		keys string
+		mode BackgroundPtyKeyMode
+		want string
+	}{
+		{name: "named key", keys: "enter", mode: BackgroundPtyKeyModeCSI, want: "\r"},
+		{name: "control key", keys: "ctrl-c", mode: BackgroundPtyKeyModeCSI, want: "\x03"},
+		{name: "CSI arrow", keys: "up", mode: BackgroundPtyKeyModeCSI, want: "\x1b[A"},
+		{name: "SS3 arrow", keys: "up", mode: BackgroundPtyKeyModeSS3, want: "\x1bOA"},
+	}
+	for _, fixture := range cases {
+		got, err := EncodeBackgroundKeySequence(fixture.keys, fixture.mode)
+		if err != nil || got != fixture.want {
+			t.Fatalf("%s encoded key = %q, error = %v, want %q", fixture.name, got, err, fixture.want)
+		}
+	}
+	for _, keys := range []string{"", "unknown", "ctrl-", "alt-xx", ",,,"} {
+		if _, err := EncodeBackgroundKeySequence(keys, BackgroundPtyKeyModeCSI); err == nil {
+			t.Errorf("accepted invalid key sequence %q", keys)
+		}
+	}
+
+	detector := backgroundPtyKeyModeDetector{}
+	var detected BackgroundPtyKeyMode
+	detector, detected = observeBackgroundPtyKeyMode(detector, []byte("\x1b[?1h"+strings.Repeat("x", 64)))
+	if detected != BackgroundPtyKeyModeSS3 {
+		t.Fatalf("long PTY mode sequence detected as %d, want SS3", detected)
+	}
+	detector = backgroundPtyKeyModeDetector{}
+	detector, detected = observeBackgroundPtyKeyMode(detector, []byte("\x1b[?1"))
+	if detected != backgroundPtyKeyModeNotFound {
+		t.Fatalf("partial PTY mode sequence detected as %d", detected)
+	}
+	_, detected = observeBackgroundPtyKeyMode(detector, []byte("h"))
+	if detected != BackgroundPtyKeyModeSS3 {
+		t.Fatalf("split PTY mode sequence detected as %d, want SS3", detected)
 	}
 }
 

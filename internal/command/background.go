@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/creack/pty"
+
 	appconfig "goaster/config"
 	"goaster/internal/artefacts"
 )
@@ -27,6 +29,19 @@ const (
 	maxBackgroundCommands           = 32
 	maxBackgroundSessions           = 32
 	maxRunningBackgroundSessions    = 8
+	backgroundInputQueueSize        = 4
+	backgroundPTYOutputDrainTimeout = 250 * time.Millisecond
+	// MaxSessionInputBytes bounds one model-to-process write and one key list.
+	MaxSessionInputBytes = 64 << 10
+)
+
+var (
+	ErrBackgroundSessionNotFound         = errors.New("background command session was not found")
+	ErrBackgroundSessionDone             = errors.New("background command session has finished")
+	ErrBackgroundSessionNotInteractive   = errors.New("background command session does not accept input")
+	ErrBackgroundSessionInputUnavailable = errors.New("background command session input is unavailable")
+	ErrBackgroundSessionInputBusy        = errors.New("background command session input queue is full")
+	ErrPTYNotSupported                   = errors.New("PTY is not supported on this platform")
 )
 
 // BackgroundCommandConfig is the owner-managed list of named commands that
@@ -37,27 +52,35 @@ type BackgroundCommandConfig struct {
 	Commands []BackgroundCommandDefinition `json:"commands"`
 }
 
-// BackgroundCommandDefinition describes one locally configured executable.
+// BackgroundCommandDefinition describes one locally configured executable and
+// its owner-approved non-secret input mode.
 type BackgroundCommandDefinition struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`
 	Executable  string   `json:"executable"`
 	Args        []string `json:"args"`
 	CWD         string   `json:"cwd,omitempty"`
+	Interactive bool     `json:"interactive,omitempty"`
+	PTY         bool     `json:"pty,omitempty"`
 }
 
-// BackgroundRequest contains an executable and its exact arguments.
+// BackgroundRequest contains an executable, its exact arguments, and the
+// owner-approved session I/O mode.
 type BackgroundRequest struct {
-	Executable string
-	Args       []string
-	Dir        string
-	Timeout    time.Duration
+	Executable  string
+	Args        []string
+	Dir         string
+	Timeout     time.Duration
+	Interactive bool
+	PTY         bool
 }
 
-// BackgroundCommandInfo exposes only the safe name and description to chat.
+// BackgroundCommandInfo exposes only safe command metadata to chat.
 type BackgroundCommandInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	Interactive bool   `json:"interactive,omitempty"`
+	PTY         bool   `json:"pty,omitempty"`
 }
 
 // BackgroundSession is the bounded runtime record for one started command.
@@ -70,10 +93,13 @@ type BackgroundSession struct {
 	ExitCode        int       `json:"exit_code"`
 	StdoutTruncated bool      `json:"stdout_truncated,omitempty"`
 	StderrTruncated bool      `json:"stderr_truncated,omitempty"`
+	Interactive     bool      `json:"interactive,omitempty"`
+	PTY             bool      `json:"pty,omitempty"`
 }
 
 // BackgroundSessionOutput pairs the current captured output with its runtime
-// session metadata. Output remains bounded by MaxOutputBytes per stream.
+// session metadata. Output remains bounded by MaxOutputBytes per stream and may
+// include PTY echo; it is not a secret-safe channel.
 type BackgroundSessionOutput struct {
 	Session BackgroundSession `json:"session"`
 	Stdout  string            `json:"stdout"`
@@ -93,6 +119,8 @@ type BackgroundExecution struct {
 type BackgroundProcess struct {
 	Stop     func()
 	Snapshot func() Result
+	Write    func(string) error
+	KeyMode  func() BackgroundPtyKeyMode
 	Done     <-chan BackgroundExecution
 }
 
@@ -108,6 +136,8 @@ type backgroundManagerRequest struct {
 	action   string
 	name     string
 	id       string
+	data     string
+	keys     string
 	ctx      context.Context
 	response chan backgroundManagerResponse
 }
@@ -317,7 +347,7 @@ func decodeBackgroundCommandConfig(data []byte) (BackgroundCommandConfig, error)
 	seen := make(map[string]bool, len(entries))
 	for _, entry := range entries {
 		object, ok := entry.(map[string]any)
-		if !ok || !hasOnlyBackgroundFields(object, "name", "description", "executable", "args", "cwd") {
+		if !ok || !hasOnlyBackgroundFields(object, "name", "description", "executable", "args", "cwd", "interactive", "pty") {
 			return BackgroundCommandConfig{}, errors.New("background command definition is invalid")
 		}
 		name, nameOK := object["name"].(string)
@@ -334,8 +364,18 @@ func decodeBackgroundCommandConfig(data []byte) (BackgroundCommandConfig, error)
 			args = append(args, arg)
 		}
 		cwd, cwdOK := optionalBackgroundString(object, "cwd")
-		definition := BackgroundCommandDefinition{Name: name, Description: description, Executable: executable, Args: args, CWD: cwd}
-		if !nameOK || !descriptionOK || !executableOK || !argsOK || !cwdOK || !validBackgroundCommandDefinition(definition) || seen[name] {
+		interactive, interactiveOK := optionalBackgroundBool(object, "interactive")
+		ptyEnabled, ptyOK := optionalBackgroundBool(object, "pty")
+		definition := BackgroundCommandDefinition{
+			Name:        name,
+			Description: description,
+			Executable:  executable,
+			Args:        args,
+			CWD:         cwd,
+			Interactive: interactive,
+			PTY:         ptyEnabled,
+		}
+		if !nameOK || !descriptionOK || !executableOK || !argsOK || !cwdOK || !interactiveOK || !ptyOK || !validBackgroundCommandDefinition(definition) || seen[name] {
 			return BackgroundCommandConfig{}, errors.New("background command definition is invalid")
 		}
 		seen[name] = true
@@ -370,6 +410,15 @@ func optionalBackgroundString(object map[string]any, key string) (string, bool) 
 	}
 	text, ok := value.(string)
 	return text, ok
+}
+
+func optionalBackgroundBool(object map[string]any, key string) (bool, bool) {
+	value, exists := object[key]
+	if !exists {
+		return false, true
+	}
+	flag, ok := value.(bool)
+	return flag, ok
 }
 
 func validBackgroundCommandDefinition(definition BackgroundCommandDefinition) bool {
@@ -454,6 +503,22 @@ func (manager BackgroundCommandManager) Get(ctx context.Context, id string) (Bac
 func (manager BackgroundCommandManager) Output(ctx context.Context, id string) (BackgroundSessionOutput, error) {
 	response, err := manager.call(ctx, backgroundManagerRequest{action: "output", id: id})
 	return response.output, err
+}
+
+// Input queues bounded non-secret text for an owner-authorized interactive
+// session. It is not a secret-safe channel: input arguments and PTY echo may be
+// visible to the model or saved by the caller. The session's executable and
+// arguments remain entirely configuration-owned.
+func (manager BackgroundCommandManager) Input(ctx context.Context, id, data string) (BackgroundSession, error) {
+	response, err := manager.call(ctx, backgroundManagerRequest{action: "input", id: id, data: data})
+	return response.session, err
+}
+
+// SendKeys encodes named non-secret terminal keys and queues them for an
+// owner-authorized PTY session. It is not a secret-safe channel.
+func (manager BackgroundCommandManager) SendKeys(ctx context.Context, id, keys string) (BackgroundSession, error) {
+	response, err := manager.call(ctx, backgroundManagerRequest{action: "send-keys", id: id, keys: keys})
+	return response.session, err
 }
 
 // Stop requests cancellation of one running session.
@@ -552,7 +617,12 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 			} else {
 				response.commands = make([]BackgroundCommandInfo, 0, len(config.Commands))
 				for _, entry := range config.Commands {
-					response.commands = append(response.commands, BackgroundCommandInfo{Name: entry.Name, Description: entry.Description})
+					response.commands = append(response.commands, BackgroundCommandInfo{
+						Name:        entry.Name,
+						Description: entry.Description,
+						Interactive: entry.Interactive || entry.PTY,
+						PTY:         entry.PTY,
+					})
 				}
 			}
 		case "start":
@@ -589,14 +659,28 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 				response.err = request.ctx.Err()
 				break
 			}
-			process, err := StartBackground(BackgroundRequest{Executable: selected.Executable, Args: selected.Args, Dir: selected.CWD})
+			process, err := StartBackground(BackgroundRequest{
+				Executable:  selected.Executable,
+				Args:        selected.Args,
+				Dir:         selected.CWD,
+				Interactive: selected.Interactive || selected.PTY,
+				PTY:         selected.PTY,
+			})
 			if err != nil {
 				response.err = errors.New("background command could not be started")
 				break
 			}
 			nextID++
 			id := fmt.Sprintf("bg-%06d", nextID)
-			session := BackgroundSession{ID: id, Name: selected.Name, State: "running", StartedAt: time.Now().UTC(), ExitCode: -1}
+			session := BackgroundSession{
+				ID:          id,
+				Name:        selected.Name,
+				State:       "running",
+				StartedAt:   time.Now().UTC(),
+				ExitCode:    -1,
+				Interactive: selected.Interactive || selected.PTY,
+				PTY:         selected.PTY,
+			}
 			sessions[id] = managedBackgroundSession{session: session, process: process}
 			order = append(order, id)
 			response.session = session
@@ -607,10 +691,10 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 					response.sessions = append(response.sessions, session.session)
 				}
 			}
-		case "get", "output", "stop":
+		case "get", "output", "input", "send-keys", "stop":
 			managed, exists := sessions[request.id]
 			if !exists {
-				response.err = errors.New("background command session was not found")
+				response.err = ErrBackgroundSessionNotFound
 				break
 			}
 			if request.action == "stop" && !managed.finished {
@@ -621,7 +705,42 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 				refreshManagedBackgroundSessions(sessions)
 				managed = sessions[request.id]
 			}
-			if request.action == "output" {
+			if request.action == "input" || request.action == "send-keys" {
+				if managed.finished {
+					response.err = ErrBackgroundSessionDone
+					break
+				}
+				if !managed.session.Interactive {
+					response.err = ErrBackgroundSessionNotInteractive
+					break
+				}
+				data := request.data
+				if request.action == "send-keys" {
+					if !managed.session.PTY {
+						response.err = ErrBackgroundSessionInputUnavailable
+						break
+					}
+					mode := BackgroundPtyKeyModeCSI
+					if managed.process.KeyMode != nil {
+						mode = managed.process.KeyMode()
+					}
+					encoded, encodeErr := EncodeBackgroundKeySequence(request.keys, mode)
+					if encodeErr != nil {
+						response.err = encodeErr
+						break
+					}
+					data = encoded
+				}
+				if managed.process.Write == nil {
+					response.err = ErrBackgroundSessionInputUnavailable
+					break
+				}
+				if err := managed.process.Write(data); err != nil {
+					response.err = err
+					break
+				}
+				response.session = managed.session
+			} else if request.action == "output" {
 				result := managed.result
 				if !managed.finished {
 					result = managed.process.Snapshot()
@@ -766,6 +885,9 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	if !validBackgroundExecutable(req.Executable, req.Args) {
 		return BackgroundProcess{}, errors.New("executable or arguments are invalid")
 	}
+	if req.PTY {
+		req.Interactive = true
+	}
 	if req.Timeout < 0 {
 		return BackgroundProcess{}, errors.New("command timeout must not be negative")
 	}
@@ -799,7 +921,7 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	var stdout = newLimitedOutput(MaxOutputBytes, nil)
 	var stderr = newLimitedOutput(MaxOutputBytes, nil)
 	var outputLimitReached atomic.Bool
-	cmd.Stdout = outputWriterFunc(func(content []byte) (int, error) {
+	writeStdout := func(content []byte) (int, error) {
 		outputMu.Lock()
 		defer outputMu.Unlock()
 		before := stdout.Truncated()
@@ -809,8 +931,8 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 			stop()
 		}
 		return count, err
-	})
-	cmd.Stderr = outputWriterFunc(func(content []byte) (int, error) {
+	}
+	writeStderr := func(content []byte) (int, error) {
 		outputMu.Lock()
 		defer outputMu.Unlock()
 		before := stderr.Truncated()
@@ -820,21 +942,136 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 			stop()
 		}
 		return count, err
-	})
-	if err := cmd.Start(); err != nil {
-		cleanup()
-		stop()
-		return BackgroundProcess{}, errors.New("command could not be started")
 	}
+
+	var terminal io.ReadWriteCloser
+	var inputWriter io.Writer
+	if req.PTY {
+		// configureCommand installs the existing process-tree cancellation hook.
+		// PTY startup supplies its own session/controlling-terminal attributes;
+		// clearing the normal Setpgid attributes avoids a Setsid/Setpgid conflict.
+		cmd.SysProcAttr = nil
+		master, err := pty.Start(cmd)
+		if err != nil {
+			cleanup()
+			stop()
+			if errors.Is(err, pty.ErrUnsupported) {
+				return BackgroundProcess{}, ErrPTYNotSupported
+			}
+			return BackgroundProcess{}, errors.New("PTY could not be started")
+		}
+		terminal = master
+		inputWriter = terminal
+	} else {
+		cmd.Stdout = outputWriterFunc(writeStdout)
+		cmd.Stderr = outputWriterFunc(writeStderr)
+		if req.Interactive {
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				cleanup()
+				stop()
+				return BackgroundProcess{}, errors.New("command input could not be initialized")
+			}
+			inputWriter = stdin
+		}
+		if err := cmd.Start(); err != nil {
+			cleanup()
+			stop()
+			return BackgroundProcess{}, errors.New("command could not be started")
+		}
+	}
+
 	done := make(chan BackgroundExecution, 1)
+	processFinished := make(chan struct{})
+	inputQueue := make(chan string, backgroundInputQueueSize)
+	if inputWriter != nil {
+		// Keep process input off the manager's request loop. A child is allowed to
+		// stop reading, so a direct pipe or PTY write must never hold up status,
+		// output, or stop requests. The queue is deliberately small and bounded.
+		go func() {
+			for {
+				select {
+				case data := <-inputQueue:
+					_, _ = io.WriteString(inputWriter, data)
+				case <-processFinished:
+					return
+				}
+			}
+		}()
+	}
+	writeInput := func(data string) error {
+		if len(data) > MaxSessionInputBytes {
+			return fmt.Errorf("session input exceeds the %d-byte limit", MaxSessionInputBytes)
+		}
+		if inputWriter == nil {
+			return ErrBackgroundSessionInputUnavailable
+		}
+		select {
+		case <-processFinished:
+			return ErrBackgroundSessionDone
+		default:
+		}
+		select {
+		case inputQueue <- data:
+			return nil
+		case <-processFinished:
+			return ErrBackgroundSessionDone
+		default:
+			return ErrBackgroundSessionInputBusy
+		}
+	}
+
+	var keyModeMu sync.RWMutex
+	keyMode := BackgroundPtyKeyModeCSI
+	keyDetector := backgroundPtyKeyModeDetector{}
+	recordPTYOutput := func(content []byte) {
+		if !req.PTY {
+			return
+		}
+		keyModeMu.Lock()
+		defer keyModeMu.Unlock()
+		var detected BackgroundPtyKeyMode
+		keyDetector, detected = observeBackgroundPtyKeyMode(keyDetector, content)
+		if detected != backgroundPtyKeyModeNotFound {
+			keyMode = detected
+		}
+	}
+	currentKeyMode := func() BackgroundPtyKeyMode {
+		keyModeMu.RLock()
+		defer keyModeMu.RUnlock()
+		return keyMode
+	}
 	snapshot := func() Result {
 		outputMu.Lock()
 		defer outputMu.Unlock()
 		return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: -1, StdoutTruncated: stdout.Truncated(), StderrTruncated: stderr.Truncated()}
 	}
+
+	var readDone chan struct{}
+	if req.PTY {
+		readDone = make(chan struct{})
+		go func() {
+			defer close(readDone)
+			buffer := make([]byte, 4096)
+			for {
+				count, err := terminal.Read(buffer)
+				if count > 0 {
+					recordPTYOutput(buffer[:count])
+					_, _ = writeStdout(buffer[:count])
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
+	}
 	go func() {
 		defer stop()
 		runErr := cmd.Wait()
+		if terminal != nil {
+			cleanup()
+			waitForBackgroundPTYOutput(terminal, readDone)
+		}
 		finishedAt := time.Now().UTC()
 		cleanup()
 		result := snapshot()
@@ -851,14 +1088,31 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 			// A nonzero process exit is a completed session, as in Execute.
 			runErr = nil
 		}
+		close(processFinished)
 		done <- BackgroundExecution{Result: result, Err: runErr, FinishedAt: finishedAt}
 		close(done)
 	}()
 	return BackgroundProcess{
 		Stop:     stop,
 		Snapshot: snapshot,
+		Write:    func(data string) error { return writeInput(data) },
+		KeyMode:  currentKeyMode,
 		Done:     done,
 	}, nil
+}
+
+func waitForBackgroundPTYOutput(terminal io.ReadWriteCloser, readDone <-chan struct{}) {
+	timer := time.NewTimer(backgroundPTYOutputDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-readDone:
+	case <-timer.C:
+	}
+	// Closing only after the normal read completes lets the PTY reader drain
+	// bytes that were already queued when the child exited. The timeout keeps a
+	// descendant that inherited the PTY from holding the session forever.
+	_ = terminal.Close()
+	<-readDone
 }
 
 type outputWriterFunc func([]byte) (int, error)

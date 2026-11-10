@@ -3,6 +3,7 @@ module goaster
 go 1.22
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/ncruces/zenity v0.10.14
 	golang.org/x/image v0.20.0
 	golang.org/x/sys v0.26.0
