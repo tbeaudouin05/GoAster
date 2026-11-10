@@ -50,12 +50,14 @@ output. Do not paste secrets into chat or select secret-containing files for
 
 Owner-enabled interactive background commands accept non-secret control text
 only. Input and named keys are model-visible tool arguments and may be saved in
-conversation state; captured output can expose what was typed. PTY sessions are
-disabled because cleanup of jobs in separate process groups cannot be guaranteed.
-Queued input is not a delivery confirmation; check the session’s `input_failed`
-field for a write failure; a failed write may be partial and later queued input
-may be discarded. Commands that detach into other process groups can
-also outlive ordinary process-group cleanup.
+conversation state; captured output can expose what was typed. Owner-configured PTY sessions are available where supported. Queued input is not
+a delivery confirmation; check the session’s `input_failed` field for failed or
+unconfirmed writes, including at completion. A write may be partial, and later
+queued input may be discarded. Cancellation attempts to kill the direct process. On Linux,
+it also attempts to send SIGINT to the PTY's current foreground group; the
+attempt can fail and the signal can be ignored or caught. Other platforms do not
+receive this extra signal. Descendants can outlive cleanup on all platforms.
+Closing the PTY may send a hangup, but does not guarantee their termination.
 Never enter passwords, passphrases, tokens, API keys, one-time codes, private
 keys, or other secrets through `background_command`, and do not use it for
 login or authentication.

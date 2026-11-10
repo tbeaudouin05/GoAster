@@ -188,7 +188,6 @@ func exerciseBackgroundCommandSupport(t testing.TB) {
 	exerciseBackgroundInteractiveInput(t)
 	exerciseBackgroundInputDoesNotBlockManager(t)
 	exerciseBackgroundInputWriteFailure(t)
-	exerciseBackgroundPTYDisabled(t)
 	exerciseBackgroundClosedInputReported(t)
 	exerciseBackgroundPTYInput(t)
 	exerciseBackgroundKeyEncoding(t)
@@ -807,9 +806,8 @@ func exerciseBackgroundInputWriteFailure(t testing.TB) {
 		{"short", func(p []byte) (int, error) { return len(p) - 1, nil }},
 	} {
 		func() {
-			finished := make(chan struct{})
-			defer close(finished)
-			write, failed := backgroundInputWriter(test.write, finished)
+			write, failed, finish := backgroundInputWriter(test.write)
+			defer finish()
 			if err := write("abc"); err != nil {
 				t.Fatal(err)
 			}
@@ -826,16 +824,6 @@ func exerciseBackgroundInputWriteFailure(t testing.TB) {
 				t.Fatalf("subsequent write: %v", err)
 			}
 		}()
-	}
-}
-
-func exerciseBackgroundPTYDisabled(t testing.TB) {
-	process, err := StartBackground(BackgroundRequest{Executable: backgroundTestExecutable(t), Args: backgroundHelperArgs("hold"), PTY: true})
-	if !errors.Is(err, ErrPTYNotSupported) {
-		if process.Stop != nil {
-			process.Stop()
-		}
-		t.Fatalf("PTY start: %v", err)
 	}
 }
 

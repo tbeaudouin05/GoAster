@@ -41,7 +41,7 @@ var (
 	ErrBackgroundSessionNotInteractive   = errors.New("background command session does not accept input")
 	ErrBackgroundSessionInputUnavailable = errors.New("background command session input is unavailable")
 	ErrBackgroundSessionInputBusy        = errors.New("background command session input queue is full")
-	ErrPTYNotSupported                   = errors.New("PTY sessions are disabled because descendant cleanup cannot be guaranteed")
+	ErrPTYNotSupported                   = errors.New("PTY sessions are not supported on this platform")
 )
 
 // BackgroundCommandConfig is the owner-managed list of named commands that
@@ -794,6 +794,9 @@ func refreshManagedBackgroundSessions(sessions map[string]managedBackgroundSessi
 		}
 		select {
 		case execution, open := <-managed.process.Done:
+			if managed.process.InputFailed != nil {
+				managed.session.InputFailed = managed.process.InputFailed()
+			}
 			if !open {
 				managed.session.State = "failed"
 				managed.session.ExitCode = -1
@@ -895,9 +898,6 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	if !validBackgroundExecutable(req.Executable, req.Args) {
 		return BackgroundProcess{}, errors.New("executable or arguments are invalid")
 	}
-	if req.PTY {
-		return BackgroundProcess{}, ErrPTYNotSupported
-	}
 	if req.Timeout < 0 {
 		return BackgroundProcess{}, errors.New("command timeout must not be negative")
 	}
@@ -923,7 +923,10 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	}
 	cmd := exec.CommandContext(runContext, req.Executable, req.Args...)
 	cmd.Env = EnvironmentWithoutGitHubTokenOverrides()
-	cleanup := configureCommand(cmd)
+	// CommandContext kills the direct process through its process handle. Do not
+	// signal a numeric process group after Wait or from a delayed timer: the ID
+	// may have been reused by an unrelated process group.
+	cmd.WaitDelay = commandWaitDelay
 	if req.Dir != "" {
 		cmd.Dir = req.Dir
 	}
@@ -957,20 +960,28 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	var terminal io.ReadWriteCloser
 	var inputWriter io.Writer
 	if req.PTY {
-		// configureCommand installs the existing process-tree cancellation hook.
-		// PTY startup supplies its own session/controlling-terminal attributes;
-		// clearing the normal Setpgid attributes avoids a Setsid/Setpgid conflict.
-		cmd.SysProcAttr = nil
+		// PTY startup supplies its own session/controlling-terminal attributes.
+		ready := make(chan struct{})
+		cancel := cmd.Cancel
+		cmd.Cancel = func() error {
+			<-ready
+			if terminal != nil {
+				signalPTYForeground(terminal)
+			}
+			return cancel()
+		}
 		master, err := pty.Start(cmd)
+		if err == nil {
+			terminal = master
+		}
+		close(ready)
 		if err != nil {
-			cleanup()
 			stop()
 			if errors.Is(err, pty.ErrUnsupported) {
 				return BackgroundProcess{}, ErrPTYNotSupported
 			}
 			return BackgroundProcess{}, errors.New("PTY could not be started")
 		}
-		terminal = master
 		inputWriter = terminal
 	} else {
 		cmd.Stdout = outputWriterFunc(writeStdout)
@@ -978,22 +989,19 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 		if req.Interactive {
 			stdin, err := cmd.StdinPipe()
 			if err != nil {
-				cleanup()
 				stop()
 				return BackgroundProcess{}, errors.New("command input could not be initialized")
 			}
 			inputWriter = stdin
 		}
 		if err := cmd.Start(); err != nil {
-			cleanup()
 			stop()
 			return BackgroundProcess{}, errors.New("command could not be started")
 		}
 	}
 
 	done := make(chan BackgroundExecution, 1)
-	processFinished := make(chan struct{})
-	writeInput, inputFailed := backgroundInputWriter(inputWriter, processFinished)
+	writeInput, inputFailed, finishInput := backgroundInputWriter(inputWriter)
 
 	var keyModeMu sync.RWMutex
 	keyMode := BackgroundPtyKeyModeCSI
@@ -1043,11 +1051,9 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 		defer stop()
 		runErr := cmd.Wait()
 		if terminal != nil {
-			cleanup()
 			waitForBackgroundPTYOutput(terminal, readDone)
 		}
 		finishedAt := time.Now().UTC()
-		cleanup()
 		result := snapshot()
 		if cmd.ProcessState != nil {
 			result.ExitCode = cmd.ProcessState.ExitCode()
@@ -1062,7 +1068,7 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 			// A nonzero process exit is a completed session, as in Execute.
 			runErr = nil
 		}
-		close(processFinished)
+		finishInput()
 		done <- BackgroundExecution{Result: result, Err: runErr, FinishedAt: finishedAt}
 		close(done)
 	}()
@@ -1076,24 +1082,33 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	}, nil
 }
 
-// backgroundInputWriter reports queue acceptance, not delivery. A failed or short
-// write permanently closes the input path and makes the failure observable.
-func backgroundInputWriter(writer io.Writer, finished <-chan struct{}) (func(string) error, func() bool) {
+// backgroundInputWriter acknowledges queue admission only. Completion marks any
+// outstanding writes as failed or unconfirmed before publishing the result.
+func backgroundInputWriter(writer io.Writer) (func(string) error, func() bool, func()) {
 	queue := make(chan string, backgroundInputQueueSize)
+	finished := make(chan struct{})
 	var mu sync.Mutex
-	failed := false
+	failed, closed, pending := false, false, 0
 	if writer != nil {
 		go func() {
 			for {
 				select {
 				case data := <-queue:
+					mu.Lock()
+					if closed {
+						mu.Unlock()
+						return
+					}
+					mu.Unlock()
 					n, err := io.WriteString(writer, data)
+					mu.Lock()
+					pending--
 					if err != nil || n != len(data) {
-						mu.Lock()
 						failed = true
 						mu.Unlock()
 						return
 					}
+					mu.Unlock()
 				case <-finished:
 					return
 				}
@@ -1109,25 +1124,31 @@ func backgroundInputWriter(writer io.Writer, finished <-chan struct{}) (func(str
 		}
 		mu.Lock()
 		defer mu.Unlock()
+		if closed {
+			return ErrBackgroundSessionDone
+		}
 		if failed {
 			return ErrBackgroundSessionInputUnavailable
 		}
 		select {
-		case <-finished:
-			return ErrBackgroundSessionDone
-		default:
-		}
-		select {
-		case <-finished:
-			return ErrBackgroundSessionDone
 		case queue <- data:
+			pending++
 			return nil
 		default:
 			return ErrBackgroundSessionInputBusy
 		}
 	}
 	failure := func() bool { mu.Lock(); defer mu.Unlock(); return failed }
-	return write, failure
+	finish := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		closed = true
+		if pending > 0 {
+			failed = true
+		}
+		close(finished)
+	}
+	return write, failure, finish
 }
 
 func waitForBackgroundPTYOutput(terminal io.ReadWriteCloser, readDone <-chan struct{}) {
