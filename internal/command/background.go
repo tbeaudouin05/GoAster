@@ -42,8 +42,8 @@ var (
 	ErrBackgroundSessionNotInteractive   = errors.New("background command session does not accept input")
 	ErrBackgroundSessionInputUnavailable = errors.New("background command session input is unavailable")
 	ErrBackgroundSessionInputBusy        = errors.New("background command session input queue is full")
-	ErrBackgroundCleanupUnavailable      = errors.New("safe background process cleanup is unavailable: kernel-enforced descendant containment is required")
 	ErrPTYNotSupported                   = errors.New("PTY sessions are not supported on this platform")
+	errBackgroundCleanup                 = errors.New("background cleanup failed")
 )
 
 // BackgroundCommandConfig is the owner-managed list of named commands that
@@ -815,7 +815,7 @@ func refreshManagedBackgroundSessions(sessions map[string]managedBackgroundSessi
 			}
 			if !open {
 				managed.session.State = "failed"
-				managed.err = errors.New("background session ended without a cleanup result")
+				managed.err = fmt.Errorf("%w: background session ended without a cleanup result", errBackgroundCleanup)
 				managed.session.ExitCode = -1
 			} else {
 				managed.result = execution.Result
@@ -870,7 +870,7 @@ func makeBackgroundSessionRoom(sessions map[string]managedBackgroundSession, ord
 		removed := false
 		for index, id := range order {
 			managed, exists := sessions[id]
-			if exists && (!managed.finished || (managed.err != nil && managed.err != context.Canceled)) {
+			if exists && (!managed.finished || isBackgroundCleanupError(managed.err)) {
 				continue
 			}
 			delete(sessions, id)
@@ -889,7 +889,7 @@ func closeManagedBackgroundSessions(sessions map[string]managedBackgroundSession
 	var closeErr error
 	for _, managed := range sessions {
 		if managed.finished {
-			if managed.err != context.Canceled {
+			if isBackgroundCleanupError(managed.err) {
 				closeErr = errors.Join(closeErr, managed.err)
 			}
 		} else {
@@ -910,13 +910,21 @@ func closeManagedBackgroundSessions(sessions map[string]managedBackgroundSession
 				managed.result = execution.Result
 				managed.session.ExitCode = execution.Result.ExitCode
 				managed.session.FinishedAt = execution.FinishedAt
-				if execution.Err == nil || execution.Err == context.Canceled {
+				switch {
+				case execution.Err == nil || execution.Err == context.Canceled:
 					managed.session.State = "stopped"
-				} else {
+				case isBackgroundCleanupError(execution.Err):
+					managed.session.State = "failed"
+				case errors.Is(execution.Err, ErrOutputLimit):
+					managed.session.State = "output_limited"
+				default:
+					managed.session.State = "failed"
+				}
+				if isBackgroundCleanupError(execution.Err) {
 					closeErr = errors.Join(closeErr, execution.Err)
 				}
 			} else {
-				managed.err = errors.New("background session ended without a cleanup result")
+				managed.err = fmt.Errorf("%w: background session ended without a cleanup result", errBackgroundCleanup)
 				closeErr = errors.Join(closeErr, managed.err)
 			}
 		case <-deadline.C:
@@ -934,18 +942,15 @@ func closeManagedBackgroundSessions(sessions map[string]managedBackgroundSession
 	return closeErr
 }
 
-// StartBackground refuses execution until safe descendant containment exists.
-// Timeout zero runs until stopped, exited, or the bounded output limit is reached.
+// StartBackground executes an allowlisted command with bounded output and
+// best-effort process cleanup. Timeout zero runs until stopped, exited, or the
+// bounded output limit is reached; descendants may outlive the session.
 func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	if !validBackgroundExecutable(req.Executable, req.Args) {
 		return BackgroundProcess{}, errors.New("executable or arguments are invalid")
 	}
-	lifecycleSupported := backgroundLifecycleSupported()
-	if req.PTY && (!lifecycleSupported || !backgroundPTYSupported()) {
+	if req.PTY && !backgroundPTYSupported() {
 		return BackgroundProcess{}, ErrPTYNotSupported
-	}
-	if !lifecycleSupported {
-		return BackgroundProcess{}, ErrBackgroundCleanupUnavailable
 	}
 	if req.Timeout < 0 {
 		return BackgroundProcess{}, errors.New("command timeout must not be negative")
@@ -972,16 +977,25 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	}
 	cmd := exec.CommandContext(runContext, req.Executable, req.Args...)
 	cmd.Env = EnvironmentWithoutGitHubTokenOverrides()
-	// Reuse the existing process-group setup on Linux; its timer-based
-	// terminator is replaced below with cleanup performed before reaping.
-	if runtime.GOOS == "linux" && !req.PTY {
+	cancelProcess := cmd.Cancel
+	// Set up a private group for ordinary Linux commands. The existing generic
+	// command setup is used only for its group attributes here; background
+	// cancellation below supplies the no-delayed-ID cleanup path. Windows keeps
+	// its existing taskkill tree fallback.
+	if !req.PTY && (runtime.GOOS == "linux" || runtime.GOOS == "windows") {
 		configureCommand(cmd)
+		if runtime.GOOS == "windows" {
+			cancelProcess = cmd.Cancel
+		}
 	}
 	cmd.WaitDelay = commandWaitDelay
+	var terminal io.ReadWriteCloser
 	ready := make(chan struct{})
-	cancelProcess := cmd.Cancel
 	cmd.Cancel = func() error {
 		<-ready
+		if terminal != nil {
+			signalPTYForeground(terminal)
+		}
 		return cancelProcess()
 	}
 	if req.Dir != "" {
@@ -1014,7 +1028,6 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 		return count, err
 	}
 
-	var terminal io.ReadWriteCloser
 	var inputWriter io.Writer
 	if req.PTY {
 		master, err := pty.Start(cmd)
@@ -1049,7 +1062,7 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 		}
 	}
 
-	cancelProcess, finishProcess := backgroundProcessLifecycle(cmd.Process.Pid, req.PTY, cancelProcess)
+	cancelProcess, beginProcessWait, finishProcess := backgroundProcessLifecycle(cmd.Process.Pid, req.PTY, cancelProcess)
 	close(ready)
 	done := make(chan BackgroundExecution, 1)
 	writeInput, inputFailed, finishInput := backgroundInputWriter(inputWriter)
@@ -1111,8 +1124,9 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	}
 	go func() {
 		defer stop()
-		cleanupErr := finishProcess()
+		beginProcessWait()
 		runErr := cmd.Wait()
+		cleanupErr := finishProcess()
 		if terminal != nil {
 			cleanupErr = errors.Join(cleanupErr, waitForBackgroundPTYOutput(terminal, readDone))
 		}
@@ -1132,7 +1146,7 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 			runErr = nil
 		}
 		if cleanupErr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("background cleanup failed: %w", cleanupErr))
+			runErr = errors.Join(runErr, fmt.Errorf("%w: %w", errBackgroundCleanup, cleanupErr))
 		}
 		finishInput()
 		done <- BackgroundExecution{Result: result, Err: runErr, FinishedAt: finishedAt}
@@ -1146,6 +1160,10 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 		KeyMode:     currentKeyMode,
 		Done:        done,
 	}, nil
+}
+
+func isBackgroundCleanupError(err error) bool {
+	return errors.Is(err, errBackgroundCleanup)
 }
 
 // backgroundInputWriter acknowledges queue admission only. Completion marks any

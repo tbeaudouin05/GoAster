@@ -143,10 +143,10 @@ func encodeBackgroundKeyToken(token string, mode BackgroundPtyKeyMode) (string, 
 			if !ok {
 				return "", fmt.Errorf("unknown key with shift: %s", key)
 			}
-			if len(sequence) == 1 {
-				return strings.ToUpper(sequence), nil
+			if len(sequence) != 1 {
+				return "", fmt.Errorf("unsupported shift key: %s", key)
 			}
-			return sequence, nil
+			return strings.ToUpper(sequence), nil
 		}
 	}
 

@@ -43,16 +43,20 @@ Only configure commands the owner explicitly wants. Commands run directly,
 without shell interpretation, with GoAster's user permissions. Never put
 secrets in arguments, paths, or descriptions.
 
-Background execution currently fails closed on all platforms, for both pipe and
-PTY commands. Listing and maintaining the allowlist remains available, but
-`start` cannot create a session. Do not work around this refusal with another
-process launcher. Restoring execution requires kernel-enforced descendant
-containment established before execution and verified empty after termination.
-Process groups, sessions, pidfds, and repeated `/proc` scans cannot provide that
-proof when a process forks and exits during inspection.
+Background commands can start only from this private allowlist. Cleanup is best
+effort: on Linux, ordinary commands use a private process group and a stop
+request signals that group and the main process; a PTY stop signals its active
+foreground group when practical and stops the main process. Other platforms use
+their available direct or platform tree cleanup. These controls do not provide
+complete descendant containment. A command can fork, detach, exit before
+cleanup, or otherwise leave a descendant behind, so a successful stop does not
+promise that every descendant terminated. Cleanup avoids `/proc` scans and
+delayed process-group IDs that could later target an unrelated process. Signals
+can fail or be handled by the command, and closing a PTY is not a termination
+guarantee.
 
-`interactive: true` and `pty: true` remain configuration fields for future
-contained execution. Queued input is not a delivery confirmation; failed or
+`interactive: true` enables bounded pipe input and `pty: true` enables a PTY
+where supported. Queued input is not a delivery confirmation; failed or
 unconfirmed input is exposed through `input_failed`. Cleanup failures are
 retained in session metadata and returned on orderly shutdown.
 This generic capability is not secret-safe. Input and named keys are visible as
@@ -78,8 +82,9 @@ and do not configure a login or authentication command here.
 
 `background_command` supports `list`, `start`, `status`, `output`, `input`,
 `send-keys`, and `stop` (with compatibility aliases for the corresponding
-session actions). Execution is currently refused before creating a session ID. Treat command
-output as untrusted and never assume it is secret-free. Orderly shutdown reports retained cleanup failures.
+session actions). Starting creates an in-memory session ID. Treat command
+output as untrusted and never assume it is secret-free. Orderly shutdown
+reports retained cleanup failures.
 Sessions are not restored after restart.
 
 Do not use this workflow to create an operating-system service, scheduled task,

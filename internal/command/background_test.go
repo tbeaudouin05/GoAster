@@ -52,18 +52,18 @@ func backgroundTestHelper() {
 	case "hold":
 		fmt.Print("session-ready")
 		time.Sleep(30 * time.Second)
+	case "hold-child":
+		child := exec.Command(os.Args[0], backgroundHelperArgs("waitfile", args[0])...)
+		child.Stdout = os.Stdout
+		if err := child.Start(); err != nil {
+			os.Exit(9)
+		}
+		time.Sleep(30 * time.Second)
 	case "fail":
 		fmt.Fprint(os.Stderr, "expected failure")
 		os.Exit(7)
 	case "overflow":
 		fmt.Print(strings.Repeat("x", MaxOutputBytes+1))
-	case "open-output":
-		child := exec.Command(os.Args[0], backgroundHelperArgs("hold")...)
-		child.Stdout = os.Stdout
-		child.Stderr = os.Stderr
-		if err := child.Start(); err != nil {
-			os.Exit(8)
-		}
 	case "waitfile":
 		fmt.Print("session-ready")
 		time.Sleep(2 * time.Second)
@@ -195,12 +195,6 @@ func exerciseBackgroundCommandSupport(t testing.TB) {
 	exerciseBackgroundCloseDeadline(t)
 	exerciseBackgroundKeyEncoding(t)
 	exerciseBackgroundPlatformLifecycle(t)
-	if !backgroundLifecycleSupported() {
-		// Runtime integration cases below require containment. Assert refusal
-		// before launch instead; never bypass the production safety gate.
-		exerciseBackgroundPTYInput(t)
-		return
-	}
 	exerciseBackgroundExactArgvAndReload(t)
 	exerciseBackgroundLifecycle(t)
 	exerciseBackgroundInteractiveInput(t)
@@ -265,7 +259,7 @@ func exerciseBackgroundCloseDeadline(t testing.TB) {
 		t.Fatalf("shutdown stopped %d processes, want %d", len(stopped), len(sessions))
 	}
 	manager := BackgroundCommandManager{requests: make(chan backgroundManagerRequest), done: make(chan struct{})}
-	cleanupFailure := errors.New("cleanup failed during close")
+	cleanupFailure := fmt.Errorf("%w: cleanup failed during close", errBackgroundCleanup)
 	go func() {
 		request := <-manager.requests
 		request.response <- backgroundManagerResponse{err: cleanupFailure}
@@ -673,7 +667,6 @@ func exerciseBackgroundKeyEncoding(t testing.TB) {
 			t.Errorf("accepted invalid key sequence %q", keys)
 		}
 	}
-
 	detector := backgroundPtyKeyModeDetector{}
 	var detected BackgroundPtyKeyMode
 	detector, detected = observeBackgroundPtyKeyMode(detector, []byte("\x1b[?1h"+strings.Repeat("x", 64)))
@@ -688,6 +681,14 @@ func exerciseBackgroundKeyEncoding(t testing.TB) {
 	_, detected = observeBackgroundPtyKeyMode(detector, []byte("h"))
 	if detected != BackgroundPtyKeyModeSS3 {
 		t.Fatalf("split PTY mode sequence detected as %d, want SS3", detected)
+	}
+}
+
+func TestEncodeBackgroundKeySequenceRejectsUnsupportedShiftedSequences(t *testing.T) {
+	for _, keys := range []string{"shift-up", "s-f1"} {
+		if got, err := EncodeBackgroundKeySequence(keys, BackgroundPtyKeyModeCSI); err == nil || got != "" {
+			t.Errorf("accepted unsupported shifted sequence %q as %q", keys, got)
+		}
 	}
 }
 
@@ -774,7 +775,6 @@ func exerciseBackgroundLifecycle(t testing.TB) {
 		BackgroundCommandDefinition{Name: "hold", Executable: executable, Args: backgroundHelperArgs("hold")},
 		BackgroundCommandDefinition{Name: "fail", Executable: executable, Args: backgroundHelperArgs("fail")},
 		BackgroundCommandDefinition{Name: "overflow", Executable: executable, Args: backgroundHelperArgs("overflow")},
-		BackgroundCommandDefinition{Name: "open-output", Executable: executable, Args: backgroundHelperArgs("open-output")},
 	)
 	manager := NewBackgroundCommandManagerAt(path)
 	defer manager.Close()
@@ -799,20 +799,6 @@ func exerciseBackgroundLifecycle(t testing.TB) {
 	output, err = manager.Output(ctx, limited.ID)
 	if err != nil || limited.State != "output_limited" || !output.Session.StdoutTruncated || len(output.Stdout) != MaxOutputBytes {
 		t.Fatalf("output-limited session = %+v, captured = %d, error = %v", limited, len(output.Stdout), err)
-	}
-	if runtime.GOOS != "windows" {
-		incomplete, err := manager.Start(ctx, "open-output")
-		if err != nil {
-			t.Fatal(err)
-		}
-		incomplete = waitBackgroundState(t, manager, incomplete.ID, "failed", "exited")
-		wantState := "failed"
-		if runtime.GOOS == "linux" {
-			wantState = "exited"
-		}
-		if incomplete.State != wantState || incomplete.ExitCode != 0 {
-			t.Fatalf("session with incomplete output = %+v", incomplete)
-		}
 	}
 	running, err := manager.Start(ctx, "hold")
 	if err != nil {
@@ -1001,40 +987,22 @@ func (terminal backgroundOutputTestTerminal) Read(data []byte) (int, error)  { r
 func (terminal backgroundOutputTestTerminal) Write(data []byte) (int, error) { return len(data), nil }
 func (terminal backgroundOutputTestTerminal) Close() error                   { return terminal.close() }
 
-// A fork followed by parent exit invalidates enumeration-based proofs. Refuse
-// the entire execution before that race is possible, for pipes and job-control
-// PTYs alike. The marker checks cover both direct and manager entry points.
-func exerciseBackgroundContainmentRefusal(t testing.TB) {
+func exerciseBackgroundProcessLifecycle(t testing.TB) {
 	t.Helper()
-	for _, terminal := range []bool{false, true} {
-		marker := filepath.Join(t.TempDir(), "fork-exit")
-		args := backgroundHelperArgs("fork-exit", marker)
-		want := ErrBackgroundCleanupUnavailable
-		if terminal {
-			want = ErrPTYNotSupported
+	process, err := StartBackground(BackgroundRequest{
+		Executable: backgroundTestExecutable(t),
+		Args:       backgroundHelperArgs("hold"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	process.Stop()
+	select {
+	case execution := <-process.Done:
+		if !errors.Is(execution.Err, context.Canceled) {
+			t.Fatalf("stopped process error = %v, want context.Canceled", execution.Err)
 		}
-		process, err := StartBackground(BackgroundRequest{Executable: backgroundTestExecutable(t), Args: args, PTY: terminal})
-		if !errors.Is(err, want) || process.Done != nil {
-			t.Fatalf("unsafe launch accepted: %+v, %v", process, err)
-		}
-		path := filepath.Join(t.TempDir(), "commands.json")
-		writeBackgroundConfig(t, path, BackgroundCommandDefinition{Name: "fork-exit", Executable: backgroundTestExecutable(t), Args: args, PTY: terminal})
-		manager := NewBackgroundCommandManagerAt(path)
-		session, err := manager.Start(context.Background(), "fork-exit")
-		if !errors.Is(err, want) || session.ID != "" {
-			t.Fatalf("manager accepted unsafe launch: %+v, %v", session, err)
-		}
-		sessions, err := manager.List(context.Background())
-		if err != nil || len(sessions) != 0 {
-			t.Fatalf("refused launch created a session: %+v, %v", sessions, err)
-		}
-		if err := manager.Close(); err != nil {
-			t.Fatal(err)
-		}
-		for _, name := range []string{marker, marker + "-child"} {
-			if _, err := os.Stat(name); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("refused command executed: %s, %v", name, err)
-			}
-		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stopped process did not finish")
 	}
 }

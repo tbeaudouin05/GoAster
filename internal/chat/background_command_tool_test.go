@@ -103,15 +103,15 @@ func exerciseBackgroundCommandTool(t testing.TB) {
 		}
 	}
 	started, err := registered.Handler(context.Background(), `{"action":"start","name":"preview"}`)
-	if err != nil || !strings.Contains(started, `"status":"start_failed"`) {
-		t.Fatalf("unsafe background start was accepted: %q, %v", started, err)
+	if err != nil || !strings.Contains(started, `"status":"started"`) || !strings.Contains(started, `"id":"bg-000001"`) {
+		t.Fatalf("allowlisted background start failed: %q, %v", started, err)
 	}
 	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	listed, err = registered.Handler(context.Background(), `{"action":"list"}`)
-	if err != nil || !strings.Contains(listed, `"status":"configuration_unavailable"`) || strings.Contains(listed, `"id":"bg-000001"`) {
-		t.Fatalf("list with invalid config = %q, error = %v; want configuration error without a session", listed, err)
+	if err != nil || !strings.Contains(listed, `"status":"configuration_unavailable"`) || !strings.Contains(listed, `"id":"bg-000001"`) {
+		t.Fatalf("list with invalid config = %q, error = %v; want configuration error with the existing session", listed, err)
 	}
 	for _, arguments := range []string{
 		`{"action":"list","action":"start"}`,
@@ -160,8 +160,8 @@ func TestBackgroundCommandToolSupportsAllowlistedInput(t *testing.T) {
 		t.Fatalf("interactive list = %q, error = %v", listed, err)
 	}
 	started, err := registered.Handler(context.Background(), `{"action":"start","name":"interactive"}`)
-	if err != nil || !strings.Contains(started, `"status":"start_failed"`) {
-		t.Fatalf("interactive command bypassed containment refusal: %q, %v", started, err)
+	if err != nil || !strings.Contains(started, `"status":"started"`) || !strings.Contains(started, `"id":"bg-000001"`) {
+		t.Fatalf("interactive command did not start: %q, %v", started, err)
 	}
 	for _, action := range []string{"input", "output", "stop"} {
 		arguments := fmt.Sprintf(`{"action":%q,"id":"bg-000001"}`, action)
@@ -169,8 +169,8 @@ func TestBackgroundCommandToolSupportsAllowlistedInput(t *testing.T) {
 			arguments = `{"action":"input","id":"bg-000001","data":"hello"}`
 		}
 		result, err := registered.Handler(context.Background(), arguments)
-		if err != nil || !strings.Contains(result, `"status":"not_found"`) {
-			t.Fatalf("refused session remained accessible: %q, %v", result, err)
+		if err != nil || strings.Contains(result, `"status":"not_found"`) {
+			t.Fatalf("started session action %s failed: %q, %v", action, result, err)
 		}
 	}
 
