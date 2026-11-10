@@ -1,109 +1,69 @@
 # GoAster Bitwarden Secrets Manager
 
-Use this pure skill when the user wants GoAster to store environment secrets in
-Bitwarden Secrets Manager. This skill describes the workflow and safety rules;
-it does not contain credentials, secret values, server-specific paths, or an
-embedded implementation.
+Use this skill when the user wants GoAster to store or access environment secrets in Bitwarden Secrets Manager.
 
-## Initial setup policy
+## Setup principles
 
-Bitwarden is optional. Do not make Bitwarden a prerequisite for normal GoAster
-operation or block a successful installation on Bitwarden setup. GoAster may start with its
-existing server-local environment source and offer migration after installation
-and health verification.
+- Bitwarden Secrets Manager is optional. Do not block normal GoAster installation or operation if the user does not choose it.
+- Use Secrets Manager, not a Bitwarden secure note or Password Manager vault item.
+- GoAster uses one machine account and one project named exactly **`goaster`**.
+- GoAster creates the project automatically if it does not already exist. Tell the user **not to create a project manually**.
+- Do not ask the user which project to use or require them to provide a project ID.
+- The only credential the user needs to provide is `BWS_ACCESS_TOKEN`.
 
-The free Bitwarden Secrets Manager tier is sufficient for one GoAster machine
-account. One machine account is all GoAster needs for one GoAster server
-installation. Do not create additional machine accounts unless the user has a
-separate, explicit need.
+## User onboarding
 
-This workflow uses **Bitwarden Secrets Manager**, not a secure note or a
-personal-vault item. Store migrated values as Secrets Manager secrets in a
-project. Do not suggest copying the entire env file into a note.
+Guide the user through these steps:
 
-## User setup in Bitwarden
+1. Open their Bitwarden organization and activate **Secrets Manager**, if it is not already active. They can choose the free tier if it meets their needs.
+2. Open **Secrets Manager** and create a machine account for GoAster.
+3. Open the machine account’s **Access tokens** section and create a token. Select **Read and write** in the permissions dropdown.
+4. Copy the token when Bitwarden displays it.
+5. Provide it to GoAster through an approved secure method, under the exact name:
 
-Guide the user through these steps in the Bitwarden web app. Labels can vary
-slightly by Bitwarden edition or UI version, so use the closest current label:
+   ```text
+   BWS_ACCESS_TOKEN=<machine-account-access-token>
+   ```
 
-1. Open the user's Bitwarden organization.
-2. On the organization billing or subscription page, choose the option to
-   subscribe to or activate **Secrets Manager**. Confirm the free tier when
-   offered. GoAster needs only one machine account.
-3. Open **Secrets Manager** and create a project for this GoAster installation.
-   The project name is not a secret.
-4. Create one machine account for the GoAster server.
-5. Grant that machine account access to the GoAster project. It needs write
-   permission during the initial migration so GoAster can create the secrets.
-6. Open the machine account's access-token area and create an access token.
-7. Copy the token immediately into the approved secure setup path. Bitwarden
-   shows the token only when it is created; it cannot be recovered from the
-   GoAster skill later.
+   If GoAster’s `/env` command provides a secure way to enter environment variables, use it. Do not send the token through ordinary chat, Telegram, logs, tickets, or email.
+6. Do not create a project. GoAster will find or create its own `goaster` project.
 
-The user supplies one secret credential to GoAster:
+## GoAster project setup
 
-```text
-BWS_ACCESS_TOKEN=<machine-account-access-token>
-```
+1. Check that the Bitwarden Secrets Manager CLI, `bws`, is available. Install it through the approved installation method if necessary.
+2. Use `BWS_ACCESS_TOKEN` to connect to Secrets Manager.
+3. Look for an accessible project whose name is exactly `goaster`.
+4. If exactly one exists, use it.
+5. If none exists, create `goaster` and verify that it is accessible.
+6. If multiple accessible projects have that exact name, stop and report the ambiguity. Do not guess.
+7. If access or project creation fails, report the error without exposing the token or secret values. Do not switch to a different project.
 
-The user also supplies the non-secret project identifier, for example:
+GoAster must use only this `goaster` project for reading and writing its secrets. Never ask the user to choose a different project.
 
-```text
-BWS_PROJECT_ID=<secrets-manager-project-id>
-```
+## Migration from the server environment
 
-Do not confuse the machine-account access token with a Bitwarden password,
-master-password credential, secure-note password, or ordinary Password Manager
-API key. Do not ask the user to provide any of those for this workflow.
+When the user chooses to migrate existing environment variables:
 
-## Migration from server env
+1. Confirm the source environment and the migration scope. The destination is always the `goaster` project.
+2. Inspect variable names without displaying their values in chat, logs, tickets, or progress messages.
+3. Create one Secrets Manager secret per required variable, preserving each variable name exactly.
+4. Verify every secret by name and controlled retrieval, without displaying its value.
+5. Keep the existing server environment as a protected rollback copy until the user explicitly approves its removal.
+6. Switch GoAster to Bitwarden only after all required secrets have been verified.
+7. Run the relevant health check and report non-secret results and counts.
 
-When the user chooses migration:
-
-1. Confirm the exact source env and destination Bitwarden project.
-2. Inspect variable names only. Never display or copy secret values into chat,
-   model context, tickets, logs, or normal progress messages.
-3. Use the approved Bitwarden Secrets Manager integration to create one secret
-   per required environment variable, preserving the variable names exactly.
-4. Verify every created secret by name and successful controlled retrieval. Do
-   not report the retrieved values.
-5. Keep the server-local env source as a rollback copy until the user explicitly
-   approves its removal.
-6. Switch GoAster to Bitwarden only after verification succeeds.
-7. Run the relevant health check and report only non-secret status and counts.
-8. If the Bitwarden setup supports narrower permissions, reduce the machine
-   account from migration write access to the minimum read access needed for
-   normal operation.
-
-Never silently fall back to the server env if Bitwarden is selected but
-unavailable. Report the source failure and preserve the configured source
-boundary for manual recovery.
-
-If any secret fails creation or verification, do not switch sources and do not
-delete or overwrite the existing server env. Report the failed variable names
-only and leave the installation in its previous working state.
+If any secret cannot be created or verified, do not switch sources or delete the existing environment. Report the affected variable names and leave the existing setup in place.
 
 ## Normal operation
 
-Skills that need environment variables should reference this skill rather than
-hardcode a secret location. The environment-provider contract should resolve
-values from the selected source, validate required names, and prevent values
-from entering normal model output.
+- Read and write GoAster secrets only in the `goaster` project.
+- Validate that required variable names exist without exposing their values.
+- Protect `BWS_ACCESS_TOKEN` as a credential. Never print, log, commit, or include it in a skill file, backup bundle, or support report.
+- Do not silently fall back to the server environment if Bitwarden is selected but unavailable. Report the failure for manual follow-up.
+- Keep read-and-write access if GoAster needs to manage secrets. Reduce access only if the user chooses a read-only setup and understands that GoAster will no longer be able to write secrets.
 
-The Bitwarden machine token itself must be protected like any other credential:
-never print it, log it, commit it, put it in a skill file, or send it through
-ordinary Telegram or chat messages. Do not include it in backup bundles or
-support reports.
+## Rollback and deletion
 
-## Rollback
+To roll back, verify the protected server environment still exists, switch back to it, and run the health check.
 
-Rollback is explicit:
-
-1. Verify that the retained server env is still present and protected.
-2. Switch the environment source back to server-local env.
-3. Run the health check.
-4. Only after the user separately approves it may GoAster remove migrated
-   Bitwarden secrets or the retained local copy.
-
-Do not delete Bitwarden projects, machine accounts, tokens, or secrets
-automatically.
+Never automatically delete the `goaster` project, machine account, token, secrets, or retained server environment. Require the user’s explicit approval for the specific deletion.
