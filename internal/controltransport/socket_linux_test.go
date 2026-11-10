@@ -75,7 +75,7 @@ func TestSocketServesAllAgentRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := http.Client{Transport: transport, Timeout: 2 * time.Second}
-	for _, endpoint := range []string{"/livez", "/healthz", "/chat", "/auth/github/authorize", "/auth/github/cancel", "/auth/github/reconcile"} {
+	for _, endpoint := range []string{"/livez", "/healthz", "/chat"} {
 		method := http.MethodGet
 		if endpoint != "/livez" && endpoint != "/healthz" {
 			method = http.MethodPost
@@ -111,7 +111,7 @@ func TestUnavailableSocketNeverSendsRequestsToTCPImpersonator(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := http.Client{Transport: transport, Timeout: 2 * time.Second}
-	for _, endpoint := range []string{"/livez", "/healthz", "/chat", "/auth/github/authorize"} {
+	for _, endpoint := range []string{"/livez", "/healthz", "/chat"} {
 		req, err := http.NewRequest(http.MethodPost, spoof.URL+endpoint, strings.NewReader("sensitive message"))
 		if err != nil {
 			t.Fatal(err)

@@ -801,7 +801,6 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 			return nil
 		},
 	})
-	replyContext = WithChatID(replyContext, s.chatID)
 	actionStarted := false
 	if scheduled && tracksTools {
 		replyContext = context.WithValue(replyContext, toolActionStartedKey{}, func() { actionStarted = true })

@@ -13,7 +13,7 @@ import (
 	"goaster/internal/controltransport"
 )
 
-func TestAdapterUsesSocketForReadinessChatAndAuthorization(t *testing.T) {
+func TestAdapterUsesSocketForReadinessAndChat(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("the protected socket requires root")
 	}
@@ -36,14 +36,10 @@ func TestAdapterUsesSocketForReadinessChatAndAuthorization(t *testing.T) {
 		case "/livez", "/healthz":
 			fmt.Fprintln(w, "ok")
 		case "/chat":
-			if r.Header.Get(telegramAuthControlHeader) != "test-secret" {
+			if r.Header.Get(telegramControlAuthorizationHeader) != "test-secret" {
 				t.Error("chat request lacked the control secret")
 			}
 			fmt.Fprintln(w, `{"type":"final","reply":"socket reply"}`)
-		case "/auth/github/authorize", "/auth/github/cancel", "/auth/github/reconcile":
-			if r.Header.Get(telegramAuthControlHeader) != "test-secret" {
-				t.Error("authorization request lacked the control secret")
-			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -53,7 +49,7 @@ func TestAdapterUsesSocketForReadinessChatAndAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := adapter{agent: agent, authControlSecret: "test-secret"}
+	a := adapter{agent: agent, controlSecret: "test-secret"}
 	for _, endpoint := range []string{"/livez", "/healthz"} {
 		if !a.agentEndpointAvailable(context.Background(), endpoint) {
 			t.Fatalf("%s unavailable over socket", endpoint)
@@ -62,11 +58,6 @@ func TestAdapterUsesSocketForReadinessChatAndAuthorization(t *testing.T) {
 	reply, err := a.askAgent(context.Background(), "hello", 42, nil, nil)
 	if err != nil || reply != "socket reply" {
 		t.Fatalf("chat reply = %q, %v", reply, err)
-	}
-	for _, endpoint := range []string{"/auth/github/authorize", "/auth/github/cancel", "/auth/github/reconcile"} {
-		if !a.githubAuthRequest(context.Background(), endpoint, 42) {
-			t.Fatalf("%s failed over socket", endpoint)
-		}
 	}
 	if err := server.Close(); err != nil {
 		t.Fatal(err)

@@ -28,6 +28,8 @@ import (
 
 const maxChatEnvelopeBytes int64 = 1 << 20
 
+const controlAuthorizationHeader = "X-GoAster-GitHub-Auth-Control"
+
 type countingReader struct {
 	io.Reader
 	bytesRead int64
@@ -126,13 +128,6 @@ func serve(store chat.CredentialStore) error {
 	if err := chat.RegisterBackgroundCommandTool(provider, backgroundManager); err != nil {
 		return fmt.Errorf("register background command tool: %w", err)
 	}
-	githubAuth := newGitHubAuthManager(githubAuthConfig{
-		ClientID:   os.Getenv(githubClientIDEnv),
-		HTTPClient: http.Client{Timeout: githubDefaultHTTPTimeout},
-	})
-	if err := registerGitHubAuthTool(provider, githubAuth); err != nil {
-		return fmt.Errorf("register GitHub authentication handoff: %w", err)
-	}
 	registry, err := chat.NewModelRegistry("")
 	if err != nil {
 		return fmt.Errorf("initialize model registry: %w", err)
@@ -142,7 +137,7 @@ func serve(store chat.CredentialStore) error {
 		return fmt.Errorf("could not start local agent listener: %w", err)
 	}
 	defer listener.Close()
-	server := http.Server{Handler: handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider, memory, provider.CheckAuth, registry, githubAuth, controlSecret), ReadHeaderTimeout: 10 * time.Second}
+	server := http.Server{Handler: handlerWithMemoryAndRegistryWithSecret(provider, memory, provider.CheckAuth, registry, controlSecret), ReadHeaderTimeout: 10 * time.Second}
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -158,7 +153,7 @@ func serve(store chat.CredentialStore) error {
 	return nil
 }
 
-func handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error, registry chat.ModelRegistry, githubAuth githubAuthManager, controlSecret string) http.Handler {
+func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error, registry chat.ModelRegistry, controlSecret string) http.Handler {
 	var sessionsMu sync.Mutex
 	sessions := make(map[int64]*chat.Session)
 	sessionFor := func(chatID int64) *chat.Session {
@@ -190,72 +185,12 @@ func handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider chat.Provider,
 		}
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	mux.HandleFunc("/auth/github/authorize", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !validGitHubAuthControlRequest(r, controlSecret) {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
-		request, ok := decodeGitHubAuthHTTPRequest(w, r)
-		if !ok {
-			return
-		}
-		result := githubAuth.authorize(r.Context(), request.ChatID)
-		if result != githubAuthAuthorizationGranted {
-			http.Error(w, result, http.StatusForbidden)
-			return
-		}
-		writeGitHubAuthHTTPResult(w, result)
-	})
-	mux.HandleFunc("/auth/github/cancel", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !validGitHubAuthControlRequest(r, controlSecret) {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
-		request, ok := decodeGitHubAuthHTTPRequest(w, r)
-		if !ok {
-			return
-		}
-		result := githubAuth.cancel(r.Context(), request.ChatID)
-		if result != githubAuthCancellationPending {
-			http.Error(w, result, http.StatusConflict)
-			return
-		}
-		writeGitHubAuthHTTPResult(w, result)
-	})
-	mux.HandleFunc("/auth/github/reconcile", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !validGitHubAuthControlRequest(r, controlSecret) {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
-		request, ok := decodeGitHubAuthHTTPRequest(w, r)
-		if !ok {
-			return
-		}
-		result := githubAuth.reconcile(r.Context(), request.ChatID)
-		if result != githubAuthReconciled {
-			http.Error(w, result, http.StatusConflict)
-			return
-		}
-		writeGitHubAuthHTTPResult(w, result)
-	})
 	mux.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !validGitHubAuthControlRequest(r, controlSecret) {
+		if !validControlRequest(r, controlSecret) {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
@@ -367,27 +302,11 @@ func handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider chat.Provider,
 			return
 		}
 		observer := func(name, arguments string) {
-			if name == githubAuthToolName {
-				// Authentication arguments are never useful to the channel adapter;
-				// keep even malformed model-supplied secrets inside the agent.
-				arguments = ""
-			}
 			emit(struct {
 				Type      string `json:"type"`
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
 			}{"tool_call", name, arguments})
-		}
-		authObserver := func(notice chat.AuthHandoffNotice) {
-			emit(struct {
-				Type            string `json:"type"`
-				Provider        string `json:"provider"`
-				Status          string `json:"status"`
-				VerificationURL string `json:"verification_url,omitempty"`
-				UserCode        string `json:"user_code,omitempty"`
-				ExpiresAt       string `json:"expires_at,omitempty"`
-				Account         string `json:"account,omitempty"`
-			}{"auth_handoff", notice.Provider, notice.Status, notice.VerificationURL, notice.UserCode, notice.ExpiresAt, notice.VerifiedAccount})
 		}
 		session := sessionFor(request.ChatID)
 		if !chat.IsClearCommand(request.Message) {
@@ -399,8 +318,6 @@ func handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider chat.Provider,
 			}
 		}
 		requestContext := chat.WithToolCallObserver(r.Context(), observer)
-		requestContext = chat.WithAuthHandoffObserver(requestContext, authObserver)
-		requestContext = chat.WithChatID(requestContext, request.ChatID)
 		reply, err := session.ReplyWithAttachments(requestContext, request.Message, metadata)
 		if err != nil {
 			if errors.Is(err, attachment.ErrUnsupportedImage) {
@@ -465,37 +382,12 @@ func handlerWithMemoryAndRegistryAndGitHubAuthWithSecret(provider chat.Provider,
 	})
 }
 
-func validGitHubAuthControlRequest(r *http.Request, controlSecret string) bool {
+func validControlRequest(r *http.Request, controlSecret string) bool {
 	if r == nil || controlSecret == "" || strings.ContainsAny(controlSecret, "\r\n") {
 		return false
 	}
-	provided := r.Header.Get(githubAuthControlHeader)
+	provided := r.Header.Get(controlAuthorizationHeader)
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(controlSecret)) == 1
-}
-
-type githubAuthHTTPRequest struct {
-	ChatID int64 `json:"chat_id"`
-}
-
-func decodeGitHubAuthHTTPRequest(w http.ResponseWriter, r *http.Request) (githubAuthHTTPRequest, bool) {
-	var request githubAuthHTTPRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || request.ChatID <= 0 {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return githubAuthHTTPRequest{}, false
-	}
-	var extra json.RawMessage
-	if decoder.Decode(&extra) != io.EOF {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return githubAuthHTTPRequest{}, false
-	}
-	return request, true
-}
-
-func writeGitHubAuthHTTPResult(w http.ResponseWriter, result string) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte(result + "\n"))
 }
 
 func modelCommandReply(registry chat.ModelRegistry, chatID int64, message string) string {

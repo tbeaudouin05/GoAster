@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -31,7 +30,7 @@ type adapter struct {
 	pairingMu          sync.Mutex
 	client             httpDoer
 	agent              httpDoer
-	authControlSecret  string
+	controlSecret      string
 	apiBase            string
 	attachmentMaxBytes int64 // test seam; zero uses attachment.MaxBytes.
 }
@@ -96,13 +95,13 @@ type agentModelError struct {
 func (err agentModelError) Error() string { return err.message }
 
 const (
-	telegramToolFeedbackMaxChars  = 600
-	telegramTypingRefreshInterval = 4 * time.Second
-	telegramTypingActionTimeout   = 2 * time.Second
-	telegramAgentRequestTimeout   = 20 * time.Minute
-	telegramAuthControlHeader     = "X-GoAster-GitHub-Auth-Control"
-	telegramPairCommand           = "/pair"
-	telegramStartCommand          = "/start"
+	telegramToolFeedbackMaxChars       = 600
+	telegramTypingRefreshInterval      = 4 * time.Second
+	telegramTypingActionTimeout        = 2 * time.Second
+	telegramAgentRequestTimeout        = 20 * time.Minute
+	telegramControlAuthorizationHeader = "X-GoAster-GitHub-Auth-Control"
+	telegramPairCommand                = "/pair"
+	telegramStartCommand               = "/start"
 )
 
 // Run starts polling only after the token and pairing state are protected.
@@ -128,10 +127,10 @@ func Run(ctx context.Context, paths Paths, ready func() error) error {
 	}
 	a := &adapter{
 		token: string(token), pairing: pairing,
-		authControlSecret: controlSecret,
-		client:            &http.Client{Timeout: 40 * time.Second, CheckRedirect: noRedirect},
-		agent:             agent,
-		apiBase:           "https://api.telegram.org",
+		controlSecret: controlSecret,
+		client:        &http.Client{Timeout: 40 * time.Second, CheckRedirect: noRedirect},
+		agent:         agent,
+		apiBase:       "https://api.telegram.org",
 	}
 	return a.run(ctx, ready)
 }
@@ -321,39 +320,6 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if m.From.ID != pairedUserID {
 		return
 	}
-	if action, recognized := githubLoginCommand(text); recognized {
-		if hasAttachment {
-			a.send(ctx, m.Chat.ID, "Usage: /github-login, /github-login cancel, or /github-login reconcile")
-			return
-		}
-		if m.Chat.Type != "private" || m.Chat.ID != m.From.ID {
-			a.send(ctx, m.Chat.ID, "GitHub login can only be authorized in the paired private Telegram chat.")
-			return
-		}
-		switch action {
-		case "authorize":
-			if a.authorizeGitHubLogin(ctx, m.Chat.ID) {
-				a.send(ctx, m.Chat.ID, "GitHub login is authorized for this private chat for a short time. Ask GoAster to continue the GitHub workflow. The verification code will be delivered only in this chat.")
-			} else {
-				a.send(ctx, m.Chat.ID, "GitHub login could not be authorized. No login was started.")
-			}
-		case "cancel":
-			if a.cancelGitHubLogin(ctx, m.Chat.ID) {
-				a.send(ctx, m.Chat.ID, "GitHub login cancellation was requested. Cleanup is pending; wait for the final status.")
-			} else {
-				a.send(ctx, m.Chat.ID, "GitHub login cancellation could not reach the agent.")
-			}
-		case "reconcile":
-			if a.reconcileGitHubLogin(ctx, m.Chat.ID) {
-				a.send(ctx, m.Chat.ID, "GitHub login reconciliation was acknowledged. Only retry after manually reconciling the GitHub credential in gh.")
-			} else {
-				a.send(ctx, m.Chat.ID, "GitHub login has no reconciliation acknowledgment available.")
-			}
-		default:
-			a.send(ctx, m.Chat.ID, "Usage: /github-login, /github-login cancel, or /github-login reconcile")
-		}
-		return
-	}
 	if text == telegramPairCommand || strings.HasPrefix(text, telegramPairCommand+" ") ||
 		text == telegramStartCommand || strings.HasPrefix(text, telegramStartCommand+" ") {
 		if a.agentEndpointAvailable(ctx, "/healthz") {
@@ -404,9 +370,6 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	var progressMessageID int64
 	showToolCall := func(name, arguments string) {
 		text := toolFeedbackText(name, arguments)
-		if name == "auth_handoff" {
-			text = "🔐 GitHub sign-in handoff started"
-		}
 		if progressMessageID == 0 {
 			progressMessageID, _ = a.sendMessage(ctx, m.Chat.ID, text)
 			return
@@ -454,67 +417,6 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	}
 	// Telegram limits message size. Chunks also handle non-BMP characters.
 	sendFinal(reply)
-}
-
-func githubLoginCommand(text string) (string, bool) {
-	fields := strings.Fields(text)
-	if len(fields) == 0 || !strings.EqualFold(fields[0], "/github-login") {
-		return "", false
-	}
-	if len(fields) == 1 {
-		return "authorize", true
-	}
-	if len(fields) == 2 {
-		switch {
-		case strings.EqualFold(fields[1], "cancel"):
-			return "cancel", true
-		case strings.EqualFold(fields[1], "reconcile"):
-			return "reconcile", true
-		}
-	}
-	return "invalid", true
-}
-
-func (a *adapter) authorizeGitHubLogin(ctx context.Context, chatID int64) bool {
-	return a.githubAuthRequest(ctx, "/auth/github/authorize", chatID)
-}
-
-func (a *adapter) cancelGitHubLogin(ctx context.Context, chatID int64) bool {
-	return a.githubAuthRequest(ctx, "/auth/github/cancel", chatID)
-}
-
-func (a *adapter) reconcileGitHubLogin(ctx context.Context, chatID int64) bool {
-	return a.githubAuthRequest(ctx, "/auth/github/reconcile", chatID)
-}
-
-func (a *adapter) githubAuthRequest(ctx context.Context, endpoint string, chatID int64) bool {
-	if a.agent == nil || chatID <= 0 {
-		return false
-	}
-	if a.authControlSecret == "" || strings.ContainsAny(a.authControlSecret, "\r\n") {
-		return false
-	}
-	requestContext, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	body, err := json.Marshal(struct {
-		ChatID int64 `json:"chat_id"`
-	}{chatID})
-	if err != nil {
-		return false
-	}
-	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, "http://127.0.0.1:8765"+endpoint, bytes.NewReader(body))
-	if err != nil {
-		return false
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set(telegramAuthControlHeader, a.authControlSecret)
-	response, err := a.agent.Do(request)
-	if err != nil {
-		return false
-	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4*1024))
-	return response.StatusCode == http.StatusOK
 }
 
 func (a *adapter) startTyping(ctx context.Context, chatID int64) func() {
@@ -619,88 +521,6 @@ func truncateRunes(text string, max int) string {
 	return string(runes[:max]) + "…"
 }
 
-type authHandoffEvent struct {
-	Type            string `json:"type"`
-	Provider        string `json:"provider"`
-	Status          string `json:"status"`
-	VerificationURL string `json:"verification_url"`
-	UserCode        string `json:"user_code"`
-	ExpiresAt       string `json:"expires_at"`
-	Account         string `json:"account"`
-}
-
-func (a *adapter) handleAuthHandoffEvent(ctx context.Context, chatID int64, event authHandoffEvent) error {
-	if event.Provider != "github" {
-		return errors.New("unsupported authentication handoff")
-	}
-	var text string
-	switch event.Status {
-	case "started":
-		if !validGitHubVerificationURLForTelegram(event.VerificationURL) || !validGitHubDeviceCodeForTelegram(event.UserCode) {
-			return errors.New("invalid GitHub device instructions")
-		}
-		expiresAt, err := time.Parse(time.RFC3339, event.ExpiresAt)
-		if err != nil {
-			return errors.New("invalid GitHub device expiry")
-		}
-		text = "GitHub sign-in was requested. Open " + event.VerificationURL + " and enter code " + event.UserCode + ". This one-time code expires at " + expiresAt.UTC().Format(time.RFC3339Nano) + ". Do not share it."
-	case "completed":
-		if !validGitHubAccountForTelegram(event.Account) {
-			return errors.New("invalid verified GitHub account")
-		}
-		text = "GitHub sign-in completed. Verified account: " + event.Account + " on github.com."
-	case "cancellation_requested":
-		text = "GitHub sign-in cancellation was requested. Cleanup is pending; wait for the final status."
-	case "canceled":
-		text = "GitHub sign-in cancellation completed after cleanup. No new GitHub account was left installed."
-	case "expired":
-		text = "GitHub sign-in expired. Send /github-login again for a new handoff."
-	case "failed":
-		text = "GitHub sign-in could not be completed. No account was verified."
-	case "reconciliation_required":
-		text = "GitHub sign-in could not be safely rolled back. Manually reconcile the GitHub account in gh before retrying."
-	default:
-		return errors.New("unknown authentication handoff status")
-	}
-	if _, err := a.sendMessage(ctx, chatID, text); err != nil {
-		return errors.New("GitHub authentication status could not be delivered")
-	}
-	return nil
-}
-
-func validGitHubVerificationURLForTelegram(value string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	return err == nil && parsed.Scheme == "https" && parsed.Host == "github.com" && parsed.Path == "/login/device" && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.User == nil
-}
-
-func validGitHubDeviceCodeForTelegram(value string) bool {
-	value = strings.TrimSpace(value)
-	if len(value) < 4 || len(value) > 32 {
-		return false
-	}
-	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func validGitHubAccountForTelegram(value string) bool {
-	value = strings.TrimSpace(value)
-	if len(value) == 0 || len(value) > 39 || strings.ContainsAny(value, "\r\n") {
-		return false
-	}
-	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
 func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attachments []attachment.Incoming, onToolCall func(string, string)) (string, error) {
 	body, err := json.Marshal(struct {
 		Message     string                `json:"message"`
@@ -715,7 +535,7 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 		return "", fmt.Errorf("agent request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(telegramAuthControlHeader, a.authControlSecret)
+	req.Header.Set(telegramControlAuthorizationHeader, a.controlSecret)
 	resp, err := a.agent.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("agent request failed: %w", err)
@@ -747,7 +567,6 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 	var reply string
 	var modelError string
 	for scanner.Scan() {
-		var event authHandoffEvent
 		var toolEvent struct {
 			Type      string `json:"type"`
 			Name      string `json:"name"`
@@ -757,9 +576,6 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 			Type  string `json:"type"`
 			Reply string `json:"reply"`
 			Error string `json:"error"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return "", fmt.Errorf("agent request failed: %w", err)
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &toolEvent); err != nil {
 			return "", fmt.Errorf("agent request failed: %w", err)
@@ -787,11 +603,6 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 				// This is a terminal agent event. Deliver its validated warning
 				// even if the remaining response stream is broken.
 				return "", agentModelError{message: replyEvent.Error}
-			}
-		case "auth_handoff":
-			if err := a.handleAuthHandoffEvent(ctx, chatID, event); err != nil {
-				_ = a.cancelGitHubLogin(ctx, chatID)
-				return "", errors.New("agent authentication handoff failed")
 			}
 		}
 	}

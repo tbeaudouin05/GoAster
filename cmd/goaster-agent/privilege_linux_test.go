@@ -102,7 +102,7 @@ func TestUnprivilegedAgentHelper(t *testing.T) {
 	})
 	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set(githubAuthControlHeader, testGitHubAuthControlSecret)
+	r.Header.Set(controlAuthorizationHeader, testControlSecret)
 	w := httptest.NewRecorder()
 	handler(provider, readyAuth).ServeHTTP(w, r)
 	if w.Code != http.StatusOK || pathName == "" {
