@@ -507,6 +507,10 @@ func TestBundledGitHubAuthDocumentsExact(t *testing.T) {
 	wantAuth := strings.Join([]string{
 		"# GitHub authentication",
 		"",
+		"Before checking authentication or logging in, check that \x60/usr/bin/gh\x60 exists",
+		"and is executable. If it does not, install GitHub CLI at exactly",
+		"\x60/usr/bin/gh\x60 before proceeding with login.",
+		"",
 		"Check authentication on the user's host:",
 		"",
 		"\x60\x60\x60sh",
