@@ -41,7 +41,7 @@ var (
 	ErrBackgroundSessionNotInteractive   = errors.New("background command session does not accept input")
 	ErrBackgroundSessionInputUnavailable = errors.New("background command session input is unavailable")
 	ErrBackgroundSessionInputBusy        = errors.New("background command session input queue is full")
-	ErrPTYNotSupported                   = errors.New("PTY is not supported on this platform")
+	ErrPTYNotSupported                   = errors.New("PTY sessions are disabled because descendant cleanup cannot be guaranteed")
 )
 
 // BackgroundCommandConfig is the owner-managed list of named commands that
@@ -95,6 +95,7 @@ type BackgroundSession struct {
 	StderrTruncated bool      `json:"stderr_truncated,omitempty"`
 	Interactive     bool      `json:"interactive,omitempty"`
 	PTY             bool      `json:"pty,omitempty"`
+	InputFailed     bool      `json:"input_failed,omitempty"`
 }
 
 // BackgroundSessionOutput pairs the current captured output with its runtime
@@ -117,11 +118,12 @@ type BackgroundExecution struct {
 // completion channel keep operating-system process details inside this
 // package.
 type BackgroundProcess struct {
-	Stop     func()
-	Snapshot func() Result
-	Write    func(string) error
-	KeyMode  func() BackgroundPtyKeyMode
-	Done     <-chan BackgroundExecution
+	Stop        func()
+	Snapshot    func() Result
+	Write       func(string) error
+	InputFailed func() bool
+	KeyMode     func() BackgroundPtyKeyMode
+	Done        <-chan BackgroundExecution
 }
 
 // BackgroundCommandManager owns in-memory sessions for one GoAster runtime.
@@ -667,6 +669,10 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 				PTY:         selected.PTY,
 			})
 			if err != nil {
+				if errors.Is(err, ErrPTYNotSupported) {
+					response.err = ErrPTYNotSupported
+					break
+				}
 				response.err = errors.New("background command could not be started")
 				break
 			}
@@ -779,6 +785,10 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 
 func refreshManagedBackgroundSessions(sessions map[string]managedBackgroundSession) {
 	for id, managed := range sessions {
+		if managed.process.InputFailed != nil {
+			managed.session.InputFailed = managed.process.InputFailed()
+			sessions[id] = managed
+		}
 		if managed.finished {
 			continue
 		}
@@ -886,7 +896,7 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 		return BackgroundProcess{}, errors.New("executable or arguments are invalid")
 	}
 	if req.PTY {
-		req.Interactive = true
+		return BackgroundProcess{}, ErrPTYNotSupported
 	}
 	if req.Timeout < 0 {
 		return BackgroundProcess{}, errors.New("command timeout must not be negative")
@@ -983,43 +993,7 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 
 	done := make(chan BackgroundExecution, 1)
 	processFinished := make(chan struct{})
-	inputQueue := make(chan string, backgroundInputQueueSize)
-	if inputWriter != nil {
-		// Keep process input off the manager's request loop. A child is allowed to
-		// stop reading, so a direct pipe or PTY write must never hold up status,
-		// output, or stop requests. The queue is deliberately small and bounded.
-		go func() {
-			for {
-				select {
-				case data := <-inputQueue:
-					_, _ = io.WriteString(inputWriter, data)
-				case <-processFinished:
-					return
-				}
-			}
-		}()
-	}
-	writeInput := func(data string) error {
-		if len(data) > MaxSessionInputBytes {
-			return fmt.Errorf("session input exceeds the %d-byte limit", MaxSessionInputBytes)
-		}
-		if inputWriter == nil {
-			return ErrBackgroundSessionInputUnavailable
-		}
-		select {
-		case <-processFinished:
-			return ErrBackgroundSessionDone
-		default:
-		}
-		select {
-		case inputQueue <- data:
-			return nil
-		case <-processFinished:
-			return ErrBackgroundSessionDone
-		default:
-			return ErrBackgroundSessionInputBusy
-		}
-	}
+	writeInput, inputFailed := backgroundInputWriter(inputWriter, processFinished)
 
 	var keyModeMu sync.RWMutex
 	keyMode := BackgroundPtyKeyModeCSI
@@ -1093,12 +1067,67 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 		close(done)
 	}()
 	return BackgroundProcess{
-		Stop:     stop,
-		Snapshot: snapshot,
-		Write:    func(data string) error { return writeInput(data) },
-		KeyMode:  currentKeyMode,
-		Done:     done,
+		Stop:        stop,
+		Snapshot:    snapshot,
+		Write:       writeInput,
+		InputFailed: inputFailed,
+		KeyMode:     currentKeyMode,
+		Done:        done,
 	}, nil
+}
+
+// backgroundInputWriter reports queue acceptance, not delivery. A failed or short
+// write permanently closes the input path and makes the failure observable.
+func backgroundInputWriter(writer io.Writer, finished <-chan struct{}) (func(string) error, func() bool) {
+	queue := make(chan string, backgroundInputQueueSize)
+	var mu sync.Mutex
+	failed := false
+	if writer != nil {
+		go func() {
+			for {
+				select {
+				case data := <-queue:
+					n, err := io.WriteString(writer, data)
+					if err != nil || n != len(data) {
+						mu.Lock()
+						failed = true
+						mu.Unlock()
+						return
+					}
+				case <-finished:
+					return
+				}
+			}
+		}()
+	}
+	write := func(data string) error {
+		if len(data) > MaxSessionInputBytes {
+			return fmt.Errorf("session input exceeds the %d-byte limit", MaxSessionInputBytes)
+		}
+		if writer == nil {
+			return ErrBackgroundSessionInputUnavailable
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if failed {
+			return ErrBackgroundSessionInputUnavailable
+		}
+		select {
+		case <-finished:
+			return ErrBackgroundSessionDone
+		default:
+		}
+		select {
+		case <-finished:
+			return ErrBackgroundSessionDone
+		case queue <- data:
+			return nil
+		default:
+			return ErrBackgroundSessionInputBusy
+		}
+	}
+	failure := func() bool { mu.Lock(); defer mu.Unlock(); return failed }
+	return write, failure
 }
 
 func waitForBackgroundPTYOutput(terminal io.ReadWriteCloser, readDone <-chan struct{}) {

@@ -70,6 +70,10 @@ func backgroundTestHelper() {
 			os.Exit(2)
 		}
 		fmt.Printf("input-received:%s", strings.TrimSuffix(line, "\n"))
+	case "interactive-closed-input":
+		_ = os.Stdin.Close()
+		fmt.Print("input-closed")
+		time.Sleep(1500 * time.Millisecond)
 	case "interactive-no-read":
 		fmt.Print("input-ready")
 		time.Sleep(1500 * time.Millisecond)
@@ -183,6 +187,9 @@ func exerciseBackgroundCommandSupport(t testing.TB) {
 	exerciseBackgroundLifecycle(t)
 	exerciseBackgroundInteractiveInput(t)
 	exerciseBackgroundInputDoesNotBlockManager(t)
+	exerciseBackgroundInputWriteFailure(t)
+	exerciseBackgroundPTYDisabled(t)
+	exerciseBackgroundClosedInputReported(t)
 	exerciseBackgroundPTYInput(t)
 	exerciseBackgroundKeyEncoding(t)
 	exerciseBackgroundCompletionTime(t)
@@ -788,5 +795,80 @@ func exerciseBackgroundCanceledStart(t testing.TB) {
 	stopped := waitBackgroundState(t, manager, sessions[0].ID, "stopped", "failed")
 	if stopped.State != "stopped" {
 		t.Fatalf("canceled start left session = %+v", stopped)
+	}
+}
+
+func exerciseBackgroundInputWriteFailure(t testing.TB) {
+	for _, test := range []struct {
+		name  string
+		write outputWriterFunc
+	}{
+		{"error", func(p []byte) (int, error) { return 0, errors.New("pipe closed") }},
+		{"short", func(p []byte) (int, error) { return len(p) - 1, nil }},
+	} {
+		func() {
+			finished := make(chan struct{})
+			defer close(finished)
+			write, failed := backgroundInputWriter(test.write, finished)
+			if err := write("abc"); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.After(time.Second)
+			for !failed() {
+				select {
+				case <-deadline:
+					t.Fatal("failure not recorded")
+				default:
+					time.Sleep(time.Millisecond)
+				}
+			}
+			if err := write("later"); !errors.Is(err, ErrBackgroundSessionInputUnavailable) {
+				t.Fatalf("subsequent write: %v", err)
+			}
+		}()
+	}
+}
+
+func exerciseBackgroundPTYDisabled(t testing.TB) {
+	process, err := StartBackground(BackgroundRequest{Executable: backgroundTestExecutable(t), Args: backgroundHelperArgs("hold"), PTY: true})
+	if !errors.Is(err, ErrPTYNotSupported) {
+		if process.Stop != nil {
+			process.Stop()
+		}
+		t.Fatalf("PTY start: %v", err)
+	}
+}
+
+func exerciseBackgroundClosedInputReported(t testing.TB) {
+	path := filepath.Join(t.TempDir(), "background-commands.json")
+	writeBackgroundConfig(t, path, BackgroundCommandDefinition{Name: "closed", Executable: backgroundTestExecutable(t), Args: backgroundHelperArgs("interactive-closed-input"), Interactive: true})
+	manager := NewBackgroundCommandManagerAt(path)
+	defer manager.Close()
+	session, err := manager.Start(context.Background(), "closed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundOutput(t, manager, session.ID, "input-closed")
+	if _, err := manager.Input(context.Background(), session.ID, "control"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(time.Second)
+	for {
+		state, err := manager.Get(context.Background(), session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.InputFailed {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("input failure not visible in session")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if _, err := manager.Input(context.Background(), session.ID, "later"); !errors.Is(err, ErrBackgroundSessionInputUnavailable) {
+		t.Fatalf("subsequent input: %v", err)
 	}
 }

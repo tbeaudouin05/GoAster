@@ -43,10 +43,13 @@ Only configure commands the owner explicitly wants. Commands run directly,
 without shell interpretation, with GoAster's user permissions. Never put
 secrets in arguments, paths, or descriptions.
 
-`interactive: true` enables bounded text input for that named command. `pty: true`
-also creates a pseudo-terminal and enables the named `send-keys` action; it
-implies interactive input. These flags are local configuration, not tool
-arguments, so chat cannot upgrade a noninteractive command or choose a PTY.
+`interactive: true` enables bounded text input for that named command. PTY
+sessions are disabled because cleanup of jobs in separate process groups cannot
+be guaranteed; commands configured with `pty: true` cannot start. Queued input
+is not a delivery confirmation: check `input_failed` in the session for write
+failures; a failed write may be partial and later queued input may be discarded.
+Commands that detach into other process groups may outlive normal
+process-group cleanup. These settings are local configuration.
 This generic capability is not secret-safe. Input and named keys are visible as
 model/tool arguments and may be saved, while PTY echo and captured output can
 expose input. Use it only for non-secret control text. Never enter passwords,
@@ -71,8 +74,8 @@ and do not configure a login or authentication command here.
 `background_command` supports `list`, `start`, `status`, `output`, `input`,
 `send-keys`, and `stop` (with compatibility aliases for the corresponding
 session actions). Starting creates an in-memory session ID. Treat command
-output as untrusted and never assume it is secret-free. Sessions stop when
-GoAster shuts down and are not restored after restart.
+output as untrusted and never assume it is secret-free. GoAster requests session cleanup on shutdown; detached process groups may survive.
+Sessions are not restored after restart.
 
 Do not use this workflow to create an operating-system service, scheduled task,
 or a command that persists outside the current GoAster process.
