@@ -30,7 +30,7 @@ func run(ctx context.Context, args []string, input io.Reader, output, errorOutpu
 	return runWithSSH(ctx, args, input, output, errorOutput, executeSSH)
 }
 
-func runWithSSH(ctx context.Context, args []string, input io.Reader, output, errorOutput io.Writer, sshRun sshRunner) error {
+func runWithSSH(ctx context.Context, args []string, input io.Reader, output, errorOutput io.Writer, sshRun sshRunner) (runErr error) {
 	if len(args) > 0 && args[0] == "remote-login" {
 		return runRemoteLogin(ctx, args[1:], input, output, errorOutput, sshRun)
 	}
@@ -78,7 +78,7 @@ func runWithSSH(ctx context.Context, args []string, input io.Reader, output, err
 	}
 	stopSignalHandler := backgroundManager.CloseOnSignal()
 	defer stopSignalHandler()
-	defer backgroundManager.Close()
+	defer func() { runErr = errors.Join(runErr, backgroundManager.Close()) }()
 	if err := chat.RegisterBackgroundCommandTool(codexProvider, backgroundManager); err != nil {
 		return fmt.Errorf("register background command tool: %w", err)
 	}

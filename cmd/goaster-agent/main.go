@@ -105,7 +105,7 @@ func probeAgent(ctx context.Context, probe string, output io.Writer) error {
 	return err
 }
 
-func serve(store chat.CredentialStore) error {
+func serve(store chat.CredentialStore) (serveErr error) {
 	controlSecret, err := controlsecret.Load()
 	if err != nil {
 		return err
@@ -124,7 +124,7 @@ func serve(store chat.CredentialStore) error {
 	if err != nil {
 		return fmt.Errorf("initialize background command manager: %w", err)
 	}
-	defer backgroundManager.Close()
+	defer func() { serveErr = errors.Join(serveErr, backgroundManager.Close()) }()
 	if err := chat.RegisterBackgroundCommandTool(provider, backgroundManager); err != nil {
 		return fmt.Errorf("register background command tool: %w", err)
 	}

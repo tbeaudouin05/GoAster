@@ -1,6 +1,9 @@
 package command
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,7 +18,9 @@ func (manager BackgroundCommandManager) CloseOnSignal() func() {
 	go func() {
 		select {
 		case received := <-signals:
-			_ = manager.Close()
+			if err := reportBackgroundShutdown(manager.Close(), os.Stderr); err != nil {
+				os.Exit(1)
+			}
 			signal.Stop(signals)
 			if received == os.Interrupt {
 				os.Exit(130)
@@ -28,4 +33,17 @@ func (manager BackgroundCommandManager) CloseOnSignal() func() {
 		signal.Stop(signals)
 		close(done)
 	}
+}
+
+// Return both cleanup and diagnostic write failures to the runtime.
+func reportBackgroundShutdown(cleanupErr error, output io.Writer) error {
+	if cleanupErr == nil {
+		return nil
+	}
+	message := fmt.Sprintf("background command shutdown failed: %v\n", cleanupErr)
+	written, writeErr := io.WriteString(output, message)
+	if writeErr == nil && written != len(message) {
+		writeErr = io.ErrShortWrite
+	}
+	return errors.Join(cleanupErr, writeErr)
 }

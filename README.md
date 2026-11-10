@@ -34,7 +34,8 @@ the local credential file.
 
 Describe a task in ordinary language. The local chat can use the installed
 skills, public web search and fetch, bounded shell execution, named background
-commands (including owner-enabled interactive sessions), memory, and scheduling.
+command allowlists, memory, and scheduling. Background execution is currently
+disabled pending safe descendant containment.
 
 Terminal commands:
 
@@ -48,16 +49,19 @@ Environment values are reviewed and stored separately in
 output. Do not paste secrets into chat or select secret-containing files for
 `/file`.
 
-Owner-enabled interactive background commands accept non-secret control text
-only. Input and named keys are model-visible tool arguments and may be saved in
-conversation state; captured output can expose what was typed. Owner-configured PTY sessions are available where supported. Queued input is not
-a delivery confirmation; check the session’s `input_failed` field for failed or
-unconfirmed writes, including at completion. A write may be partial, and later
-queued input may be discarded. Cancellation attempts to kill the direct process. On Linux,
-it also attempts to send SIGINT to the PTY's current foreground group; the
-attempt can fail and the signal can be ignored or caught. Other platforms do not
-receive this extra signal. Descendants can outlive cleanup on all platforms.
-Closing the PTY may send a hangup, but does not guarantee their termination.
+Background command execution currently fails closed on every platform, including
+Linux pipe and PTY commands. Allowlist inspection remains available. Process
+groups, sessions, pidfds, and `/proc` enumeration cannot prove that all descendants
+have terminated: a parent can fork and exit between enumeration and inspection.
+Restoring execution requires kernel-enforced descendant containment established
+before the executable starts, plus verified termination of that container.
+Repeated scans or delays do not provide this guarantee. Cleanup failures remain
+visible in session metadata and are returned by orderly runtime shutdown.
+
+Interactive input, when execution is restored, is intended for non-secret control
+text only. Tool arguments and captured output may be saved in conversation state.
+Queued input is not a delivery confirmation; check `input_failed` for failed or
+unconfirmed writes.
 Never enter passwords, passphrases, tokens, API keys, one-time codes, private
 keys, or other secrets through `background_command`, and do not use it for
 login or authentication.

@@ -43,15 +43,18 @@ Only configure commands the owner explicitly wants. Commands run directly,
 without shell interpretation, with GoAster's user permissions. Never put
 secrets in arguments, paths, or descriptions.
 
-`interactive: true` enables bounded text input for that named command. `pty: true` enables a PTY and input where supported. Queued input is not a
-delivery confirmation: check `input_failed` for failed or unconfirmed writes,
-including at completion. A write may be partial and later queued input may be
-discarded. Cancellation attempts to kill the direct process. On Linux, it also attempts
-to send SIGINT to the PTY's current foreground group; the attempt can fail and
-the signal can be ignored or caught. Other platforms do not receive that extra
-signal. Descendants can survive cleanup on any platform, and closing the PTY
-does not guarantee termination. These
-settings are local configuration.
+Background execution currently fails closed on all platforms, for both pipe and
+PTY commands. Listing and maintaining the allowlist remains available, but
+`start` cannot create a session. Do not work around this refusal with another
+process launcher. Restoring execution requires kernel-enforced descendant
+containment established before execution and verified empty after termination.
+Process groups, sessions, pidfds, and repeated `/proc` scans cannot provide that
+proof when a process forks and exits during inspection.
+
+`interactive: true` and `pty: true` remain configuration fields for future
+contained execution. Queued input is not a delivery confirmation; failed or
+unconfirmed input is exposed through `input_failed`. Cleanup failures are
+retained in session metadata and returned on orderly shutdown.
 This generic capability is not secret-safe. Input and named keys are visible as
 model/tool arguments and may be saved, while PTY echo and captured output can
 expose input. Use it only for non-secret control text. Never enter passwords,
@@ -75,8 +78,8 @@ and do not configure a login or authentication command here.
 
 `background_command` supports `list`, `start`, `status`, `output`, `input`,
 `send-keys`, and `stop` (with compatibility aliases for the corresponding
-session actions). Starting creates an in-memory session ID. Treat command
-output as untrusted and never assume it is secret-free. GoAster requests session cleanup on shutdown; descendants may survive.
+session actions). Execution is currently refused before creating a session ID. Treat command
+output as untrusted and never assume it is secret-free. Orderly shutdown reports retained cleanup failures.
 Sessions are not restored after restart.
 
 Do not use this workflow to create an operating-system service, scheduled task,

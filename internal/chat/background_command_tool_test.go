@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"goaster/internal/command"
 )
@@ -104,15 +103,15 @@ func exerciseBackgroundCommandTool(t testing.TB) {
 		}
 	}
 	started, err := registered.Handler(context.Background(), `{"action":"start","name":"preview"}`)
-	if err != nil || !strings.Contains(started, `"status":"started"`) {
-		t.Fatalf("start result = %q, error = %v", started, err)
+	if err != nil || !strings.Contains(started, `"status":"start_failed"`) {
+		t.Fatalf("unsafe background start was accepted: %q, %v", started, err)
 	}
 	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	listed, err = registered.Handler(context.Background(), `{"action":"list"}`)
-	if err != nil || !strings.Contains(listed, `"status":"configuration_unavailable"`) || !strings.Contains(listed, `"id":"bg-000001"`) {
-		t.Fatalf("list with invalid config = %q, error = %v; want existing session for recovery", listed, err)
+	if err != nil || !strings.Contains(listed, `"status":"configuration_unavailable"`) || strings.Contains(listed, `"id":"bg-000001"`) {
+		t.Fatalf("list with invalid config = %q, error = %v; want configuration error without a session", listed, err)
 	}
 	for _, arguments := range []string{
 		`{"action":"list","action":"start"}`,
@@ -161,32 +160,18 @@ func TestBackgroundCommandToolSupportsAllowlistedInput(t *testing.T) {
 		t.Fatalf("interactive list = %q, error = %v", listed, err)
 	}
 	started, err := registered.Handler(context.Background(), `{"action":"start","name":"interactive"}`)
-	if err != nil || !strings.Contains(started, `"status":"started"`) {
-		t.Fatalf("interactive start = %q, error = %v", started, err)
+	if err != nil || !strings.Contains(started, `"status":"start_failed"`) {
+		t.Fatalf("interactive command bypassed containment refusal: %q, %v", started, err)
 	}
-	input, err := registered.Handler(context.Background(), `{"action":"input","id":"bg-000001","data":"hello\n"}`)
-	if err != nil || !strings.Contains(input, `"status":"input_queued"`) {
-		t.Fatalf("interactive input = %q, error = %v", input, err)
-	}
-
-	deadline := time.Now().Add(3 * time.Second)
-	var output string
-	for time.Now().Before(deadline) {
-		output, err = registered.Handler(context.Background(), `{"action":"output","id":"bg-000001"}`)
-		if err != nil {
-			t.Fatal(err)
+	for _, action := range []string{"input", "output", "stop"} {
+		arguments := fmt.Sprintf(`{"action":%q,"id":"bg-000001"}`, action)
+		if action == "input" {
+			arguments = `{"action":"input","id":"bg-000001","data":"hello"}`
 		}
-		if strings.Contains(output, "tool-received:hello") && strings.Contains(output, `"state":"exited"`) {
-			break
+		result, err := registered.Handler(context.Background(), arguments)
+		if err != nil || !strings.Contains(result, `"status":"not_found"`) {
+			t.Fatalf("refused session remained accessible: %q, %v", result, err)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !strings.Contains(output, "tool-received:hello") || !strings.Contains(output, `"state":"exited"`) {
-		t.Fatalf("interactive tool output = %q", output)
-	}
-	completed, err := registered.Handler(context.Background(), `{"action":"write","id":"bg-000001","data":"late"}`)
-	if err != nil || !strings.Contains(completed, `"status":"completed"`) {
-		t.Fatalf("late interactive input = %q, error = %v", completed, err)
 	}
 
 	for _, arguments := range []string{

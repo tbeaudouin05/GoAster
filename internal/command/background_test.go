@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,13 @@ func backgroundTestHelper() {
 	}
 	args := os.Args[index+2:]
 	switch os.Args[index+1] {
+	case "fork-exit":
+		_ = os.WriteFile(args[0], []byte("parent launched"), 0600)
+		child := exec.Command(os.Args[0], backgroundHelperArgs("waitfile", args[0]+"-child")...)
+		if err := child.Start(); err != nil {
+			os.Exit(9)
+		}
+		os.Exit(0)
 	case "report":
 		dir, err := os.Getwd()
 		if err != nil {
@@ -108,6 +116,7 @@ func backgroundTestHelper() {
 		}
 		os.Exit(5)
 	default:
+		backgroundPlatformHelper(os.Args[index+1], args)
 		os.Exit(6)
 	}
 	os.Exit(0)
@@ -183,6 +192,15 @@ func waitBackgroundOutput(t testing.TB, manager BackgroundCommandManager, id, wa
 func exerciseBackgroundCommandSupport(t testing.TB) {
 	t.Helper()
 	exerciseBackgroundConfig(t)
+	exerciseBackgroundCloseDeadline(t)
+	exerciseBackgroundKeyEncoding(t)
+	exerciseBackgroundPlatformLifecycle(t)
+	if !backgroundLifecycleSupported() {
+		// Runtime integration cases below require containment. Assert refusal
+		// before launch instead; never bypass the production safety gate.
+		exerciseBackgroundPTYInput(t)
+		return
+	}
 	exerciseBackgroundExactArgvAndReload(t)
 	exerciseBackgroundLifecycle(t)
 	exerciseBackgroundInteractiveInput(t)
@@ -190,9 +208,7 @@ func exerciseBackgroundCommandSupport(t testing.TB) {
 	exerciseBackgroundInputWriteFailure(t)
 	exerciseBackgroundClosedInputReported(t)
 	exerciseBackgroundPTYInput(t)
-	exerciseBackgroundKeyEncoding(t)
 	exerciseBackgroundCompletionTime(t)
-	exerciseBackgroundCloseDeadline(t)
 	exerciseBackgroundCanceledStart(t)
 	exerciseBackgroundSignalShutdown(t)
 }
@@ -233,19 +249,124 @@ func exerciseBackgroundCloseDeadline(t testing.TB) {
 		"first":  {process: BackgroundProcess{Stop: func() { stopped <- "first" }, Done: make(chan BackgroundExecution)}},
 		"second": {process: BackgroundProcess{Stop: func() { stopped <- "second" }, Done: make(chan BackgroundExecution)}},
 	}
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		closeManagedBackgroundSessions(sessions, 50*time.Millisecond)
-		close(done)
+		done <- closeManagedBackgroundSessions(sessions, 50*time.Millisecond)
 	}()
 	select {
-	case <-done:
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "deadline") {
+			t.Fatalf("shutdown concealed deadline failure: %v", err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("manager shutdown exceeded its deadline")
 	}
 	if len(stopped) != len(sessions) {
 		t.Fatalf("shutdown stopped %d processes, want %d", len(stopped), len(sessions))
 	}
+	manager := BackgroundCommandManager{requests: make(chan backgroundManagerRequest), done: make(chan struct{})}
+	cleanupFailure := errors.New("cleanup failed during close")
+	go func() {
+		request := <-manager.requests
+		request.response <- backgroundManagerResponse{err: cleanupFailure}
+		close(manager.done)
+	}()
+	if err := manager.Close(); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("Close hid cleanup failure: %v", err)
+	}
+	<-manager.done
+
+	for _, failure := range []error{cleanupFailure, errors.Join(context.Canceled, cleanupFailure), errors.Join(ErrOutputLimit, cleanupFailure)} {
+		for _, refreshed := range []bool{false, true} {
+			completed := make(chan BackgroundExecution, 1)
+			completed <- BackgroundExecution{Err: failure, FinishedAt: time.Now().UTC()}
+			close(completed)
+			sessions := map[string]managedBackgroundSession{"failed": {stopRequested: true, process: BackgroundProcess{Stop: func() {}, Done: completed}}}
+			if refreshed {
+				refreshManagedBackgroundSessions(sessions)
+			}
+			if err := closeManagedBackgroundSessions(sessions, time.Second); !errors.Is(err, cleanupFailure) {
+				t.Fatalf("shutdown concealed failure after refresh=%v: %v", refreshed, err)
+			}
+			if got := sessions["failed"].session; got.State != "failed" || got.Error == "" {
+				t.Fatalf("cleanup failure lost: %+v", got)
+			}
+			if err := closeManagedBackgroundSessions(sessions, time.Second); !errors.Is(err, cleanupFailure) {
+				t.Fatalf("repeated shutdown concealed failure: %v", err)
+			}
+		}
+	}
+	// Repeated/concurrent Close callers must all observe the same result.
+	manager = BackgroundCommandManager{requests: make(chan backgroundManagerRequest), done: make(chan struct{}), closeResult: make(chan error, 1)}
+	manager.closeResult <- cleanupFailure
+	close(manager.done)
+	results := make(chan error, 8)
+	for i := 0; i < cap(results); i++ {
+		go func() { results <- manager.Close() }()
+	}
+	for i := 0; i < cap(results); i++ {
+		if err := <-results; !errors.Is(err, cleanupFailure) {
+			t.Fatalf("Close lost result: %v", err)
+		}
+	}
+	writeFailure := errors.New("diagnostic output failed")
+	if err := reportBackgroundShutdown(cleanupFailure, outputWriterFunc(func(data []byte) (int, error) { return 0, writeFailure })); !errors.Is(err, cleanupFailure) || !errors.Is(err, writeFailure) {
+		t.Fatalf("shutdown diagnostic lost errors: %v", err)
+	}
+	if err := reportBackgroundShutdown(cleanupFailure, outputWriterFunc(func(data []byte) (int, error) { return 0, nil })); !errors.Is(err, cleanupFailure) || !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("shutdown diagnostic lost short write: %v", err)
+	}
+	closed := make(chan BackgroundExecution)
+	close(closed)
+	missing := map[string]managedBackgroundSession{"missing": {process: BackgroundProcess{Done: closed}}}
+	refreshManagedBackgroundSessions(missing)
+	if err := closeManagedBackgroundSessions(missing, time.Second); err == nil {
+		t.Fatal("missing completion result was treated as clean")
+	}
+	retained := map[string]managedBackgroundSession{"failed": {finished: true, err: cleanupFailure}}
+	order := []string{"failed"}
+	for i := 1; i < maxBackgroundSessions; i++ {
+		id := fmt.Sprint(i)
+		retained[id] = managedBackgroundSession{finished: true}
+		order = append(order, id)
+	}
+	if _, err := makeBackgroundSessionRoom(retained, order); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := retained["failed"]; !ok {
+		t.Fatal("session eviction discarded a cleanup failure")
+	}
+	if err := closeManagedBackgroundSessions(retained, time.Second); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("eviction hid cleanup error: %v", err)
+	}
+	for _, timeout := range []bool{false, true} {
+		readFailure := errors.New("PTY output read failed")
+		closeFailure := errors.New("PTY output close failed")
+		readDone := make(chan error, 1)
+		if !timeout {
+			readDone <- readFailure
+			close(readDone)
+		}
+		terminal := backgroundOutputTestTerminal{close: func() error {
+			if timeout {
+				readDone <- readFailure
+				close(readDone)
+			}
+			return closeFailure
+		}}
+		if err := waitForBackgroundPTYOutput(terminal, readDone); !errors.Is(err, readFailure) || !errors.Is(err, closeFailure) || (timeout && !strings.Contains(err.Error(), "deadline")) {
+			t.Fatalf("PTY output lost errors (timeout=%v): %v", timeout, err)
+		}
+	}
+
+	started := time.Now()
+	if err := waitForBackgroundPTYOutput(backgroundOutputTestTerminal{close: func() error { return nil }}, make(chan error)); err == nil || !strings.Contains(err.Error(), "did not finish") {
+		t.Fatalf("unfinished output reader reported success: %v", err)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatal("output error handling exceeded its bound")
+	}
+
 }
 
 func exerciseBackgroundConfig(t testing.TB) {
@@ -449,7 +570,15 @@ func exerciseBackgroundInputDoesNotBlockManager(t testing.TB) {
 
 func exerciseBackgroundPTYInput(t testing.TB) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
+	if !backgroundPTYSupported() {
+		marker := filepath.Join(t.TempDir(), "pty-started")
+		_, err := StartBackground(BackgroundRequest{Executable: backgroundTestExecutable(t), Args: backgroundHelperArgs("mark-ready", marker), PTY: true})
+		if !errors.Is(err, ErrPTYNotSupported) {
+			t.Fatalf("unsupported PTY: %v", err)
+		}
+		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unsupported PTY launched a child: %v", err)
+		}
 		return
 	}
 	executable := backgroundTestExecutable(t)
@@ -677,7 +806,11 @@ func exerciseBackgroundLifecycle(t testing.TB) {
 			t.Fatal(err)
 		}
 		incomplete = waitBackgroundState(t, manager, incomplete.ID, "failed", "exited")
-		if incomplete.State != "failed" || incomplete.ExitCode != 0 {
+		wantState := "failed"
+		if runtime.GOOS == "linux" {
+			wantState = "exited"
+		}
+		if incomplete.State != wantState || incomplete.ExitCode != 0 {
 			t.Fatalf("session with incomplete output = %+v", incomplete)
 		}
 	}
@@ -858,5 +991,50 @@ func exerciseBackgroundClosedInputReported(t testing.TB) {
 	}
 	if _, err := manager.Input(context.Background(), session.ID, "later"); !errors.Is(err, ErrBackgroundSessionInputUnavailable) {
 		t.Fatalf("subsequent input: %v", err)
+	}
+}
+
+// Value methods keep output-error fixtures free of pointer declarations.
+type backgroundOutputTestTerminal struct{ close func() error }
+
+func (terminal backgroundOutputTestTerminal) Read(data []byte) (int, error)  { return 0, io.EOF }
+func (terminal backgroundOutputTestTerminal) Write(data []byte) (int, error) { return len(data), nil }
+func (terminal backgroundOutputTestTerminal) Close() error                   { return terminal.close() }
+
+// A fork followed by parent exit invalidates enumeration-based proofs. Refuse
+// the entire execution before that race is possible, for pipes and job-control
+// PTYs alike. The marker checks cover both direct and manager entry points.
+func exerciseBackgroundContainmentRefusal(t testing.TB) {
+	t.Helper()
+	for _, terminal := range []bool{false, true} {
+		marker := filepath.Join(t.TempDir(), "fork-exit")
+		args := backgroundHelperArgs("fork-exit", marker)
+		want := ErrBackgroundCleanupUnavailable
+		if terminal {
+			want = ErrPTYNotSupported
+		}
+		process, err := StartBackground(BackgroundRequest{Executable: backgroundTestExecutable(t), Args: args, PTY: terminal})
+		if !errors.Is(err, want) || process.Done != nil {
+			t.Fatalf("unsafe launch accepted: %+v, %v", process, err)
+		}
+		path := filepath.Join(t.TempDir(), "commands.json")
+		writeBackgroundConfig(t, path, BackgroundCommandDefinition{Name: "fork-exit", Executable: backgroundTestExecutable(t), Args: args, PTY: terminal})
+		manager := NewBackgroundCommandManagerAt(path)
+		session, err := manager.Start(context.Background(), "fork-exit")
+		if !errors.Is(err, want) || session.ID != "" {
+			t.Fatalf("manager accepted unsafe launch: %+v, %v", session, err)
+		}
+		sessions, err := manager.List(context.Background())
+		if err != nil || len(sessions) != 0 {
+			t.Fatalf("refused launch created a session: %+v, %v", sessions, err)
+		}
+		if err := manager.Close(); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{marker, marker + "-child"} {
+			if _, err := os.Stat(name); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("refused command executed: %s, %v", name, err)
+			}
+		}
 	}
 }

@@ -936,12 +936,15 @@ func TestCodexProviderSendsConversationHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var recoveryRequests, unavailableRequests atomic.Int32
+	// DefaultModel and EmergencyModel may be the same ID. Scope rejection to
+	// the valid-configuration phase rather than using model identity alone.
+	var unavailablePhase atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request codexRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode Codex request: %v", err)
 		}
-		if request.Model == DefaultModel {
+		if request.Model == DefaultModel && unavailablePhase.Load() {
 			unavailableRequests.Add(1)
 			http.Error(w, "model unavailable", http.StatusNotFound)
 			return
@@ -1007,6 +1010,7 @@ func TestCodexProviderSendsConversationHistory(t *testing.T) {
 		t.Fatalf("emergency model requests = %d, want 2", count)
 	}
 
+	unavailablePhase.Store(true)
 	validPath := filepath.Join(t.TempDir(), "openai-models.json")
 	validSession := NewSession(Config{Registry: NewModelRegistryAt(validPath)}, provider)
 	for _, message := range []string{"first request", "second request"} {
