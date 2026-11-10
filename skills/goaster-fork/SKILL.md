@@ -5,8 +5,8 @@ standard branches. Stop after the fork and branches are verified. Do not
 commit, push, reset, deploy, create a pull request, or change application
 files.
 
-Use the canonical [github-cli skill](../github-cli/SKILL.md) and its
-[authorization rules](../github-cli/AUTH.md) before any GitHub access. That
+Use the canonical [github-auth skill](../github-auth/SKILL.md) and its
+[authorization rules](../github-auth/AUTH.md) before any GitHub access. That
 skill owns generic host selection, authentication, secret handling,
 read-only discovery, and GitHub write safety. This skill adds the GoAster
 fork-specific procedure below; do not create a second authentication flow.
@@ -31,7 +31,7 @@ fork-specific procedure below; do not create a second authentication flow.
 
 ## Read-only preflight
 
-1. Follow `github-cli` to verify the host and authenticated login before API
+1. Follow `github-auth` to verify the host and authenticated login before API
    requests and after any authentication change. Confirm the exact upstream
    repository through GitHub, not a local remote. Require
    `tbeaudouin05/GoAster`, public visibility, `fork: false`, and a non-empty

@@ -1,7 +1,7 @@
 # Authorization
 
-Follow the canonical [github-cli skill](../github-cli/SKILL.md) and its
-[authorization rules](../github-cli/AUTH.md) for host selection,
+Follow the canonical [github-auth skill](../github-auth/SKILL.md) and its
+[authorization rules](../github-auth/AUTH.md) for host selection,
 authentication, credential handling, read-only discovery, and generic GitHub
 write safety. This skill adds the GoAster-specific fork and branch approvals;
 it does not replace the generic GitHub contract.

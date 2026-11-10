@@ -498,28 +498,91 @@ func equalStrings(left, right []string) bool {
 	return true
 }
 
-func TestBundledGitHubLoginProfileMatchesSkill(t *testing.T) {
-	config, err := decodeBackgroundCommandConfig(appconfig.BackgroundCommands)
-	if err != nil || len(config.Commands) != 1 {
-		t.Fatalf("bundled background commands = %+v, error = %v", config, err)
+func TestBundledGitHubAuthDocumentsExact(t *testing.T) {
+	wantSkill := strings.Join([]string{
+		"# GitHub authentication",
+		"",
+		"Follow [AUTH.md](AUTH.md) to check or establish GitHub authentication.",
+	}, "\n") + "\n"
+	wantAuth := strings.Join([]string{
+		"# GitHub authentication",
+		"",
+		"Check authentication on the user's host:",
+		"",
+		"\x60\x60\x60sh",
+		"gh auth status --hostname github.com",
+		"gh api --hostname github.com user --jq '.login'",
+		"\x60\x60\x60",
+		"",
+		"Confirm the login matches the account the user named. Do not infer the account",
+		"from a Git remote, environment variable, or repository name.",
+		"",
+		"## Log in",
+		"",
+		"If authentication is needed, start the private, allowlisted \x60github-login\x60",
+		"profile using \x60background_command\x60:",
+		"",
+		"\x60\x60\x60json",
+		"{\"action\":\"start\",\"name\":\"github-login\"}",
+		"\x60\x60\x60",
+		"",
+		"The profile runs this fixed command in an interactive terminal (PTY), without",
+		"model-supplied arguments:",
+		"",
+		"\x60\x60\x60sh",
+		"gh auth login --hostname github.com --git-protocol https --web",
+		"\x60\x60\x60",
+		"",
+		"Use the session ID returned by \x60start\x60 for subsequent \x60background_command\x60",
+		"calls. If GitHub CLI is waiting to open the browser, send Enter to that",
+		"session:",
+		"",
+		"\x60\x60\x60json",
+		"{\"action\":\"send-keys\",\"id\":\"<session-id>\",\"keys\":\"enter\"}",
+		"\x60\x60\x60",
+		"",
+		"To cancel, send \x60ctrl-c\x60 to the same session:",
+		"",
+		"\x60\x60\x60json",
+		"{\"action\":\"send-keys\",\"id\":\"<session-id>\",\"keys\":\"ctrl-c\"}",
+		"\x60\x60\x60",
+		"",
+		"Do not use \x60input\x60, paste, or enter secrets. Read the terminal output and share",
+		"GitHub's official verification URL and one-time code with the user, who",
+		"completes verification in their browser. Leave the session running while they",
+		"do so.",
+		"",
+		"Afterward, check the session with \x60status\x60 and read \x60output\x60 only as needed.",
+		"Verify the host and account using the commands above. Stop any still-running",
+		"or canceled session and verify its terminal state.",
+	}, "\n") + "\n"
+	for filename, want := range map[string]string{"SKILL.md": wantSkill, "AUTH.md": wantAuth} {
+		got, err := os.ReadFile(filepath.Join("..", "..", "skills", "github-auth", filename))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("github-auth/%s contents differ from the required text", filename)
+		}
 	}
-	profile := config.Commands[0]
-	if profile.Name != appconfig.GitHubLoginCommandName || !profile.Interactive || !profile.PTY || !profile.KeysOnly || profile.RedactOutput {
-		t.Fatalf("bundled GitHub login profile = %+v", profile)
-	}
-	skill, err := os.ReadFile(filepath.Join("..", "..", "skills", "github-cli", "SKILL.md"))
+}
+
+func TestBundledGitHubLoginCommandExact(t *testing.T) {
+	configFile, err := os.ReadFile(filepath.Join("..", "..", "config", "background-commands.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(skill)
-	start := fmt.Sprintf(`{"action":"start","name":"%s"}`, profile.Name)
-	if !strings.Contains(text, start) || !strings.Contains(text, "gh auth login --hostname github.com --git-protocol https --web") {
-		t.Fatalf("GitHub CLI skill does not use the bundled login profile: %q", text)
+	if string(configFile) != string(appconfig.BackgroundCommands) {
+		t.Fatal("embedded background command configuration differs from its source file")
 	}
-	for _, required := range []string{"send-keys", "never use `input`", "browser", "read\n`output` only as needed", "gh auth status --hostname github.com", "Stop a still-running"} {
-		if !strings.Contains(text, required) {
-			t.Fatalf("GitHub CLI skill is missing %q", required)
-		}
+	config, err := decodeBackgroundCommandConfig(configFile)
+	if err != nil || config.Version != 1 || len(config.Commands) != 1 {
+		t.Fatalf("bundled background commands = %+v, error = %v", config, err)
+	}
+	profile := config.Commands[0]
+	wantArgs := []string{"auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"}
+	if profile.Name != appconfig.GitHubLoginCommandName || profile.Executable != "/usr/bin/gh" || !equalStrings(profile.Args, wantArgs) || profile.CWD != "" || !profile.Interactive || !profile.PTY || !profile.KeysOnly || profile.RedactOutput {
+		t.Fatalf("bundled GitHub login command = %+v", profile)
 	}
 }
 

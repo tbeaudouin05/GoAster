@@ -1,6 +1,6 @@
 # Authorization
 
-Load the canonical [github-cli authorization](../github-cli/AUTH.md) and the
+Load the canonical [github-auth authorization](../github-auth/AUTH.md) and the
 applicable [goaster-fork authorization](../goaster-fork/AUTH.md) or
 [goaster-source authorization](../goaster-source/AUTH.md) before using GitHub.
 Read-only discovery must establish the authenticated account, exact public user

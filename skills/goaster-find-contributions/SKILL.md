@@ -6,7 +6,7 @@ description: Read-only discovery and validation of GoAster contribution manifest
 # Find GoAster contributions
 
 Use this skill when the user asks to discover or inspect shared GoAster
-contributions. It is read-only. Load the [github-cli skill](../github-cli/SKILL.md)
+contributions. It is read-only. Load the [github-auth skill](../github-auth/SKILL.md)
 for authentication and use `github.com` explicitly.
 
 Require the exact public fork owner/name from the user or a verified search

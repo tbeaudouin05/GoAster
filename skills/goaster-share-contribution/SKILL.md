@@ -6,7 +6,7 @@ description: Safely publish an approved GoAster source or local-skill contributi
 # Share a GoAster contribution
 
 Use this skill when the user asks to share one GoAster customization publicly.
-Load the [github-cli skill](../github-cli/SKILL.md) first and use the verified
+Load the [github-auth skill](../github-auth/SKILL.md) first and use the verified
 handoffs from [goaster-fork](../goaster-fork/SKILL.md) and
 [goaster-source](../goaster-source/SKILL.md) when they apply. This workflow
 publishes a small manifest in the user's own fork; it never writes to
@@ -14,7 +14,7 @@ publishes a small manifest in the user's own fork; it never writes to
 
 ## Ownership and branch contract
 
-- `github-cli` owns GitHub authentication, identity checks, read-only
+- `github-auth` owns GitHub authentication, identity checks, read-only
   discovery, and the generic approval rules for GitHub writes.
 - `goaster-fork` owns fork preparation and branch creation. Use it when either
   standard branch is missing; do not invent a fork or branch setup here.
@@ -40,7 +40,7 @@ symlink or other pointer in place of a regular artifact file.
 
 Before proposing a write:
 
-1. Verify the `github.com` login with `github-cli`, then verify the exact
+1. Verify the `github.com` login with `github-auth`, then verify the exact
    public fork, its owner/name, its parent `tbeaudouin05/GoAster`, and both
    exact branch refs and full commit SHAs. Recheck the login and destination
    immediately before each later GitHub write.
@@ -144,7 +144,7 @@ remote ref and manifest after the push.
 
 Creating a pull request is not part of sharing. If the user later requests
 one, perform a fresh read-only check and obtain separate approval for its exact
-head, base, repository, and title before using `github-cli`; never create one
+head, base, repository, and title before using `github-auth`; never create one
 automatically.
 
 Report only the verified fork, branch, full SHAs, manifest path, and result.
