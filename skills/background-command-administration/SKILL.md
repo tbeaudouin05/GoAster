@@ -63,7 +63,11 @@ This generic capability is not secret-safe. Input and named keys are visible as
 model/tool arguments and may be saved, while PTY echo and captured output can
 expose input. Use it only for non-secret control text. Never enter passwords,
 passphrases, tokens, API keys, one-time codes, private keys, or other secrets,
-and do not configure a login or authentication command here.
+and do not add arbitrary login or authentication commands here. The bundled
+`github-login` entry is the narrow exception: it is fixed to the GitHub browser
+flow, accepts only enter/return or ctrl-c/c-c keys, and discards command output.
+Do not alter that profile's executable, arguments, input policy, or output
+policy.
 
 ## Add, change, or remove a command
 

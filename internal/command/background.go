@@ -64,25 +64,32 @@ type BackgroundCommandDefinition struct {
 	CWD         string   `json:"cwd,omitempty"`
 	Interactive bool     `json:"interactive,omitempty"`
 	PTY         bool     `json:"pty,omitempty"`
+	// KeysOnly permits only enter/return and ctrl-c/c-c through send-keys.
+	KeysOnly bool `json:"keys_only,omitempty"`
+	// RedactOutput prevents command output from being retained or returned.
+	RedactOutput bool `json:"redact_output,omitempty"`
 }
 
 // BackgroundRequest contains an executable, its exact arguments, and the
-// owner-approved session I/O mode.
+// owner-approved session I/O mode. RedactOutput discards both output streams.
 type BackgroundRequest struct {
-	Executable  string
-	Args        []string
-	Dir         string
-	Timeout     time.Duration
-	Interactive bool
-	PTY         bool
+	Executable   string
+	Args         []string
+	Dir          string
+	Timeout      time.Duration
+	Interactive  bool
+	PTY          bool
+	RedactOutput bool
 }
 
 // BackgroundCommandInfo exposes only safe command metadata to chat.
 type BackgroundCommandInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Interactive bool   `json:"interactive,omitempty"`
-	PTY         bool   `json:"pty,omitempty"`
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	Interactive  bool   `json:"interactive,omitempty"`
+	PTY          bool   `json:"pty,omitempty"`
+	KeysOnly     bool   `json:"keys_only,omitempty"`
+	RedactOutput bool   `json:"redact_output,omitempty"`
 }
 
 // BackgroundSession is the bounded runtime record for one started command.
@@ -160,6 +167,7 @@ type managedBackgroundSession struct {
 	session       BackgroundSession
 	process       BackgroundProcess
 	result        Result
+	keysOnly      bool
 	stopRequested bool
 	finished      bool
 	err           error
@@ -354,7 +362,7 @@ func decodeBackgroundCommandConfig(data []byte) (BackgroundCommandConfig, error)
 	seen := make(map[string]bool, len(entries))
 	for _, entry := range entries {
 		object, ok := entry.(map[string]any)
-		if !ok || !hasOnlyBackgroundFields(object, "name", "description", "executable", "args", "cwd", "interactive", "pty") {
+		if !ok || !hasOnlyBackgroundFields(object, "name", "description", "executable", "args", "cwd", "interactive", "pty", "keys_only", "redact_output") {
 			return BackgroundCommandConfig{}, errors.New("background command definition is invalid")
 		}
 		name, nameOK := object["name"].(string)
@@ -373,16 +381,20 @@ func decodeBackgroundCommandConfig(data []byte) (BackgroundCommandConfig, error)
 		cwd, cwdOK := optionalBackgroundString(object, "cwd")
 		interactive, interactiveOK := optionalBackgroundBool(object, "interactive")
 		ptyEnabled, ptyOK := optionalBackgroundBool(object, "pty")
+		keysOnly, keysOnlyOK := optionalBackgroundBool(object, "keys_only")
+		redactOutput, redactOutputOK := optionalBackgroundBool(object, "redact_output")
 		definition := BackgroundCommandDefinition{
-			Name:        name,
-			Description: description,
-			Executable:  executable,
-			Args:        args,
-			CWD:         cwd,
-			Interactive: interactive,
-			PTY:         ptyEnabled,
+			Name:         name,
+			Description:  description,
+			Executable:   executable,
+			Args:         args,
+			CWD:          cwd,
+			Interactive:  interactive,
+			PTY:          ptyEnabled,
+			KeysOnly:     keysOnly,
+			RedactOutput: redactOutput,
 		}
-		if !nameOK || !descriptionOK || !executableOK || !argsOK || !cwdOK || !interactiveOK || !ptyOK || !validBackgroundCommandDefinition(definition) || seen[name] {
+		if !nameOK || !descriptionOK || !executableOK || !argsOK || !cwdOK || !interactiveOK || !ptyOK || !keysOnlyOK || !redactOutputOK || !validBackgroundCommandDefinition(definition) || seen[name] {
 			return BackgroundCommandConfig{}, errors.New("background command definition is invalid")
 		}
 		seen[name] = true
@@ -430,6 +442,9 @@ func optionalBackgroundBool(object map[string]any, key string) (bool, bool) {
 
 func validBackgroundCommandDefinition(definition BackgroundCommandDefinition) bool {
 	if !validBackgroundCommandName(definition.Name) || !validBackgroundExecutable(definition.Executable, definition.Args) {
+		return false
+	}
+	if definition.KeysOnly && !definition.PTY {
 		return false
 	}
 	if strings.TrimSpace(definition.Description) != definition.Description || len(definition.Description) > 240 || strings.ContainsAny(definition.Description, "\r\n\x00") || !utf8.ValidString(definition.Description) {
@@ -635,10 +650,12 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 				response.commands = make([]BackgroundCommandInfo, 0, len(config.Commands))
 				for _, entry := range config.Commands {
 					response.commands = append(response.commands, BackgroundCommandInfo{
-						Name:        entry.Name,
-						Description: entry.Description,
-						Interactive: entry.Interactive || entry.PTY,
-						PTY:         entry.PTY,
+						Name:         entry.Name,
+						Description:  entry.Description,
+						Interactive:  entry.Interactive || entry.PTY,
+						PTY:          entry.PTY,
+						KeysOnly:     entry.KeysOnly,
+						RedactOutput: entry.RedactOutput,
 					})
 				}
 			}
@@ -677,11 +694,12 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 				break
 			}
 			process, err := StartBackground(BackgroundRequest{
-				Executable:  selected.Executable,
-				Args:        selected.Args,
-				Dir:         selected.CWD,
-				Interactive: selected.Interactive || selected.PTY,
-				PTY:         selected.PTY,
+				Executable:   selected.Executable,
+				Args:         selected.Args,
+				Dir:          selected.CWD,
+				Interactive:  selected.Interactive || selected.PTY,
+				PTY:          selected.PTY,
+				RedactOutput: selected.RedactOutput,
 			})
 			if err != nil {
 				if errors.Is(err, ErrPTYNotSupported) {
@@ -702,7 +720,7 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 				Interactive: selected.Interactive || selected.PTY,
 				PTY:         selected.PTY,
 			}
-			sessions[id] = managedBackgroundSession{session: session, process: process}
+			sessions[id] = managedBackgroundSession{session: session, process: process, keysOnly: selected.KeysOnly}
 			order = append(order, id)
 			response.session = session
 		case "list":
@@ -735,9 +753,17 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 					response.err = ErrBackgroundSessionNotInteractive
 					break
 				}
+				if request.action == "input" && managed.keysOnly {
+					response.err = ErrBackgroundSessionInputUnavailable
+					break
+				}
 				data := request.data
 				if request.action == "send-keys" {
 					if !managed.session.PTY {
+						response.err = ErrBackgroundSessionInputUnavailable
+						break
+					}
+					if managed.keysOnly && !validBackgroundControlKeys(request.keys) {
 						response.err = ErrBackgroundSessionInputUnavailable
 						break
 					}
@@ -797,6 +823,20 @@ func runBackgroundCommandManager(path string, requests <-chan backgroundManagerR
 			request.response <- response
 		}
 	}
+}
+
+func validBackgroundControlKeys(keys string) bool {
+	if strings.TrimSpace(keys) == "" {
+		return false
+	}
+	for _, key := range strings.Split(keys, ",") {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "enter", "return", "ctrl-c", "c-c":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func refreshManagedBackgroundSessions(sessions map[string]managedBackgroundSession) {
@@ -1006,6 +1046,9 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 	var stderr = newLimitedOutput(MaxOutputBytes, nil)
 	var outputLimitReached atomic.Bool
 	writeStdout := func(content []byte) (int, error) {
+		if req.RedactOutput {
+			return len(content), nil
+		}
 		outputMu.Lock()
 		defer outputMu.Unlock()
 		before := stdout.Truncated()
@@ -1017,6 +1060,9 @@ func StartBackground(req BackgroundRequest) (BackgroundProcess, error) {
 		return count, err
 	}
 	writeStderr := func(content []byte) (int, error) {
+		if req.RedactOutput {
+			return len(content), nil
+		}
 		outputMu.Lock()
 		defer outputMu.Unlock()
 		before := stderr.Truncated()

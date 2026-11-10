@@ -71,7 +71,9 @@ func exerciseBackgroundCommandTool(t testing.TB) {
 	}
 	if !strings.Contains(registered.Description, "not secret-safe") ||
 		!strings.Contains(registered.Description, "never use input") ||
-		!strings.Contains(registered.Description, "PTY echo") {
+		!strings.Contains(registered.Description, "PTY echo") ||
+		!strings.Contains(registered.Description, "github-login") ||
+		!strings.Contains(registered.Description, "discards command output") {
 		t.Fatalf("background tool description omits the non-secret boundary: %q", registered.Description)
 	}
 	properties, ok := registered.Parameters["properties"].(map[string]any)

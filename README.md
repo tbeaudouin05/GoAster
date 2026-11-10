@@ -66,8 +66,10 @@ and captured output may be saved in conversation state.
 Queued input is not a delivery confirmation; check `input_failed` for failed or
 unconfirmed writes.
 Never enter passwords, passphrases, tokens, API keys, one-time codes, private
-keys, or other secrets through `background_command`, and do not use it for
-login or authentication.
+keys, or other secrets through `background_command`. The bundled `github-login`
+profile is the only narrow authentication exception: it uses the fixed GitHub
+browser flow, accepts only enter/return or ctrl-c/c-c keys, and discards command
+output. All other login or authentication commands remain prohibited.
 
 The conversation is saved under
 `~/.goaster/artefacts/state/sessions/session.json`. Markdown memory lives

@@ -1,4 +1,23 @@
 {
   "version": 1,
-  "commands": []
+  "commands": [
+    {
+      "name": "github-login",
+      "description": "Log in to GitHub CLI through the user's browser",
+      "executable": "/usr/bin/gh",
+      "args": [
+        "auth",
+        "login",
+        "--hostname",
+        "github.com",
+        "--git-protocol",
+        "https",
+        "--web"
+      ],
+      "interactive": true,
+      "pty": true,
+      "keys_only": true,
+      "redact_output": true
+    }
+  ]
 }

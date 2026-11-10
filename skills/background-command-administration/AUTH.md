@@ -10,5 +10,7 @@ allowlist entry explicitly enables it. Do not store secrets in the
 configuration or disclose its contents unnecessarily. Interactive input is
 not secret-safe: arguments and PTY output may be visible to the model and
 saved. Never enter passwords, passphrases, tokens, API keys, one-time codes,
-private keys, or other secrets, and do not use this workflow for login or
-authentication.
+private keys, or other secrets, and do not use this workflow to add arbitrary
+login or authentication commands. The bundled `github-login` profile is the
+only narrow exception; keep its fixed browser-login arguments, enter/return or
+ctrl-c/c-c input policy, and output redaction unchanged.

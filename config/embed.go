@@ -7,7 +7,12 @@ import _ "embed"
 //go:embed openai-models.json
 var OpenAIModels []byte
 
-// BackgroundCommands is the initial empty background-command allowlist.
+// GitHubLoginCommandName is the fixed name of the bundled browser-login
+// profile. Existing user-managed command files are never merged with it.
+const GitHubLoginCommandName = "github-login"
+
+// BackgroundCommands is the initial background-command allowlist. It contains
+// only the fixed, output-redacted GitHub browser-login profile.
 //
 //go:embed background-commands.json
 var BackgroundCommands []byte

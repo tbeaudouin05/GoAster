@@ -6,17 +6,42 @@ repository. It is the shared safety and authentication contract for
 
 ## Authentication
 
-Use the GitHub CLI on the user's host. If authentication is needed, ask the
-user to run this in their own interactive terminal and complete the browser or
-device flow there:
+Use the GitHub CLI on the user's host. If authentication is needed, use only
+the first-install, private allowlisted command named `github-login` through
+`background_command`:
 
-```sh
-gh auth login --hostname github.com
+```json
+{"action":"start","name":"github-login"}
 ```
 
-Do not run an interactive login through a captured command tool. Do not ask the
-user to paste a password, token, or device code. An existing local credential
-helper is acceptable.
+That name expands to this fixed command and no model-supplied arguments:
+
+```sh
+gh auth login --hostname github.com --git-protocol https --web
+```
+
+The profile uses a PTY, accepts only `enter`/`return` or `ctrl-c`/`c-c`, and
+discards its output. Use `send-keys` only for `enter` to continue the browser
+flow or `ctrl-c` to cancel; never use `input`, paste, enter a password, token,
+device code, or any other secret. Tell the user to complete verification in the
+browser that GitHub CLI opens. Do not ask the user to paste credentials or
+device information into chat. After `start`, send one named `enter` key to the
+returned session if GitHub CLI is waiting to open the browser; then leave the
+session running while the user completes verification.
+
+After the user finishes, poll the returned session with `status` without
+requesting `output`. Verify only non-secret state with:
+
+```sh
+gh auth status --hostname github.com
+gh api --hostname github.com user --jq '.login'
+```
+
+Stop a still-running or canceled session and verify its terminal state before
+continuing. If cleanup or verification is uncertain, report that state and
+stop. If `github-login` is absent from the existing user configuration, do not
+overwrite or merge that file; ask the owner to complete login locally or
+explicitly configure the reviewed profile.
 
 Before discovery, check only the host and login, not the credential itself:
 

@@ -62,6 +62,9 @@ func backgroundTestHelper() {
 	case "fail":
 		fmt.Fprint(os.Stderr, "expected failure")
 		os.Exit(7)
+	case "secret-output":
+		fmt.Fprint(os.Stdout, "output-secret")
+		fmt.Fprint(os.Stderr, "error-secret")
 	case "overflow":
 		fmt.Print(strings.Repeat("x", MaxOutputBytes+1))
 	case "waitfile":
@@ -192,6 +195,7 @@ func waitBackgroundOutput(t testing.TB, manager BackgroundCommandManager, id, wa
 func exerciseBackgroundCommandSupport(t testing.TB) {
 	t.Helper()
 	exerciseBackgroundConfig(t)
+	exerciseBackgroundRedactedOutput(t)
 	exerciseBackgroundCloseDeadline(t)
 	exerciseBackgroundKeyEncoding(t)
 	exerciseBackgroundPlatformLifecycle(t)
@@ -205,6 +209,27 @@ func exerciseBackgroundCommandSupport(t testing.TB) {
 	exerciseBackgroundCompletionTime(t)
 	exerciseBackgroundCanceledStart(t)
 	exerciseBackgroundSignalShutdown(t)
+}
+
+func exerciseBackgroundRedactedOutput(t testing.TB) {
+	t.Helper()
+	process, err := StartBackground(BackgroundRequest{
+		Executable:   backgroundTestExecutable(t),
+		Args:         backgroundHelperArgs("secret-output"),
+		RedactOutput: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case execution := <-process.Done:
+		if execution.Err != nil || execution.Result.Stdout != "" || execution.Result.Stderr != "" || execution.Result.StdoutTruncated || execution.Result.StderrTruncated {
+			t.Fatalf("redacted process result = %+v, want no captured output", execution)
+		}
+	case <-time.After(6 * time.Second):
+		process.Stop()
+		t.Fatal("redacted process did not finish")
+	}
 }
 
 func exerciseBackgroundCompletionTime(t testing.TB) {
@@ -368,8 +393,13 @@ func exerciseBackgroundConfig(t testing.TB) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "new", "background-commands.json")
 	config, err := LoadBackgroundCommandConfig(path)
-	if err != nil || config.Version != 1 || len(config.Commands) != 0 {
+	if err != nil || config.Version != 1 || len(config.Commands) != 1 {
 		t.Fatalf("default config = %+v, error = %v", config, err)
+	}
+	defaultCommand := config.Commands[0]
+	wantArgs := []string{"auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"}
+	if defaultCommand.Name != appconfig.GitHubLoginCommandName || defaultCommand.Executable != "/usr/bin/gh" || !equalStrings(defaultCommand.Args, wantArgs) || !defaultCommand.Interactive || !defaultCommand.PTY || !defaultCommand.KeysOnly || !defaultCommand.RedactOutput {
+		t.Fatalf("default GitHub login command = %+v", defaultCommand)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != string(appconfig.BackgroundCommands) {
@@ -387,7 +417,7 @@ func exerciseBackgroundConfig(t testing.TB) {
 	valid := `{"name":"server","executable":` + string(executable) + `,"args":[]}`
 	interactive := `{"name":"interactive","executable":` + string(executable) + `,"args":[],"interactive":true,"pty":true}`
 	config, err = LoadBackgroundCommandConfig(path)
-	if err != nil || config.Version != 1 || len(config.Commands) != 0 {
+	if err != nil || config.Version != 1 || len(config.Commands) != 1 {
 		t.Fatalf("initial background config = %+v, error = %v", config, err)
 	}
 	if err := os.WriteFile(path, []byte(`{"version":1,"commands":[`+interactive+`]}`), 0600); err != nil {
@@ -412,6 +442,9 @@ func exerciseBackgroundConfig(t testing.TB) {
 		{"unknown entry field", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":[],"command":"echo ready"}]}`},
 		{"interactive flag is not boolean", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":[],"interactive":"yes"}]}`},
 		{"pty flag is not boolean", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":[],"pty":1}]}`},
+		{"keys-only command without PTY", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":[],"keys_only":true}]}`},
+		{"keys-only flag is not boolean", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":[],"keys_only":"yes"}]}`},
+		{"redact-output flag is not boolean", `{"version":1,"commands":[{"name":"server","executable":` + string(executable) + `,"args":[],"redact_output":1}]}`},
 	}
 	for _, test := range tests {
 		if err := os.WriteFile(path, []byte(test.data), 0600); err != nil {
@@ -436,6 +469,56 @@ func exerciseBackgroundConfig(t testing.TB) {
 		}
 		if _, err := LoadBackgroundCommandConfig(path); err == nil {
 			t.Fatal("accepted a symbolic-link config")
+		}
+	}
+
+	existingPath := filepath.Join(t.TempDir(), "background-commands.json")
+	existingData := []byte(`{"version":1,"commands":[{"name":"existing","executable":` + string(executable) + `,"args":[]}]}`)
+	if err := os.WriteFile(existingPath, existingData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	existingConfig, err := LoadBackgroundCommandConfig(existingPath)
+	if err != nil || len(existingConfig.Commands) != 1 || existingConfig.Commands[0].Name != "existing" {
+		t.Fatalf("existing background config = %+v, error = %v", existingConfig, err)
+	}
+	if data, err := os.ReadFile(existingPath); err != nil || string(data) != string(existingData) {
+		t.Fatalf("existing background config changed: %q, %v", data, err)
+	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestBundledGitHubLoginProfileMatchesSkill(t *testing.T) {
+	config, err := decodeBackgroundCommandConfig(appconfig.BackgroundCommands)
+	if err != nil || len(config.Commands) != 1 {
+		t.Fatalf("bundled background commands = %+v, error = %v", config, err)
+	}
+	profile := config.Commands[0]
+	if profile.Name != appconfig.GitHubLoginCommandName || !profile.Interactive || !profile.PTY || !profile.KeysOnly || !profile.RedactOutput {
+		t.Fatalf("bundled GitHub login profile = %+v", profile)
+	}
+	skill, err := os.ReadFile(filepath.Join("..", "..", "skills", "github-cli", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(skill)
+	start := fmt.Sprintf(`{"action":"start","name":"%s"}`, profile.Name)
+	if !strings.Contains(text, start) || !strings.Contains(text, "gh auth login --hostname github.com --git-protocol https --web") {
+		t.Fatalf("GitHub CLI skill does not use the bundled login profile: %q", text)
+	}
+	for _, required := range []string{"send-keys", "never use `input`", "browser", "without\nrequesting `output`", "gh auth status --hostname github.com", "Stop a still-running"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("GitHub CLI skill is missing %q", required)
 		}
 	}
 }
@@ -618,7 +701,7 @@ func exerciseBackgroundPTYInput(t testing.TB) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "background-commands.json")
 	writeBackgroundConfig(t, path, BackgroundCommandDefinition{
-		Name: "pty", Executable: executable, Args: backgroundHelperArgs("pty-key"), PTY: true,
+		Name: "pty", Executable: executable, Args: backgroundHelperArgs("pty-key"), PTY: true, KeysOnly: true,
 	})
 	manager := NewBackgroundCommandManagerAt(path)
 	defer manager.Close()
@@ -630,6 +713,12 @@ func exerciseBackgroundPTYInput(t testing.TB) {
 		t.Fatalf("PTY session metadata = %+v", session)
 	}
 	waitBackgroundOutput(t, manager, session.ID, "pty-key-ready")
+	if _, err := manager.Input(context.Background(), session.ID, "text"); !errors.Is(err, ErrBackgroundSessionInputUnavailable) {
+		t.Fatalf("keys-only PTY accepted text input: %v", err)
+	}
+	if _, err := manager.SendKeys(context.Background(), session.ID, "ctrl-v"); !errors.Is(err, ErrBackgroundSessionInputUnavailable) {
+		t.Fatalf("keys-only PTY accepted paste key: %v", err)
+	}
 	if _, err := manager.SendKeys(context.Background(), session.ID, "enter"); err != nil {
 		t.Fatalf("send PTY key error = %v", err)
 	}
