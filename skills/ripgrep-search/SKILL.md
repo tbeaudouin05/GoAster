@@ -34,12 +34,13 @@ redact sensitive matches.
 
 ## If ripgrep is missing
 
-Install ripgrep using the host's verified package manager, then check
-`command -v rg` and `rg --version`.
+Installing software changes the host. First identify the operating system and
+verified package manager, and obtain explicit approval before running an
+installation. Do not assume `sudo` or network access, run downloaded scripts,
+add unverified repositories, or change unrelated packages.
 
-First identify the operating system and package manager. Do not assume `sudo`
-or network access, run downloaded scripts, add unverified repositories, or
-change unrelated packages.
+If installation is approved, install ripgrep using the verified package
+manager, then check `command -v rg` and `rg --version`.
 
 If installation fails or is not permitted, use `grep` or `git grep` and
 report the limitation.
