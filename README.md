@@ -117,3 +117,7 @@ artifacts with checksums, and Linux temporary-directory requirements. It does
 not deploy or swap the retained binaries.
 
 The repository does not provide service units or an installer. The deployment skill requires a reviewed procedure based on the target host’s actual configuration for both binaries.
+
+The [observed GoAsterWeb installation integration](docs/goasterweb-installation.md)
+documents one current Hetzner Ubuntu 24.04 setup and its open design questions;
+it is not an installer contract or a universal GoAster standard.
