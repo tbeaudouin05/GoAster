@@ -720,6 +720,11 @@ func (p *CodexProvider) registerBuiltInTools() {
 	p.mustRegisterBuiltInTool(webFetchCodexTool, p.executeWebFetchTool)
 	p.mustRegisterBuiltInTool(shellExecuteCodexTool, executeShell)
 	p.mustRegisterBuiltInTool(loadSkillCodexTool, executeLoadSkill)
+	p.mustRegisterBuiltInTool(readFileCodexTool, executeReadFile)
+	p.mustRegisterBuiltInTool(writeFileCodexTool, executeWriteFile)
+	p.mustRegisterBuiltInTool(editFileCodexTool, executeEditFile)
+	p.mustRegisterBuiltInTool(appendFileCodexTool, executeAppendFile)
+	p.mustRegisterBuiltInTool(listDirCodexTool, executeListDir)
 }
 
 func (p *CodexProvider) mustRegisterBuiltInTool(definition codexTool, handler ToolHandler) {

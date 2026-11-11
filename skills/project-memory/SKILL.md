@@ -1,7 +1,12 @@
 # Project memory
 
-Use project notes when they would help the current task. Use ordinary tools,
-such as `shell_execute`; there is no special memory tool or persistent selection.
+Use this skill when project-specific context would help the current task. Prefer
+the built-in `list_dir`, `read_file`, `write_file`, `edit_file`, and
+`append_file` tools for ordinary note inspection and updates; they are scoped to
+the private `~/.goaster/artefacts` workspace, reject symbolic links, and use
+exclusive creation or atomic replacement for writes. Use `shell_execute` only
+when a note task genuinely needs an operation those file tools do not provide;
+there is no special memory tool or persistent selection.
 
 Notes live at `~/.goaster/artefacts/memory/projects/<project-name>.md`.
 Check whether the directory exists, list relevant names, and read only the

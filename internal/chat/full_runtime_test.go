@@ -44,6 +44,11 @@ func TestFullRuntimeSessionRequestIncludesToolsSkillsAndMemory(t *testing.T) {
 			"web_fetch":          false,
 			"shell_execute":      false,
 			"load_skill":         false,
+			"read_file":          false,
+			"write_file":         false,
+			"edit_file":          false,
+			"append_file":        false,
+			"list_dir":           false,
 			"background_command": false,
 		}
 		for _, tool := range request.Tools {

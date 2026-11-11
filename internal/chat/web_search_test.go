@@ -126,8 +126,8 @@ func TestCodexProviderExecutesWebSearchAndSendsFollowUp(t *testing.T) {
 			t.Errorf("decode Codex request: %v", err)
 			return
 		}
-		if len(request.Tools) != 4 {
-			t.Errorf("tools = %+v, want web_search, web_fetch, shell_execute, and load_skill", request.Tools)
+		if len(request.Tools) != 9 {
+			t.Errorf("tools = %+v, want the four original and five file tools", request.Tools)
 		} else {
 			tool := request.Tools[0]
 			if tool.Type != "function" || tool.Name != "web_search" {

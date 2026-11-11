@@ -120,3 +120,25 @@ artifacts with checksums, and Linux temporary-directory requirements. It does
 not deploy or swap the retained binaries.
 
 GoAsterWeb is the initial installer for a new server setup. After installation, GoAster owns subsequent deployments. The repository does not provide service units or a GoAster installer; verify the target host’s actual configuration before deploying. The observed GoAsterWeb layout is documented in [the installation integration notes](docs/goasterweb-installation.md), not as a universal contract.
+
+### Artefact file tools
+
+The model can read, write, edit, and append regular files and list directories
+in the private artefact workspace. Paths must stay inside that workspace; symbolic links are
+rejected when encountered, and rooted filesystem operations prevent symlink
+traversal from escaping it. The repository now requires Go 1.25 or newer; file tools are
+unavailable on JavaScript and Plan 9, where the rooted API cannot provide the
+required confinement. Filesystem mounts and hard links are outside this path
+confinement.
+
+Reads paginate UTF-8 text using byte offsets at character boundaries; a page
+ends before a character that would cross its byte limit. Binary data containing
+NUL and invalid UTF-8 encountered in a page are rejected. Directory listings
+return at most 1000 entries and indicate truncation. Writes create files with
+mode 0600; replacements retain existing permission bits. The parent directory is
+synced after file creation or replacement where supported. A post-commit sync
+error reports that durability is uncertain; inspect the file before retrying.
+Edit and append calls
+are serialized with other file-tool mutations in the same process and check for
+intervening changes. Other processes and external writers do not participate
+in that lock, and a change racing the final replacement can still be lost.
