@@ -1,2 +1,2 @@
 name: goaster-backup
-description: Create a mandatory server-local GoAster rollback bundle and, only when approved and verified, use an optional project-scoped OVH backup path.
+description: Require an approved and verified Hetzner Cloud snapshot and separate recovery planning before every deployment.

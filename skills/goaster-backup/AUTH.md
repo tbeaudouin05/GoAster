@@ -1,7 +1,6 @@
 # Authentication
 
-Use the authenticated SSH session and approved OVH account for the exact host,
-project, and resource being inspected. Verify the host and account identity
-before using either service. This skill does not collect credentials; keep
-credentials in their protected stores and do not disclose their values in
-reports or handoffs.
+Use `goaster-env` and `hetzner-auth` for secret lookup and read-only target
+verification. Authentication does not authorize snapshot creation, server
+changes, or cost. Require separate approval for the exact snapshot operation.
+Never include credential values in reports, logs, commands, or handoffs.

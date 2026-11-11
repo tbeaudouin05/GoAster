@@ -1,8 +1,11 @@
 # GoAster deployment
 
 Deploy only the two retained, passing artifacts from `goaster-build-test`, after
-`goaster-backup` has verified a server-local rollback bundle. Deployment is a
-separate action: obtain explicit approval for the exact source SHA, both binary
+`goaster-backup` has verified an available Hetzner snapshot for the exact
+approved project and server, including required recovery planning for separate
+volumes or external data.
+Snapshot approval does not approve deployment. Deployment is a separate action:
+obtain explicit approval for the exact source SHA, both binary
 checksums, host, affected services, install paths, restart order, checks, and
 rollback actions. Do not deploy from a dirty or unverified build.
 
@@ -29,8 +32,9 @@ configuration or prove end-to-end messaging works.
 ## Deployment handoff
 
 1. Verify host identity, the approved source SHA and both retained artifact
-   checksums. Inspect the actual services and paths, and verify the rollback
-   bundle for every affected executable and service configuration.
+   checksums. Inspect the actual services and paths, and verify the Hetzner
+   snapshot ID, available status, exact project and server, approval, and
+   required external-data recovery handoff.
 2. Agree on and approve a host-specific procedure for staging and verifying
    each binary, switching releases without exposing partial files, service
    restart order, liveness and adapter checks, and restoring the previous
@@ -48,8 +52,8 @@ configuration or prove end-to-end messaging works.
    services and the approved liveness and adapter checks. Run authentication
    health or a prompt only if specifically included in the plan; these can
    refresh credentials or make external requests. If any required check fails,
-   apply the approved rollback plan using the verified local bundle and verify
-   the restored services. Report a rollback failure explicitly and stop.
+   stop and request a separately approved manual recovery. Do not restore or
+   roll back automatically. Report the failure explicitly and stop.
 
 Report the host, source SHA, both checksums, affected services and paths,
 staging, switch, restart, checks, and rollback results without secrets. Do not

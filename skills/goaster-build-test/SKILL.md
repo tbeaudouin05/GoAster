@@ -2,7 +2,7 @@
 
 Validate an approved local GoAster fork and retain tested binaries for a
 separately approved runtime swap. This workflow does not deploy, contact
-GitHub or OVH, modify servers, send Telegram messages, or stop, restart,
+GitHub or a cloud provider, modify servers, send Telegram messages, or stop, restart,
 or replace the running agent.
 
 ## Prepare
