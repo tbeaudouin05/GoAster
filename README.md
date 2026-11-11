@@ -116,8 +116,4 @@ the authenticated agent-prompt check, retained non-secret agent and Telegram
 artifacts with checksums, and Linux temporary-directory requirements. It does
 not deploy or swap the retained binaries.
 
-The repository does not provide service units or an installer. The deployment skill requires a reviewed procedure based on the target host’s actual configuration for both binaries.
-
-The [observed GoAsterWeb installation integration](docs/goasterweb-installation.md)
-documents one current Hetzner Ubuntu 24.04 setup and its open design questions;
-it is not an installer contract or a universal GoAster standard.
+GoAsterWeb is the initial installer for a new server setup. After installation, GoAster owns subsequent deployments. The repository does not provide service units or a GoAster installer; verify the target host’s actual configuration before deploying. The observed GoAsterWeb layout is documented in [the installation integration notes](docs/goasterweb-installation.md), not as a universal contract.
