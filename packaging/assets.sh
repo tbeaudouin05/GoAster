@@ -1,6 +1,6 @@
 #!/bin/sh
 # Shared allowlist for starter assets in release packages.
-starter_skills='background-command-administration bitwarden-secrets-manager github-auth goaster-backup goaster-build-test goaster-coordinator goaster-deploy goaster-find-contributions goaster-fork goaster-share-contribution goaster-source internet-fetch model-administration project-memory ripgrep-search self-improvement-memory-consolidation telegram-group-privacy'
+starter_skills='background-command-administration bitwarden-secrets-manager github-auth goaster-backup goaster-build-test goaster-source-code-evolution goaster-deploy goaster-find-contributions goaster-fork goaster-share-contribution goaster-source internet-fetch model-administration project-memory ripgrep-search self-improvement-memory-consolidation telegram-group-privacy'
 
 check_starter_tree() {
 	asset_tree=$1

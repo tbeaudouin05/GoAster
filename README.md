@@ -163,8 +163,7 @@ and put user changes on the user's own branches. Use the
 [contribution discovery](skills/goaster-find-contributions/SKILL.md) workflow
 for read-only manifest inspection. The [build/test
 workflow](skills/goaster-build-test/SKILL.md) describes the core local checks;
-the [coordinator](skills/goaster-coordinator/SKILL.md) sequences local build,
-backup, deployment, and verification stages.
+the [source code evolution skill](skills/goaster-source-code-evolution/SKILL.md) provides a skill-first check and source workflow.
 
 ## Tests
 
