@@ -101,7 +101,7 @@ go test ./cmd/goaster-agent ./cmd/goaster-telegram ./config \
   ./internal/artefacts ./internal/attachment ./internal/chat \
   ./internal/command ./internal/controlsecret ./internal/controltransport \
   ./internal/filesync ./internal/localenv ./internal/scheduler \
-  ./internal/telegram ./packaging/cmd/archive
+  ./internal/telegram
 ```
 
 The [build/test workflow](skills/goaster-build-test/SKILL.md) also describes
@@ -109,4 +109,4 @@ the authenticated agent-prompt check, retained non-secret agent and Telegram
 artifacts with checksums, and Linux temporary-directory requirements. It does
 not deploy or swap the retained binaries.
 
-The former terminal binary and its remote-login handoff are no longer available. The legacy desktop packaging and deployment workflow target the removed terminal binary and are incompatible with the agent and Telegram artifacts; they require a separately reviewed replacement.
+The repository does not provide service units or an installer. The deployment skill requires a reviewed procedure based on the target host’s actual configuration for both binaries.

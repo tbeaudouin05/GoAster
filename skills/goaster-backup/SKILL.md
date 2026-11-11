@@ -6,27 +6,31 @@ an optional second path and never replaces the local bundle.
 
 ## Mandatory server-local rollback bundle
 
-Confirm the approved host identity, service, active release SHA, install path,
-stable helper path, and the source/binary checksum. On that same server,
-create a private rollback bundle that is non-secret by default under a
-dedicated rollback directory such as:
+Confirm the approved host identity, affected services, active release identities,
+install paths, and source/binary checksums for both runtime binaries. Inspect
+any helper or release selector actually used by the host; none is supplied by
+this repository. On that same server,
+create a private rollback bundle that is non-secret by default in the host's
+approved server-local rollback location. The path and layout are host-specific;
+for example, the bundle may be organized as:
 
 ```text
-/var/lib/goaster/rollback/<timestamp>-<active-sha>/
+<approved-rollback-root>/<timestamp>-<active-release-id>/
 ├── manifest.json
-├── release/goaster
-├── release.sha256
-├── service.unit
-└── helper.sha256
+├── executables/
+│   ├── goaster-agent
+│   └── goaster-telegram
+├── checksums
+└── service-configuration/
 ```
 
-The exact directory may follow the host's approved layout, but it must be
-server-local, uniquely named, on a filesystem with enough space, and protected
-from ordinary users. The manifest records the host identity, service name,
-active release path, active SHA, helper path and checksum, creation time, and
-the files intentionally excluded.
+Use the host's approved layout; the bundle must be server-local, uniquely
+named, on a filesystem with enough space, and protected from ordinary users.
+The manifest records the host identity, affected service identities, active
+executable paths and checksums, any verified helper path and checksum, creation
+time, and the files intentionally excluded.
 
-Include the currently active executable and the non-secret service/helper
+Include the currently active executables and the non-secret service/helper
 configuration needed to restore it. Do not copy `env` files, OpenAI or
 Telegram credentials, private keys, cookies, or other secret-bearing state
 into this default bundle. If a secret-bearing state file is essential, do not
@@ -37,10 +41,10 @@ and retention, and record them without printing the secret value. Approval for
 the ordinary local bundle does not approve secret inclusion.
 
 Verify the bundle before deployment: every listed file is a regular file, the
-recorded SHA matches the active executable, the manifest matches the approved
-host and service, the bundle is readable by the deployment operator, and a
-local restore dry run can identify the previous release without changing the
-service. Keep existing bundles; do not delete them automatically.
+recorded checksums match both active executables, the manifest matches the
+approved host and affected services, the bundle is readable by the deployment
+operator, and a local restore dry run can identify the previous release without
+changing the services. Keep existing bundles; do not delete them automatically.
 
 ## Optional OVH snapshot or backup
 
@@ -104,9 +108,10 @@ Return a structured, non-secret result:
 
 ```text
 host=<verified host identity>
-local_bundle=<server-local path>
-local_bundle_sha256=<checksum>
-local_bundle=verified
+local_bundle_path=<approved server-local path>
+agent_binary_sha256=<active agent checksum>
+telegram_binary_sha256=<active Telegram checksum>
+local_bundle_status=verified
 ovh_backup=not-requested|not-authorized|verified-and-created|failed
 ovh_project=<project ID or redacted safe label when approved>
 ovh_resource=<safe resource identity>
@@ -114,6 +119,7 @@ retention=<approved value or not-applicable>
 secrets_included=no|approved-and-protected
 ```
 
-Deployment may continue only with `local_bundle=verified`. Rollback must use
-that bundle and the recorded previous SHA first. An OVH restore is a separate,
-approved recovery action after the same exact-resource and permission checks.
+Deployment may continue only with `local_bundle_status=verified`. Rollback must
+use that bundle and the recorded previous release identities first. An OVH
+restore is a separate, approved recovery action after the same exact-resource
+and permission checks.

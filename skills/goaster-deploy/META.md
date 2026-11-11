@@ -1,2 +1,2 @@
 name: goaster-deploy
-description: Deploy a verified GoAster build through a stable helper with checksum checks, atomic swap, health and prompt smoke tests, and rollback.
+description: Review and deploy verified agent and Telegram binaries using an approved host-specific plan and rollback bundle.

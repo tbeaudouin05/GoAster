@@ -1,100 +1,54 @@
 # GoAster deployment
 
-**Incompatible with the current build/test artifacts:** this legacy workflow describes a single terminal `goaster` binary, which has been removed. It does not specify deployment of `goaster-agent` and `goaster-telegram`; do not use it for those artifacts without a separately reviewed procedure.
+Deploy only the two retained, passing artifacts from `goaster-build-test`, after
+`goaster-backup` has verified a server-local rollback bundle. Deployment is a
+separate action: obtain explicit approval for the exact source SHA, both binary
+checksums, host, affected services, install paths, restart order, checks, and
+rollback actions. Do not deploy from a dirty or unverified build.
 
-Deploy only a passing `goaster-build-test` result to the approved host. Before
-starting, obtain explicit deployment approval naming the exact source SHA,
-binary checksum, host, service, install paths, rollback bundle, restart,
-health checks, prompt smoke test, and any rollback action. The deployment
-contract keeps a stable helper in place while application releases remain
-versioned and replaceable.
+## Resolve the host-specific procedure first
 
-## Stable helper and release layout
+The repository builds `goaster-agent` and `goaster-telegram`; it does not ship
+service units, an installer, a stable deployment helper, a release selector,
+or a complete deployment procedure for a particular host. Do not assume any
+of these exist or invent paths, service names, users, restart ordering, atomic
+switches, or rollback commands. Inspect the approved host's actual service
+configuration and executable paths without exposing secrets. Identify which
+services and binaries are in scope, how they communicate, dependencies,
+permissions, existing release mechanism, and how both are restored. If a safe
+switch or rollback cannot be verified, stop and report the gap for review.
 
-The stable service helper is:
+The agent serves local `/livez`, `/healthz`, and `/chat` endpoints; its `live`
+and `health` commands use its configured control transport. `live` checks
+liveness only. `health` checks saved authentication and may refresh it. The
+Telegram adapter runs as root, polls Telegram and forwards messages to the
+agent; when `NOTIFY_SOCKET` is set it signals readiness after an available
+agent and a successful poll. These facts do not establish the host's service
+configuration or prove end-to-end messaging works.
 
-```text
-/usr/local/libexec/goaster-deploy
-```
+## Deployment handoff
 
-It is installed, owned, reviewed, and checked separately from application
-releases. The service's launch command invokes this helper; the helper selects
-the approved current release and starts it. A versioned release may live under
-an immutable path such as:
+1. Verify host identity, the approved source SHA and both retained artifact
+   checksums. Inspect the actual services and paths, and verify the rollback
+   bundle for every affected executable and service configuration.
+2. Agree on and approve a host-specific procedure for staging and verifying
+   each binary, switching releases without exposing partial files, service
+   restart order, liveness and adapter checks, and restoring the previous
+   binaries and services. Include a prompt smoke test only through an existing,
+   approved interface; do not use Telegram without explicit authorization.
+   Direct `prompt` and `test-prompt` require the agent and every other process
+   using its credential to remain stopped, so they are not live-service probes.
+3. Recheck host identity and artifact checksums immediately before transfer.
+   Stage the approved binaries away from active paths, verify their regular-file
+   status, permissions and SHA-256, and stop on mismatch. Keep credentials and
+   other secrets out of releases and reports.
+4. Execute only the approved switch and restart plan. Check the affected
+   services and the approved liveness and adapter checks. Run authentication
+   health or a prompt only if specifically included in the plan; these can
+   refresh credentials or make external requests. If any required check fails,
+   apply the approved rollback plan using the verified local bundle and verify
+   the restored services. Report a rollback failure explicitly and stop.
 
-```text
-/usr/local/lib/goaster/releases/<binary-sha256>/goaster
-/usr/local/lib/goaster/current
-```
-
-`current` is an atomically replaced selector for a complete release. The
-versioned `/usr/local/bin/goaster` binary is never the stable helper. Do not
-overwrite a legacy file at that path as part of helper installation; inspect
-it and obtain separate approval for any unrelated change.
-
-## Deployment procedure
-
-1. Confirm the exact host identity, service name, approved source SHA, binary
-   SHA-256, release path, helper checksum, and verified local rollback bundle.
-   Recheck the host immediately before transfer. A changed checksum, host
-   identity, address, path, or SHA requires fresh approval.
-2. Stage the artifact in a same-filesystem temporary release directory that is
-   not active. Preserve the source checksum and a small non-secret manifest.
-   Do not build on the target, pull arbitrary code, or put secrets in the
-   staging directory.
-3. Verify the staged file's size, regular-file status, mode, and SHA-256
-   against the approved build result. Verify the helper checksum separately.
-   On any mismatch, remove only the unactivated staging directory and stop;
-   do not swap or retry with a different artifact.
-4. Complete the release directory, then atomically replace the `current`
-   selector in the same filesystem. Preserve the previous selector and release
-   identified by the local rollback manifest. Never expose a half-copied
-   binary as current.
-5. Restart only the approved service through its existing service manager.
-   Do not edit the unit or add ports as part of this workflow. Confirm the
-   service is active and the stable helper is the executable that launched it.
-6. Run the local health check: service state plus the approved loopback
-   liveness endpoint. Run readiness/authentication health only when it is in
-   the approved plan, because it may refresh a credential.
-7. Run a concise prompt smoke test through the approved local or loopback
-   interface, for example a fixed request asking for exactly
-   `GOASTER_DEPLOY_SMOKE_OK`. Keep the prompt and reply out of reports when
-   they contain user data, do not use Telegram, and treat a timeout, error, or
-   unexpected reply as a failed deployment.
-
-## Structured result
-
-Return one structured result without credentials or command secrets:
-
-```json
-{
-  "status": "success|failed|rolled_back|rollback_failed",
-  "host": "verified host identity",
-  "source_sha": "exact source SHA",
-  "binary_sha256": "approved checksum",
-  "helper_path": "/usr/local/libexec/goaster-deploy",
-  "release_path": "verified release path",
-  "service": "approved service",
-  "staged": "pass|fail",
-  "checksum": "pass|fail",
-  "atomic_swap": "pass|fail",
-  "restart": "pass|fail|not-run",
-  "health": "pass|fail|not-run",
-  "prompt_smoke": "pass|fail|not-run",
-  "rollback": "not-needed|pass|fail"
-}
-```
-
-Do not report success until staging, checksum verification, atomic swap,
-restart, health, and prompt smoke are all successful.
-
-## Failure and rollback
-
-Before a swap, a failure leaves the active release untouched. After a swap, a
-restart, health, or prompt-smoke failure triggers rollback to the exact
-previous release recorded in the verified server-local bundle: stop the failed
-service, atomically restore the previous selector, restart the same service,
-and repeat the health check. Report `rolled_back` only when the previous
-release is healthy. If rollback fails, stop, leave both release records for
-inspection, report `rollback_failed`, and do not attempt another release or
-delete evidence automatically.
+Report the host, source SHA, both checksums, affected services and paths,
+staging, switch, restart, checks, and rollback results without secrets. Do not
+report deployment success until all approved required checks pass.

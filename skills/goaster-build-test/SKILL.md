@@ -36,7 +36,7 @@ go test ./cmd/goaster-agent ./cmd/goaster-telegram ./config \
   ./internal/artefacts ./internal/attachment ./internal/chat \
   ./internal/command ./internal/controlsecret ./internal/controltransport \
   ./internal/filesync ./internal/localenv ./internal/scheduler \
-  ./internal/telegram ./packaging/cmd/archive
+  ./internal/telegram
 ```
 
 On Linux, the protected socket tests require root and a short, secure `TMPDIR`
@@ -129,4 +129,4 @@ A passing result authorizes only the recorded local artifacts for later
 review. A changed source SHA, artifact path, executable, or checksum requires
 a new build/test result; no deployment or runtime swap is implied.
 
-The existing `goaster-deploy` skill describes a terminal `goaster` release and is incompatible with these two artifacts. It does not define a deployment procedure for them.
+The `goaster-deploy` skill describes the handoff for these artifacts; a host-specific deployment and rollback procedure still needs review and approval.
