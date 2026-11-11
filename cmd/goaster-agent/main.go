@@ -99,32 +99,58 @@ func runTestPrompt(ctx context.Context, message string, output io.Writer, store 
 	return nil
 }
 
-func runPrompt(ctx context.Context, message string, output io.Writer, store chat.CredentialStore) (promptErr error) {
+type agentPromptSetup struct {
+	memory   *chat.MemoryStore
+	registry chat.ModelRegistry
+}
+
+func newAgentPromptSetup(ctx context.Context) (agentPromptSetup, error) {
+	memory, err := chat.NewMemoryStoreWithError("")
+	if err != nil {
+		return agentPromptSetup{}, fmt.Errorf("initialize Markdown memory store: %w", err)
+	}
+	if err := artefacts.InstallStarters(ctx); err != nil {
+		return agentPromptSetup{}, fmt.Errorf("install starter skills: %w", err)
+	}
+	registry, err := chat.NewModelRegistry("")
+	if err != nil {
+		return agentPromptSetup{}, fmt.Errorf("initialize model registry: %w", err)
+	}
+	return agentPromptSetup{memory: memory, registry: registry}, nil
+}
+
+func newAgentSession(provider chat.Provider, memory *chat.MemoryStore, registry chat.ModelRegistry, chatID int64) *chat.Session {
+	return chat.NewSessionWithMemory(chat.Config{Registry: registry, ChatID: chatID}, provider, memory)
+}
+
+func newAgentProvider(store chat.CredentialStore) (*chat.CodexProvider, command.BackgroundCommandManager, error) {
 	provider := chat.NewCodexProvider(store)
 	backgroundManager, err := command.NewBackgroundCommandManager()
 	if err != nil {
-		return fmt.Errorf("initialize background command manager: %w", err)
+		return nil, command.BackgroundCommandManager{}, fmt.Errorf("initialize background command manager: %w", err)
+	}
+	if err := chat.RegisterBackgroundCommandTool(provider, backgroundManager); err != nil {
+		closeErr := backgroundManager.Close()
+		return nil, command.BackgroundCommandManager{}, errors.Join(fmt.Errorf("register background command tool: %w", err), closeErr)
+	}
+	return provider, backgroundManager, nil
+}
+
+func runPrompt(ctx context.Context, message string, output io.Writer, store chat.CredentialStore) (promptErr error) {
+	provider, backgroundManager, err := newAgentProvider(store)
+	if err != nil {
+		return err
 	}
 	defer func() { promptErr = errors.Join(promptErr, backgroundManager.Close()) }()
-	if err := chat.RegisterBackgroundCommandTool(provider, backgroundManager); err != nil {
-		return fmt.Errorf("register background command tool: %w", err)
-	}
 	return runAgentPrompt(ctx, message, output, provider)
 }
 
 func runAgentPrompt(ctx context.Context, message string, output io.Writer, provider chat.Provider) error {
-	memory, err := chat.NewMemoryStoreWithError("")
+	setup, err := newAgentPromptSetup(ctx)
 	if err != nil {
-		return fmt.Errorf("initialize Markdown memory store: %w", err)
+		return err
 	}
-	if err := artefacts.InstallStarters(ctx); err != nil {
-		return fmt.Errorf("install starter skills: %w", err)
-	}
-	registry, err := chat.NewModelRegistry("")
-	if err != nil {
-		return fmt.Errorf("initialize model registry: %w", err)
-	}
-	session := chat.NewSessionWithMemory(chat.Config{Registry: registry}, provider, memory)
+	session := newAgentSession(provider, setup.memory, setup.registry, 0)
 	reply, err := session.Reply(ctx, message)
 	if err != nil {
 		return err
@@ -171,32 +197,21 @@ func serve(store chat.CredentialStore) (serveErr error) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	memory, err := chat.NewMemoryStoreWithError("")
+	setup, err := newAgentPromptSetup(ctx)
 	if err != nil {
-		return fmt.Errorf("initialize Markdown memory store: %w", err)
+		return err
 	}
-	if err := artefacts.InstallStarters(ctx); err != nil {
-		return fmt.Errorf("install starter skills: %w", err)
-	}
-	provider := chat.NewCodexProvider(store)
-	backgroundManager, err := command.NewBackgroundCommandManager()
+	provider, backgroundManager, err := newAgentProvider(store)
 	if err != nil {
-		return fmt.Errorf("initialize background command manager: %w", err)
+		return err
 	}
 	defer func() { serveErr = errors.Join(serveErr, backgroundManager.Close()) }()
-	if err := chat.RegisterBackgroundCommandTool(provider, backgroundManager); err != nil {
-		return fmt.Errorf("register background command tool: %w", err)
-	}
-	registry, err := chat.NewModelRegistry("")
-	if err != nil {
-		return fmt.Errorf("initialize model registry: %w", err)
-	}
 	listener, err := controltransport.Listen()
 	if err != nil {
 		return fmt.Errorf("could not start local agent listener: %w", err)
 	}
 	defer listener.Close()
-	server := http.Server{Handler: handlerWithMemoryAndRegistryWithSecret(provider, memory, provider.CheckAuth, registry, controlSecret), ReadHeaderTimeout: 10 * time.Second}
+	server := http.Server{Handler: handlerWithMemoryAndRegistryWithSecret(provider, setup.memory, provider.CheckAuth, setup.registry, controlSecret), ReadHeaderTimeout: 10 * time.Second}
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -221,7 +236,7 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 		if session := sessions[chatID]; session != nil {
 			return session
 		}
-		session := chat.NewSessionWithMemory(chat.Config{Registry: registry, ChatID: chatID}, provider, memory)
+		session := newAgentSession(provider, memory, registry, chatID)
 		sessions[chatID] = session
 		return session
 	}

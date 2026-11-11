@@ -52,7 +52,7 @@ whose ancestors are root-owned and safe. If those tests cannot run, report
 that coverage as incomplete. Use only a temporary directory you are
 authorized to use and preserve its existing files and policy markers.
 
-## Agent binaries and authenticated prompt smoke test
+## Agent binaries and authenticated prompt checks
 
 Build the two current runtime executables into the temporary output directory:
 `goaster-agent` and `goaster-telegram`. Do not build or start a terminal
@@ -65,39 +65,78 @@ go build -trimpath -o "$TEST_DIR/goaster-telegram" ./cmd/goaster-telegram
 
 Use only the existing agent credential at the same exact path
 `~/.goaster/agent-auth.json`. Never run login as part of this workflow,
-inspect or copy credentials, or place secrets in artifacts, logs, or tests. The
-prompt check may run while the agent or another process uses the same exact
-credential path; this is accepted operational behavior based on observed use,
-not a cross-process refresh or concurrency guarantee. Do not stop the service.
-The tester is the running agent, so tests must never stop, restart, or replace
-it; doing so causes the test to fail. If existing credentials cannot be
-confirmed, mark the check incomplete.
+inspect or copy credentials, or place secrets in artifacts, logs, or tests. Do
+not override `HOME` for either check. The checks may run while the agent or
+another process uses the same exact credential path; this is accepted
+operational behavior based on observed use, not a cross-process refresh or
+concurrency guarantee. Credential refresh can still race across processes.
+Do not stop the service. The tester is the running agent, so tests must never
+stop, restart, or replace it; doing so causes the test to fail. If existing
+credentials cannot be confirmed, mark both checks incomplete.
 
-The test prompt has no tools, skills, or real memory; it uses the default model. It is intentionally different from the ordinary `prompt`, which uses tools and real memory.
+The pre-swap check below invokes the newly built binary's ordinary `prompt`
+command. It uses the same direct-agent construction as the runtime: real
+OpenAI provider authentication, all registered tools, runtime skill metadata,
+starter-skill installation rules, the real Markdown memory store, and the
+runtime model configuration. Set `SOURCE_ROOT` to the recorded absolute
+checkout path before running it. Because the binary is in `TEST_DIR`, point
+`GOASTER_STARTER_DIR` at that checkout's reviewed starter assets; this does
+not replace an existing `~/.goaster/artefacts/skills` directory.
+The direct prompt starts a fresh session with chat ID zero, so it does not
+exercise an existing chat's conversation history or per-chat model selection.
+
+This is a real provider call and is the realistic pre-swap check. The prompt is
+chosen to request no action, but the full runtime can execute model-selected
+shell, web, or background-command tools. Run it only with the local state and
+allowlist approved for that risk; an exact reply does not prove that every
+tool, skill, or memory entry was exercised. The command does not use the
+control socket and does not start, stop, restart, or replace the live agent.
+
+```sh
+command -v timeout >/dev/null || {
+  echo 'timeout is required for the bounded prompt checks' >&2
+  exit 1
+}
+printf '%s\n' 'FULL_RUNTIME_PROMPT_OK' >"$TEST_DIR/expected-full-runtime-prompt.txt"
+if ! GOASTER_STARTER_DIR="$SOURCE_ROOT/skills" timeout --foreground 120s \
+  "$TEST_DIR/goaster-agent" prompt \
+  'Reply with exactly FULL_RUNTIME_PROMPT_OK and no other text.' \
+  >"$TEST_DIR/full-runtime-prompt.txt" 2>"$TEST_DIR/full-runtime-prompt-error.txt"; then
+  exit 1
+fi
+cmp "$TEST_DIR/expected-full-runtime-prompt.txt" "$TEST_DIR/full-runtime-prompt.txt" || exit 1
+```
+
+Retain the lightweight check when a bounded authentication/model smoke test is
+useful or when the full-runtime check is not authorized. `test-prompt` is
+deliberately not a parity check: it sends one message with the default model
+and no tools, skills, or real memory.
 
 ```sh
 printf '%s\n' 'PROMPT_OK' >"$TEST_DIR/expected-prompt.txt"
-command -v timeout >/dev/null || {
-  echo 'timeout is required for the bounded prompt check' >&2
-  exit 1
-}
-timeout --foreground 120s \
+if ! timeout --foreground 120s \
   "$TEST_DIR/goaster-agent" test-prompt \
   'Reply with exactly PROMPT_OK and no other text.' \
-  >"$TEST_DIR/prompt.txt" 2>"$TEST_DIR/prompt-error.txt"
-cmp "$TEST_DIR/expected-prompt.txt" "$TEST_DIR/prompt.txt"
+  >"$TEST_DIR/prompt.txt" 2>"$TEST_DIR/prompt-error.txt"; then
+  exit 1
+fi
+cmp "$TEST_DIR/expected-prompt.txt" "$TEST_DIR/prompt.txt" || exit 1
 ```
 
-Treat a prompt failure, timeout, or reply mismatch as a failed
-result. Do not print the prompt output or error file in the report; retain only
-the pass/fail result. This is the real agent prompt check, not the
-deterministic fake-provider test in the Go suite.
+Treat either prompt failure, timeout, or reply mismatch as a failed result when
+that check is authorized to run. Do not print either prompt output or error
+file in the report; retain only the pass/fail result. The deterministic Go
+tests validate construction and request parity offline, but they do not
+replace the full-runtime provider call. If authentication, local state, or
+tool risk prevents a check, report it as incomplete rather than claiming
+parity.
 
 ## Retained local artifacts
 
-Only after the build, core tests, and bounded authenticated prompt check pass,
-retain both executables outside the checkout under the private, non-deployment
-path:
+Only after the build, core tests, and the full-runtime prompt check pass, retain
+both executables outside the checkout under the private, non-deployment path.
+A lightweight `test-prompt` pass alone does not authorize a full-runtime
+pre-swap result or artifact retention:
 
 ```text
 ~/.goaster/artefacts/builds/<source-sha>/
@@ -136,7 +175,8 @@ fork=<approved fork identity>
 branch=<approved branch>
 build=pass|fail
 core_tests=pass|fail|incomplete
-agent_prompt_smoke=pass|fail|not-run
+agent_prompt_full_runtime=pass|fail|incomplete|not-run
+agent_prompt_smoke=pass|fail|incomplete|not-run
 artifact_dir=<retained private path or not-retained>
 agent_binary_path=<retained path or not-retained>
 agent_binary_sha256=<checksum or not-retained>

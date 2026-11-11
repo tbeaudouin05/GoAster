@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"goaster/internal/artefacts"
 	"goaster/internal/attachment"
 	"goaster/internal/chat"
 	"goaster/internal/command"
@@ -400,6 +401,64 @@ type inspectingProvider func(context.Context, string) (string, error)
 
 func (p inspectingProvider) Reply(ctx context.Context, _ string, message string) (string, error) {
 	return p(ctx, message)
+}
+
+type promptContextProvider struct {
+	mu      sync.Mutex
+	memory  chat.MemoryContext
+	history []chat.ChatMessage
+}
+
+func (p *promptContextProvider) Reply(ctx context.Context, model, message string) (string, error) {
+	return p.ReplyWithHistory(ctx, model, []chat.ChatMessage{{Role: "user", Content: message}})
+}
+
+func (p *promptContextProvider) ReplyWithHistory(ctx context.Context, _ string, history []chat.ChatMessage) (string, error) {
+	p.mu.Lock()
+	p.memory = chat.MemoryContextFromContext(ctx)
+	p.history = append([]chat.ChatMessage(nil), history...)
+	p.mu.Unlock()
+	return "PROMPT_OK", nil
+}
+
+func (p *promptContextProvider) snapshot() (chat.MemoryContext, []chat.ChatMessage) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.memory, append([]chat.ChatMessage(nil), p.history...)
+}
+
+func TestAgentPromptUsesRuntimeSkillsAndMemorySetup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOASTER_STARTER_DIR", filepath.Join(filepath.Dir(filepath.Dir(working)), "skills"))
+
+	provider := &promptContextProvider{}
+	var output bytes.Buffer
+	if err := runAgentPrompt(context.Background(), "Reply with exactly PROMPT_OK.", &output, provider); err != nil {
+		t.Fatalf("runAgentPrompt: %v", err)
+	}
+	if output.String() != "PROMPT_OK\n" {
+		t.Fatalf("prompt output = %q, want exact reply", output.String())
+	}
+	memory, history := provider.snapshot()
+	if !strings.Contains(memory.LongTerm, "# Memory guidance") {
+		t.Fatalf("runtime memory was not passed to the provider: %+v", memory)
+	}
+	if !reflect.DeepEqual(history, []chat.ChatMessage{{Role: "user", Content: "Reply with exactly PROMPT_OK."}}) {
+		t.Fatalf("provider history = %#v, want only the current prompt", history)
+	}
+	metadata, err := artefacts.Discover()
+	if err != nil || !strings.Contains(metadata, "name: goaster-build-test") {
+		t.Fatalf("runtime skill metadata = %q, error = %v", metadata, err)
+	}
+	if info, err := os.Stat(filepath.Join(home, ".goaster", "artefacts", "skills", "goaster-build-test", "META.md")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("installed runtime skill metadata = %v", err)
+	}
 }
 
 func attachmentPath(message string) string {
