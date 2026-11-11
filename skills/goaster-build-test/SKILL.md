@@ -3,6 +3,13 @@
 Keep this stage deliberately small. It validates the approved fork locally;
 it is not a deployment, backup, runtime swap, or integration test plan.
 
+Before creating any managed temporary file or directory, or setting a
+subprocess temporary path, load `read-write-temp-files` and follow its
+workflow. Use its unique private task directory for `TEST_DIR`, resolve the
+real user's `~/.goaster/tmp` before any `HOME` override, and export `TMPDIR`,
+`TMP`, and `TEMP` for subprocesses. Skill metadata is only a load hint; it does
+not automatically enforce these rules for every tool.
+
 Build and test only the approved local fork checkout. This stage must not
 deploy, contact GitHub or OVH, change a server, send Telegram messages, or
 swap a running executable. Do not read, copy, or print authentication files,
@@ -12,7 +19,8 @@ fixtures.
 ## Preflight and build
 
 Confirm the absolute source path, fork identity, branch, and exact source SHA.
-Use a temporary output directory outside the checkout. If Go files were
+Use the private task directory from `read-write-temp-files` as a temporary
+output directory outside the checkout. If Go files were
 changed, run `gofmt` on those files and inspect the diff before continuing.
 The source path and exact source SHA are part of the source/build approval. If
 either changes, stop and obtain fresh approval. Preserve user changes, run
@@ -46,16 +54,17 @@ authorized to use and preserve its existing files and policy markers.
 
 ## Agent binaries and authenticated prompt smoke test
 
-Build the two runtime executables into the temporary output directory. Do not
-build or start a terminal runtime binary for this workflow; the terminal
-binary has been removed.
+Build the two current runtime executables into the temporary output directory:
+`goaster-agent` and `goaster-telegram`. Do not build or start a terminal
+runtime binary for this workflow; the terminal binary has been removed.
 
 ```sh
 go build -trimpath -o "$TEST_DIR/goaster-agent" ./cmd/goaster-agent
 go build -trimpath -o "$TEST_DIR/goaster-telegram" ./cmd/goaster-telegram
 ```
 
-Use only the existing agent credential. Never run login as part of this workflow,
+Use only the existing agent credential at the same exact path
+`~/.goaster/agent-auth.json`. Never run login as part of this workflow,
 inspect or copy credentials, or place secrets in artifacts, logs, or tests. The
 prompt check may run while the agent or another process uses the same exact
 credential path; this is accepted operational behavior based on observed use,
@@ -67,9 +76,14 @@ confirmed, mark the check incomplete.
 The test prompt has no tools, skills, or real memory; it uses the default model. It is intentionally different from the ordinary `prompt`, which uses tools and real memory.
 
 ```sh
-printf '%s\n' 'GOASTER_BUILD_TEST_OK' >"$TEST_DIR/expected-prompt.txt"
-"$TEST_DIR/goaster-agent" test-prompt \
-  'Reply with exactly GOASTER_BUILD_TEST_OK and no other text.' \
+printf '%s\n' 'PROMPT_OK' >"$TEST_DIR/expected-prompt.txt"
+command -v timeout >/dev/null || {
+  echo 'timeout is required for the bounded prompt check' >&2
+  exit 1
+}
+timeout --foreground 120s \
+  "$TEST_DIR/goaster-agent" test-prompt \
+  'Reply with exactly PROMPT_OK and no other text.' \
   >"$TEST_DIR/prompt.txt" 2>"$TEST_DIR/prompt-error.txt"
 cmp "$TEST_DIR/expected-prompt.txt" "$TEST_DIR/prompt.txt"
 ```
@@ -81,8 +95,9 @@ deterministic fake-provider test in the Go suite.
 
 ## Retained local artifacts
 
-Only after the build, core tests, and authenticated prompt check pass, retain
-both executables outside the checkout under the private, non-deployment path:
+Only after the build, core tests, and bounded authenticated prompt check pass,
+retain both executables outside the checkout under the private, non-deployment
+path:
 
 ```text
 ~/.goaster/artefacts/builds/<source-sha>/
@@ -135,5 +150,9 @@ runtime_swap=not-run
 A passing result authorizes only the recorded local artifacts for later
 review. A changed source SHA, artifact path, executable, or checksum requires
 a new build/test result; no deployment or runtime swap is implied.
+
+After retaining and verifying artifacts, clean up only the private temporary
+task directory. Preserve the existing GoAster authentication files and all
+existing retained build directories; never clean them as part of this stage.
 
 The `goaster-deploy` skill describes the handoff for these artifacts; a host-specific deployment and rollback procedure still needs review and approval.

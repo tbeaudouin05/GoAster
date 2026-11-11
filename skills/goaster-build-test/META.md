@@ -1,2 +1,2 @@
 name: goaster-build-test
-description: Build and test an approved GoAster fork, run an authenticated one-shot agent prompt, and retain checked agent and Telegram executables without deployment.
+description: Build and test an approved GoAster fork with current agent and Telegram binaries, run a timed authenticated test-prompt expecting exact PROMPT_OK, and retain checked executables without deployment.

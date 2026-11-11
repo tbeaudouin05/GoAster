@@ -44,6 +44,7 @@ safety rules.
 Useful operational skills include [background command
 administration](skills/background-command-administration/SKILL.md),
 [model administration](skills/model-administration/SKILL.md),
+[read/write temporary files](skills/read-write-temp-files/SKILL.md),
 [project memory](skills/project-memory/SKILL.md),
 [backup and rollback](skills/goaster-backup/SKILL.md),
 [deployment](skills/goaster-deploy/SKILL.md), and
