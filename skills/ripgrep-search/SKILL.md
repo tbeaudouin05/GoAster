@@ -1,97 +1,50 @@
 # Ripgrep search
 
-Use this skill whenever a task requires finding text, filenames, symbols, or
-references in local source trees or other directory trees.
+Use this skill to find text, filenames, symbols, or references in local files.
 
-Searching local files is read-only. Check whether `rg` is already installed
-before recommending installation.
+## Search
 
-## Prefer ripgrep in normal repository work
-
-Check first:
+Check whether `rg` is installed:
 
 ```sh
 command -v rg
 rg --version
 ```
 
-Use `rg` by default for repository searches. Ripgrep is usually better than
-classic `grep` for source trees because it is fast, recursive by default, has
-clear include and exclude options, respects `.gitignore` by default, handles
-common text encodings safely, and gives useful line-numbered output. It is the
-normal GoAster choice for searching a checkout.
-
-Do not claim that ripgrep is always better. Use `grep` when portability is the
-priority, the target is a minimal system where only POSIX tools are available,
-a script explicitly requires standard `grep` behavior, or the search is a
-small single-file/pipeline operation where installing another tool would add
-no value. Use `git grep` when the search should be limited to tracked files in
-a Git worktree and Git is already the desired boundary.
-
-## Practical patterns
+Prefer `rg` for repository searches. It searches recursively and respects
+`.gitignore` by default. Use `git grep` for tracked files only, or `grep`
+when portability matters or the search is simple.
 
 ```sh
-# Search tracked-source-like files while respecting ignore rules.
-rg 'pattern' path/
-
-# Search only selected file types.
-rg --glob '*.go' 'pattern' .
-
-# Search filenames rather than file contents.
-rg --files | rg 'config|secret'
-
-# Include ignored files only when the user explicitly needs them.
-rg --hidden --no-ignore 'pattern' path/
-
-# Show context around matches.
-rg -n -C 3 'pattern' path/
+rg 'pattern' path/                  # Search contents
+rg --glob '*.go' 'pattern' .        # Filter by file type
+rg --files | rg 'config|secret'     # Search filenames
+rg -n -C 3 'pattern' path/          # Show surrounding lines
 ```
 
-Treat search output as potentially sensitive. Do not paste secret values,
-tokens, private keys, or full secret-bearing files into normal chat. Narrow the
-path and pattern, report filenames and line numbers when enough, and redact
-sensitive matching text.
+Only include ignored files when explicitly needed:
+
+```sh
+rg --hidden --no-ignore 'pattern' path/
+```
+
+Search only the requested directory. Treat results as sensitive: never share
+secrets or full secret-bearing files. Prefer filenames and line numbers, and
+redact sensitive matches.
 
 ## If ripgrep is missing
 
-If `command -v rg` fails, tell the user that ripgrep is recommended but is not
-currently installed. Offer `grep` or `git grep` for an immediate read-only
-search, then recommend installing ripgrep through the host's official package
-manager. Installing software changes the host. Explain the package-manager
-command and obtain explicit approval before installing ripgrep, unless the user
-has already explicitly authorized installation as part of the current task.
+Install ripgrep using the host's verified package manager, then check
+`command -v rg` and `rg --version`.
 
-Use the host's official package manager only. Do not pipe downloaded shell
-scripts into a shell, add an unverified repository, change unrelated packages,
-or use elevated privileges without the user's approval.
+First identify the operating system and package manager. Do not assume `sudo`
+or network access, run downloaded scripts, add unverified repositories, or
+change unrelated packages.
 
-First identify the operating system and available package manager. Do not
-assume `sudo`, a distribution, a package manager, network access, or permission
-to install software. Ask for explicit approval before running the install.
-Examples of commands to show only after the target package manager is verified:
+If installation fails or is not permitted, use `grep` or `git grep` and
+report the limitation.
 
-```sh
-# Debian/Ubuntu
-sudo apt-get update && sudo apt-get install ripgrep
+## Boundaries
 
-# Fedora/RHEL-like systems
-sudo dnf install ripgrep
-
-# macOS with Homebrew
-brew install ripgrep
-
-# Windows with winget
-winget install BurntSushi.ripgrep.MSVC
-```
-
-The examples are guidance, not permission to execute. Prefer the smallest
-package-manager operation, avoid unrelated upgrades, and verify the result
-with `command -v rg` and `rg --version`. If installation is unavailable or not
-approved, continue with `grep` or `git grep` and state the limitation.
-
-## Search boundary
-
-Do not search outside the requested directory or expose unrelated host data.
-Do not use ripgrep as a substitute for a database query, secret-manager read,
-or binary inspection. For binary files, use an appropriate file-specific tool
-instead of forcing text search.
+Do not use ripgrep in place of a database query, secret-manager read, or
+binary-specific inspection tool.
