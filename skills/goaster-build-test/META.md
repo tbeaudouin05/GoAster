@@ -1,2 +1,2 @@
 name: goaster-build-test
-description: Run the simple GoAster build, core tests, isolated binary start, and concise prompt smoke test for an approved fork source.
+description: Build and test an approved GoAster fork, run an authenticated one-shot agent prompt, and retain checked agent and Telegram executables without deployment.

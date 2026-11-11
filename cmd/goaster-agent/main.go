@@ -67,13 +67,72 @@ func run(ctx context.Context, args []string, output io.Writer, auth *chat.OpenAI
 	if len(args) == 1 && args[0] == "login" {
 		return auth.Login(ctx, output)
 	}
+	if len(args) > 0 && (args[0] == "prompt" || args[0] == "test-prompt") {
+		if len(args) != 3 || args[1] != "--agent-stopped" || strings.TrimSpace(args[2]) == "" {
+			return errors.New(`usage: goaster-agent prompt|test-prompt --agent-stopped "MESSAGE"; agent and other credential users must be stopped`)
+		}
+		if auth == nil {
+			return errors.New("agent authentication is unavailable")
+		}
+		if args[0] == "test-prompt" {
+			return runTestPrompt(ctx, args[2], output, auth.Store)
+		}
+		return runPrompt(ctx, args[2], output, auth.Store)
+	}
 	if len(args) == 1 && (args[0] == "live" || args[0] == "health") {
 		return probeAgent(ctx, args[0], output)
 	}
 	if len(args) != 0 {
-		return fmt.Errorf("invalid invocation; use goaster-agent, login, live, or health")
+		return fmt.Errorf("invalid invocation; use goaster-agent, login, prompt, test-prompt, live, or health")
 	}
 	return start(auth.Store)
+}
+
+func runTestPrompt(ctx context.Context, message string, output io.Writer, store chat.CredentialStore) error {
+	reply, err := chat.ReplyWithoutTools(ctx, chat.NewCodexProvider(store), chat.DefaultModel, message)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, reply); err != nil {
+		return fmt.Errorf("write prompt reply: %w", err)
+	}
+	return nil
+}
+
+func runPrompt(ctx context.Context, message string, output io.Writer, store chat.CredentialStore) (promptErr error) {
+	provider := chat.NewCodexProvider(store)
+	backgroundManager, err := command.NewBackgroundCommandManager()
+	if err != nil {
+		return fmt.Errorf("initialize background command manager: %w", err)
+	}
+	defer func() { promptErr = errors.Join(promptErr, backgroundManager.Close()) }()
+	if err := chat.RegisterBackgroundCommandTool(provider, backgroundManager); err != nil {
+		return fmt.Errorf("register background command tool: %w", err)
+	}
+	return runAgentPrompt(ctx, message, output, provider)
+}
+
+func runAgentPrompt(ctx context.Context, message string, output io.Writer, provider chat.Provider) error {
+	memory, err := chat.NewMemoryStoreWithError("")
+	if err != nil {
+		return fmt.Errorf("initialize Markdown memory store: %w", err)
+	}
+	if err := artefacts.InstallStarters(ctx); err != nil {
+		return fmt.Errorf("install starter skills: %w", err)
+	}
+	registry, err := chat.NewModelRegistry("")
+	if err != nil {
+		return fmt.Errorf("initialize model registry: %w", err)
+	}
+	session := chat.NewSessionWithMemory(chat.Config{Registry: registry}, provider, memory)
+	reply, err := session.Reply(ctx, message)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, reply); err != nil {
+		return fmt.Errorf("write prompt reply: %w", err)
+	}
+	return nil
 }
 
 func probeAgent(ctx context.Context, probe string, output io.Writer) error {

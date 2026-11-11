@@ -1,5 +1,7 @@
 # GoAster deployment
 
+**Incompatible with the current build/test artifacts:** this legacy workflow describes a single terminal `goaster` binary, which has been removed. It does not specify deployment of `goaster-agent` and `goaster-telegram`; do not use it for those artifacts without a separately reviewed procedure.
+
 Deploy only a passing `goaster-build-test` result to the approved host. Before
 starting, obtain explicit deployment approval naming the exact source SHA,
 binary checksum, host, service, install paths, rollback bundle, restart,

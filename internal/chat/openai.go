@@ -778,6 +778,13 @@ func (p *CodexProvider) replyWithHistory(ctx context.Context, model string, hist
 	return p.modelReply(ctx, model, history, true)
 }
 
+// ReplyWithoutTools sends a single message without tools, skills, or memory.
+func ReplyWithoutTools(ctx context.Context, provider interface {
+	modelReply(context.Context, string, []ChatMessage, bool) (string, error)
+}, model, message string) (string, error) {
+	return provider.modelReply(ctx, model, []ChatMessage{{Role: "user", Content: message}}, false)
+}
+
 // SummarizeConversation uses the same subscription and active model as chat,
 // but does not offer or execute tools while processing the old conversation.
 func (p *CodexProvider) SummarizeConversation(ctx context.Context, model, previousSummary string, messages []ChatMessage) (string, error) {
@@ -1194,7 +1201,7 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 			return response.Text, status, nil
 		}
 		if !allowTools {
-			return "", status, errors.New("Codex requested a tool while summarizing")
+			return "", status, errors.New("Codex requested a tool in a tool-free request")
 		}
 		responseWebSearchCalls := 0
 		responseWebFetchCalls := 0

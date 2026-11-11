@@ -447,7 +447,18 @@ func TestCodexSessionSummarizesWithSubscriptionAndNoTools(t *testing.T) {
 }
 
 func TestCodexSummarizationRejectsUnexpectedToolCalls(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 2 {
+			var request codexRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+				return
+			}
+			if len(request.Tools) != 0 || len(request.Input) != 1 || len(request.Input[0].Content) != 1 || request.Input[0].Content[0].Text != "test message" {
+				t.Errorf("unexpected tool-free input: %+v", request)
+			}
+		}
 		writeCodexFunctionCall(t, w, "call-1", "summary_test_tool", `{}`)
 	}))
 	defer server.Close()
@@ -466,6 +477,9 @@ func TestCodexSummarizationRejectsUnexpectedToolCalls(t *testing.T) {
 	}
 	if _, err := provider.SummarizeConversation(context.Background(), "model", "", numberedHistory(2)); err == nil {
 		t.Fatal("unexpected tool call was accepted")
+	}
+	if _, err := ReplyWithoutTools(context.Background(), provider, "model", "test message"); err == nil {
+		t.Fatal("tool-free prompt accepted a tool call")
 	}
 	if executions.Load() != 0 {
 		t.Fatal("summarization executed a tool")

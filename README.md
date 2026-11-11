@@ -1,83 +1,20 @@
 # GoAster
 
-GoAster is a local terminal chat application with a subscription-backed OpenAI
-provider, local tools, durable memory, scheduling, and a native file picker.
-The repository also contains the remote agent and Telegram runtime.
-
-The repository contains the local chat application, authentication, packaging,
-remote runtime, Telegram runtime, and other operational tools.
+GoAster provides an agent runtime and a Telegram adapter with a subscription-backed OpenAI provider, tools, memory, and scheduling.
 
 ## Build and run
-
-Build all Go commands directly from the repository:
 
 ```sh
 go build ./...
 ```
 
-Run the local terminal application with the starter skills from this checkout:
+The agent uses its existing private `~/.goaster/agent-auth.json` credentials. A direct prompt must only run while the agent and every other process using those credentials are stopped. Credential refresh is serialized within a process only; the flag below is an operator acknowledgement, not a reliable check of service state. Do not stop a service automatically for this purpose.
 
 ```sh
-GOASTER_STARTER_DIR="$(pwd)/skills" go run ./cmd/goaster
+goaster-agent prompt --agent-stopped "Describe the current GoAster runtime in one sentence."
 ```
 
-The local app and remote agent each keep their own runtime skill directory.
-Review and merge skill changes manually when needed.
-
-Authentication uses the ChatGPT subscription OAuth device flow in the terminal.
-Open the displayed URL, sign in, and enter the one-time code. Credentials are
-stored locally in `~/.goaster/auth.json` with private file and directory
-permissions. The remote agent uses its own credential file and never receives
-the local credential file.
-
-## Local chat
-
-Describe a task in ordinary language. The local chat can use the installed
-skills, public web search and fetch, bounded shell execution, named background
-command allowlists, memory, and scheduling.
-
-Terminal commands:
-
-- `/env` opens the local environment-file picker.
-- `/env-file PATH` imports a selected `KEY=VALUE` file after review.
-- `/file` or `/upload` opens the local file picker for non-secret inspection.
-- `/clear` clears the saved terminal conversation.
-
-Environment values are reviewed and stored separately in
-`~/.goaster/env` with private permissions. Values are masked in terminal
-output. Do not paste secrets into chat or select secret-containing files for
-`/file`.
-
-Background commands start only from the private local allowlist. Cleanup is
-best effort: on Linux, ordinary commands use a private process group and a stop
-request signals that group and the main process; a PTY stop signals the active
-terminal foreground group when the platform permits it and stops the main
-process. Other platforms use their available direct or platform tree cleanup.
-These controls are not a complete descendant container. A command can fork,
-detach, exit before cleanup, or otherwise leave a descendant behind, so a
-successful stop does not promise that every descendant terminated. Cleanup
-avoids `/proc` scans and delayed process-group IDs that could later refer to an
-unrelated process. Signals can fail or be handled by the command, and closing a
-PTY is not a termination guarantee. Cleanup failures remain visible in session
-metadata and are returned by orderly runtime shutdown.
-
-Interactive input is intended for non-secret control text only. Tool arguments
-and captured output may be saved in conversation state.
-Queued input is not a delivery confirmation; check `input_failed` for failed or
-unconfirmed writes.
-Never enter passwords, passphrases, tokens, API keys, one-time codes, private
-keys, or other secrets through `background_command`. The bundled `github-login`
-profile is the only narrow authentication exception: it uses the fixed GitHub
-browser flow, accepts only enter/return or ctrl-c/c-c keys, and exposes the
-terminal output needed to relay GitHub's official verification URL and one-time
-code. Never relay passwords, tokens, credentials, or other secrets. All other
-login or authentication commands remain prohibited.
-
-The conversation is saved under
-`~/.goaster/artefacts/state/sessions/session.json`. Markdown memory lives
-under `~/.goaster/artefacts/memory/`; daily notes are treated as untrusted
-data, while `MEMORY.md` is user-managed guidance. Scheduled turns are stored
-in `~/.goaster/artefacts/state/cron/jobs.json`.
+The ordinary prompt uses the agent's tools and real Markdown memory and installs starter skills. It may execute actions and modify runtime state. `test-prompt --agent-stopped "MESSAGE"` instead sends a single message without tools, skills, or real memory, using the default model. Neither command starts login automatically. If credentials are unavailable, the check fails.
 
 ## Runtime skills
 
@@ -108,24 +45,7 @@ administration](skills/background-command-administration/SKILL.md),
 
 ## Remote agent runtime
 
-`cmd/goaster-agent` builds the remote agent executable. The agent exposes
-local health and liveness checks and a chat endpoint; its authentication state
-is separate from the terminal application's state. A configured
-`GOASTER_AGENT_SOCKET` selects the protected Unix-socket transport where
-appropriate.
-
-The local `process_handoff` tool and the exceptional
-`goaster remote-login` command use a fixed allowlisted profile. They attach
-interactive login to a protected terminal, require explicit local terminal
-approval, use only the supplied SSH key, and run the remote login and health
-check. Remote connections require strict host-key verification against an
-already trusted `known_hosts` entry. Unknown or changed host keys stop the
-connection; the runtime does not accept a first-contact key automatically.
-
-The handoff accepts a fixed profile and reviewed transport only. It never
-accepts model-supplied executable names, shell text, arbitrary arguments,
-passwords, or credential-file arguments. A successful verified connection may
-be saved as a non-secret local target record beside an SSH identity.
+`cmd/goaster-agent` builds the agent executable. It exposes local health and liveness checks and a chat endpoint. A configured `GOASTER_AGENT_SOCKET` selects the protected Unix-socket transport where appropriate.
 
 Remote runtime state belongs to the remote user's private
 `~/.goaster/` directory. Do not copy local OAuth credentials, private keys,
@@ -177,15 +97,16 @@ the [source code evolution skill](skills/goaster-source-code-evolution/SKILL.md)
 Run the core Go tests from the repository root:
 
 ```sh
-go test ./cmd/goaster ./cmd/goaster-agent ./config \
+go test ./cmd/goaster-agent ./cmd/goaster-telegram ./config \
   ./internal/artefacts ./internal/attachment ./internal/chat \
   ./internal/command ./internal/controlsecret ./internal/controltransport \
-  ./internal/filesync ./internal/localenv \
-  ./internal/scheduler ./packaging/cmd/archive
-go test ./internal/chat -run '^TestLoop$' -count=1
+  ./internal/filesync ./internal/localenv ./internal/scheduler \
+  ./internal/telegram ./packaging/cmd/archive
 ```
 
 The [build/test workflow](skills/goaster-build-test/SKILL.md) also describes
-the isolated binary-start check and Linux temporary-directory requirements.
+the authenticated agent-prompt check, retained non-secret agent and Telegram
+artifacts with checksums, and Linux temporary-directory requirements. It does
+not deploy or swap the retained binaries.
 
-Remote and Telegram runtime code remain available alongside the local app.
+The former terminal binary and its remote-login handoff are no longer available. The legacy desktop packaging and deployment workflow target the removed terminal binary and are incompatible with the agent and Telegram artifacts; they require a separately reviewed replacement.

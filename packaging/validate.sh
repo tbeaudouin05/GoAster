@@ -1,4 +1,5 @@
 #!/bin/sh
+# Legacy terminal packages require the removed cmd/goaster; incompatible with agent/Telegram builds.
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
