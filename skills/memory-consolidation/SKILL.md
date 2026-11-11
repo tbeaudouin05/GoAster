@@ -1,9 +1,9 @@
 ---
-name: self-improvement-memory-consolidation
+name: memory-consolidation
 description: Optional user-managed daily maintenance workflow for reviewing GoAster Markdown notes and consolidating verified durable facts into protected artefacts/memory/MEMORY.md.
 ---
 
-# GoAster self-improvement memory consolidation
+# GoAster memory consolidation
 
 This is an optional, user-managed daily maintenance skill for GoAster's
 Markdown memory. It is an instruction-only workflow: a user may invoke it
