@@ -55,13 +55,20 @@ go build -trimpath -o "$TEST_DIR/goaster-agent" ./cmd/goaster-agent
 go build -trimpath -o "$TEST_DIR/goaster-telegram" ./cmd/goaster-telegram
 ```
 
-Use only the existing agent credential. Never run login as part of this workflow. Before the prompt, require the operator to verify that the agent and every other process using its credential are stopped, and remain stopped throughout. Refresh is not serialized across processes; the flag is an acknowledgement, not an automatic state check. Do not stop the service. If this condition or existing credentials cannot be confirmed, mark the check incomplete.
+Use only the existing agent credential. Never run login as part of this workflow,
+inspect or copy credentials, or place secrets in artifacts, logs, or tests. The
+prompt check may run while the agent or another process uses the same exact
+credential path; this is accepted operational behavior based on observed use,
+not a cross-process refresh or concurrency guarantee. Do not stop the service.
+The tester is the running agent, so tests must never stop, restart, or replace
+it; doing so causes the test to fail. If existing credentials cannot be
+confirmed, mark the check incomplete.
 
 The test prompt has no tools, skills, or real memory; it uses the default model. It is intentionally different from the ordinary `prompt`, which uses tools and real memory.
 
 ```sh
 printf '%s\n' 'GOASTER_BUILD_TEST_OK' >"$TEST_DIR/expected-prompt.txt"
-"$TEST_DIR/goaster-agent" test-prompt --agent-stopped \
+"$TEST_DIR/goaster-agent" test-prompt \
   'Reply with exactly GOASTER_BUILD_TEST_OK and no other text.' \
   >"$TEST_DIR/prompt.txt" 2>"$TEST_DIR/prompt-error.txt"
 cmp "$TEST_DIR/expected-prompt.txt" "$TEST_DIR/prompt.txt"

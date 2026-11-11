@@ -8,13 +8,19 @@ GoAster provides an agent runtime and a Telegram adapter with a subscription-bac
 go build ./...
 ```
 
-The agent uses its existing private `~/.goaster/agent-auth.json` credentials. A direct prompt must only run while the agent and every other process using those credentials are stopped. Credential refresh is serialized within a process only; the flag below is an operator acknowledgement, not a reliable check of service state. Do not stop a service automatically for this purpose.
+The agent, direct prompts, and test prompts use the same private
+`~/.goaster/agent-auth.json` path. It is accepted operational behavior for two
+processes to use that exact path at the same time, based on observed use.
+Credential refresh is serialized within each process only; this does not make a
+cross-process refresh or concurrency guarantee.
+During tests, the tester is the running agent. Tests must never stop, restart,
+or replace it, because doing so causes the test to fail.
 
 ```sh
-goaster-agent prompt --agent-stopped "Describe the current GoAster runtime in one sentence."
+goaster-agent prompt "Describe the current GoAster runtime in one sentence."
 ```
 
-The ordinary prompt uses the agent's tools and real Markdown memory and installs starter skills. It may execute actions and modify runtime state. `test-prompt --agent-stopped "MESSAGE"` instead sends a single message without tools, skills, or real memory, using the default model. Neither command starts login automatically. If credentials are unavailable, the check fails.
+The ordinary prompt uses the agent's tools and real Markdown memory and installs starter skills. It may execute actions and modify runtime state. `goaster-agent test-prompt "MESSAGE"` instead sends a single message without tools, skills, or real memory, using the default model. Neither command starts login automatically. If credentials are unavailable, the check fails.
 
 ## Runtime skills
 

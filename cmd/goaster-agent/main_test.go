@@ -982,13 +982,8 @@ func TestAgentStartsUnauthenticatedAndRejectsOtherCommands(t *testing.T) {
 	if err := run(context.Background(), []string{"setup-runtime"}, io.Discard, auth, start); err == nil || starts != 1 {
 		t.Fatal("agent accepted a runtime credential transfer command")
 	}
-	if err := run(context.Background(), []string{"prompt"}, io.Discard, auth, start); err == nil || !strings.Contains(err.Error(), `usage: goaster-agent prompt|test-prompt --agent-stopped "MESSAGE"`) || starts != 1 {
+	if err := run(context.Background(), []string{"prompt"}, io.Discard, auth, start); err == nil || !strings.Contains(err.Error(), `usage: goaster-agent prompt|test-prompt "MESSAGE"`) || starts != 1 {
 		t.Fatalf("invalid prompt invocation: error=%v starts=%d", err, starts)
-	}
-	for _, mode := range []string{"prompt", "test-prompt"} {
-		if err := run(context.Background(), []string{mode, "message"}, io.Discard, auth, start); err == nil || !strings.Contains(err.Error(), "--agent-stopped") {
-			t.Fatalf("%s accepted missing stopped-agent acknowledgement: %v", mode, err)
-		}
 	}
 	promptHome := t.TempDir()
 	t.Setenv("HOME", promptHome)
@@ -998,10 +993,15 @@ func TestAgentStartsUnauthenticatedAndRejectsOtherCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GOASTER_STARTER_DIR", filepath.Join(filepath.Dir(filepath.Dir(working)), "skills"))
-	if err := run(context.Background(), []string{"prompt", "--agent-stopped", "agent auth check"}, io.Discard, auth, start); err == nil || starts != 1 {
+	for _, mode := range []string{"prompt", "test-prompt"} {
+		if err := run(context.Background(), []string{mode, "message"}, io.Discard, auth, start); err == nil || starts != 1 {
+			t.Fatalf("%s without credentials: error=%v starts=%d", mode, err, starts)
+		}
+	}
+	if err := run(context.Background(), []string{"prompt", "agent auth check"}, io.Discard, auth, start); err == nil || starts != 1 {
 		t.Fatalf("prompt without agent credentials: error=%v starts=%d", err, starts)
 	}
-	if err := run(context.Background(), []string{"test-prompt", "--agent-stopped", "agent auth check"}, io.Discard, auth, start); err == nil || starts != 1 {
+	if err := run(context.Background(), []string{"test-prompt", "agent auth check"}, io.Discard, auth, start); err == nil || starts != 1 {
 		t.Fatalf("test prompt without agent credentials: error=%v starts=%d", err, starts)
 	}
 	if _, err := os.Lstat(store.Path); !errors.Is(err, os.ErrNotExist) {

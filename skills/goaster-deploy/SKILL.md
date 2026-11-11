@@ -36,8 +36,10 @@ configuration or prove end-to-end messaging works.
    restart order, liveness and adapter checks, and restoring the previous
    binaries and services. Include a prompt smoke test only through an existing,
    approved interface; do not use Telegram without explicit authorization.
-   Direct `prompt` and `test-prompt` require the agent and every other process
-   using its credential to remain stopped, so they are not live-service probes.
+   Direct `prompt` and `test-prompt` use the same exact credential path as the
+   agent and may run while other processes use it; this is accepted operational
+   behavior based on observed use, not a cross-process refresh or concurrency
+   guarantee. They are not live-service probes.
 3. Recheck host identity and artifact checksums immediately before transfer.
    Stage the approved binaries away from active paths, verify their regular-file
    status, permissions and SHA-256, and stop on mismatch. Keep credentials and

@@ -68,16 +68,16 @@ func run(ctx context.Context, args []string, output io.Writer, auth *chat.OpenAI
 		return auth.Login(ctx, output)
 	}
 	if len(args) > 0 && (args[0] == "prompt" || args[0] == "test-prompt") {
-		if len(args) != 3 || args[1] != "--agent-stopped" || strings.TrimSpace(args[2]) == "" {
-			return errors.New(`usage: goaster-agent prompt|test-prompt --agent-stopped "MESSAGE"; agent and other credential users must be stopped`)
+		if len(args) != 2 || strings.TrimSpace(args[1]) == "" {
+			return errors.New(`usage: goaster-agent prompt|test-prompt "MESSAGE"`)
 		}
 		if auth == nil {
 			return errors.New("agent authentication is unavailable")
 		}
 		if args[0] == "test-prompt" {
-			return runTestPrompt(ctx, args[2], output, auth.Store)
+			return runTestPrompt(ctx, args[1], output, auth.Store)
 		}
-		return runPrompt(ctx, args[2], output, auth.Store)
+		return runPrompt(ctx, args[1], output, auth.Store)
 	}
 	if len(args) == 1 && (args[0] == "live" || args[0] == "health") {
 		return probeAgent(ctx, args[0], output)
