@@ -17,8 +17,8 @@ authentication, authorization, and approval gate. Upstream GitHub remains
 read-only, the user works in their own fork, and this workflow never creates a
 pull request.
 
-Bind every approval to the exact GitHub host and fork identity, the standard
-`goaster-customizations` and `goaster-contributions` branches, source SHA,
+Bind every approval to the exact GitHub host and fork identity, the
+`goaster-customization` branch, source SHA,
 local path, both built binary checksums, target host identity, affected
 services, release paths, and any helper path verified on that host. A change to
 any identity, SHA, path, or host invalidates the affected approval and all

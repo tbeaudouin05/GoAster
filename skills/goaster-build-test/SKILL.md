@@ -10,7 +10,12 @@ or replace the running agent.
 - Load `read-write-temp-files`. Use its private task directory as `TEST_DIR`
   and follow its temporary-directory and environment-variable rules.
 - Record the approved absolute source path, fork, branch, and exact commit SHA.
-  If the path or SHA changes, stop and obtain fresh approval.
+- Require every new binary intended for deployment to be built from the
+  approved checkout on the fork's `goaster-customization` branch, whether the
+  implementation is a skill or source customization. Confirm the branch with
+  `git branch --show-current`; stop if it differs. This branch requirement
+  does not authorize deployment. If the path or SHA changes, stop and obtain
+  fresh approval.
 - Preserve user changes. If requested Go files need formatting, run `gofmt`
   only on those files, inspect the diff, and report any changes.
 - Require a clean committed checkout, including ignored files. Check

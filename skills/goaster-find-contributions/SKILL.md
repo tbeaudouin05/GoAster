@@ -5,7 +5,8 @@ description: Find shared GoAster contributions and inspect their implementations
 
 # Find GoAster contributions
 
-Use this skill when a user asks to find a shared skill or source-code feature.
+Use this skill when a user asks to find a shared skill or source
+customization.
 
 1. Use a dedicated local checkout of the upstream repository,
    `tbeaudouin05/GoAster`, separate from the user's own fork and working

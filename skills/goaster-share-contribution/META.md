@@ -1,2 +1,2 @@
 name: goaster-share-contribution
-description: Safely publish an approved GoAster source or local-skill contribution from a verified user fork using goaster-customizations and manifest-only goaster-contributions branches.
+description: Share a GoAster skill or source customization after committing both implementation types to the public fork's goaster-customization branch and verifying public access.

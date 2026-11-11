@@ -1,10 +1,9 @@
 # GoAster fork
 
 Prepare and verify the user's public fork of `tbeaudouin05/GoAster`
-and its two standard branches:
+and its standard customization branch for both skills and source changes:
 
-- `goaster-customizations`: persistent user changes.
-- `goaster-contributions`: contribution manifests.
+- `goaster-customization`: skill and source customization implementations.
 
 Use the [github-auth skill](../github-auth/SKILL.md) and its
 [authentication guidance](../github-auth/AUTH.md) for all GitHub access.
@@ -24,18 +23,18 @@ Use the [github-auth skill](../github-auth/SKILL.md) and its
    report the blocker. If it is not the correct fork, stop and ask the user how
    to proceed. A 404 alone does not prove it is absent.
 
-4. Check both standard branches if the fork exists. Ask the user
+4. Check the standard source branch if the fork exists. Ask the user
    explicitly before reusing an existing branch at its observed commit.
    For a missing branch, propose the fork's default commit as its base.
 
    If the fork does not exist, propose the verified upstream default
-   commit as the base for both branches. Check the branches after the
+   commit as the base for the branch. Check the branch after the
    fork is created.
 
 ## Approval
 
 Before creating anything, present the exact plan: account, public fork,
-default branch and base commit, both standard branch names and their creation
+default branch and base commit, the standard branch name and its creation
 or reuse status, intended actions, and any local checkout path and setup. Do
 not ask the user to choose arbitrary branch names.
 
@@ -51,7 +50,7 @@ creation.
    and commit.
    Do not automatically retry an uncertain creation.
 
-2. Recheck each standard branch. Create a missing branch at its approved
+2. Recheck the standard branch. Create a missing branch at its approved
    base commit. If a branch already exists, ask the user to explicitly
    choose whether to reuse it at its observed commit. Never overwrite it.
 
@@ -60,22 +59,26 @@ creation.
 
 4. If local setup was approved, use the approved path, preserve existing
    changes, set `origin` to the verified fork, and check out
-   `goaster-customizations`. Keep any `upstream` remote fetch-only.
+   `goaster-customization`. Keep any `upstream` remote fetch-only. This
+   checkout may be used to prepare and edit any customization, including
+   adding, moving, or updating skill files.
 
-5. Verify the upstream, fork, and both exact branch commits. New branches
-   must match their approved base; reused branches must match the commits
+5. Verify the upstream, fork, and exact branch commit. A new branch
+   must match its approved base; a reused branch must match the commit
    the user explicitly chose.
 
 ## Handoff
 
 Report the verified account, fork URL and visibility, upstream default
-branch and commit, both branch names and commits, whether each was created
+branch and commit, the branch name and commit, whether it was created
 or reused, and the checkout path if applicable.
 
 Stop after verification. Never write to the upstream repository; do not modify
-or push to it.
-Only the approved fork may receive branch changes. Approval does not authorize
-changes to upstream contents, refs, settings, or access, nor commits, pushes,
-deletes, overwrites, force pushes, resets, or pull requests. Keep credentials
-and device information in the user's local GitHub authentication flow; never
-request or report secrets.
+or push to it. Only the approved fork may receive public changes. Before any
+commit or push, show the exact changes and destination branch and obtain
+explicit approval. Before an upstream pull request, verify that the complete
+skill or source implementation is committed on `goaster-customization` and
+publicly accessible. Approval for one write does not authorize deletes,
+overwrites, force pushes, resets, changes to upstream contents, refs, settings,
+or access. Keep credentials and device information in the user's local GitHub
+authentication flow; never request or report secrets.

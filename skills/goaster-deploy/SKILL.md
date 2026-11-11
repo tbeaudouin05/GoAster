@@ -3,7 +3,10 @@
 Deploy a new version of GoAster by building and testing the binaries, installing them, and restarting the services. GoAster owns its runtime after installation and does not depend on GoAsterWeb for later deployments.
 
 1. Read the GoAster README for the standard installation layout. Verify the actual binary paths and service configuration before deploying.
-2. Identify the source revision to deploy.
+2. Identify the source revision to deploy. All new binaries for deployment
+   must be built from the approved fork checkout's `goaster-customization`
+   branch, whether the implementation is a skill or source customization.
+   Confirm the branch and exact commit before building.
 3. Build and test the new binaries. Stop and report any failure.
 4. Safely replace the installed binaries in place.
 5. Arrange for the restart request to finish independently of the agent process being stopped.
