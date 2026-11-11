@@ -1,5 +1,18 @@
 # GoAster deployment
 
+GoAsterWeb is a one-shot installer for a fresh server installation. It does
+not own subsequent GoAster runtime updates. After initial installation,
+GoAster owns changes to its runtime; do not rerun the GoAsterWeb installer as
+an update mechanism. The repository documents no supported upgrade or tested
+restore process for the observed GoAsterWeb integration, so every later change
+still requires a reviewed, host-specific procedure based on the actual server.
+
+The observed GoAsterWeb layout below is a clue for inspection, not a contract.
+Inspect the target server's real service definitions, executable and source
+paths, permissions, dependencies, persistent data, and recovery scope before
+planning any change. Do not assume that another server uses the documented
+paths, services, ownership, or setup.
+
 Deploy only the two retained, passing artifacts from `goaster-build-test`, after
 `goaster-backup` has verified an available Hetzner snapshot for the exact
 approved project and server, including required recovery planning for separate
