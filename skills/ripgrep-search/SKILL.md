@@ -3,6 +3,9 @@
 Use this skill whenever a task requires finding text, filenames, symbols, or
 references in local source trees or other directory trees.
 
+Searching local files is read-only. Check whether `rg` is already installed
+before recommending installation.
+
 ## Prefer ripgrep in normal repository work
 
 Check first:
@@ -54,7 +57,13 @@ sensitive matching text.
 If `command -v rg` fails, tell the user that ripgrep is recommended but is not
 currently installed. Offer `grep` or `git grep` for an immediate read-only
 search, then recommend installing ripgrep through the host's official package
-manager.
+manager. Installing software changes the host. Explain the package-manager
+command and obtain explicit approval before installing ripgrep, unless the user
+has already explicitly authorized installation as part of the current task.
+
+Use the host's official package manager only. Do not pipe downloaded shell
+scripts into a shell, add an unverified repository, change unrelated packages,
+or use elevated privileges without the user's approval.
 
 First identify the operating system and available package manager. Do not
 assume `sudo`, a distribution, a package manager, network access, or permission

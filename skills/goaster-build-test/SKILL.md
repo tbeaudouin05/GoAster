@@ -3,11 +3,20 @@
 Keep this stage deliberately small. It validates the approved fork locally;
 it is not a deployment or integration test plan.
 
+Build and test only the approved local fork checkout. This stage must not
+deploy, contact GitHub or OVH, change a server, send Telegram messages, or run
+Telegram adapter tests. Do not read or copy secrets into build artifacts, logs,
+or test fixtures.
+
 ## Preflight and build
 
 Confirm the absolute source path, fork identity, branch, and exact source SHA.
 Use a temporary output directory outside the checkout. If Go files were
 changed, run `gofmt` on those files and inspect the diff before continuing.
+The source path and exact source SHA are part of the source/build approval. If
+either changes, stop and obtain fresh approval. Preserve user changes, run
+`gofmt` only for Go files touched by the requested work, and report any
+formatting change.
 
 Run the repository build, which compiles all Go commands but does not run any
 tests:

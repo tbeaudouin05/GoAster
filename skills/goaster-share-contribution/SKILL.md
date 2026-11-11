@@ -33,8 +33,9 @@ Use these exact branch names in the approved user fork:
 Do not infer the fork owner/name, checkout path, branch base, artifact path,
 or manifest path from a skill name, directory name, Git remote, or local Git
 configuration. Require the exact values from the user or a verified handoff.
-Keep upstream read-only, preserve every existing user change, and never use a
-symlink or other pointer in place of a regular artifact file.
+Upstream stays read-only; do not reset, overwrite, delete, force push, or
+discard existing user changes. Never use a symlink or other pointer in place
+of a regular artifact file.
 
 ## Read-only preflight
 

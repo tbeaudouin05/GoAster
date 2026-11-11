@@ -31,7 +31,7 @@ func TestUnselectedSkillsAreNotInjectedAndSelectedChangesStopTools(t *testing.T)
 			t.Error(err)
 			return
 		}
-		if !strings.Contains(request.Instructions, "fixture-skill") || strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHORIZATION") {
+		if !strings.Contains(request.Instructions, "fixture-skill") || strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHENTICATION") {
 			t.Error("request did not restrict unselected skills to metadata")
 		}
 		if phase == "change" {
@@ -89,7 +89,7 @@ func TestUnselectedSkillContentsAreLoadedOnlyOnDemand(t *testing.T) {
 	for _, name := range []string{"large-a", "large-b", "large-c"} {
 		dir := filepath.Join(root, "skills", name)
 		writeFixture(t, filepath.Join(dir, "META.md"), "name: "+name+"\ndescription: large fixture\n")
-		writeFixture(t, filepath.Join(dir, "AUTH.md"), "required authorization for "+name)
+		writeFixture(t, filepath.Join(dir, "AUTH.md"), "required authentication for "+name)
 		writeFixture(t, filepath.Join(dir, "SKILL.md"), strings.Repeat(name, (256<<10)/len(name)))
 	}
 	backendCalls := 0
@@ -99,7 +99,7 @@ func TestUnselectedSkillContentsAreLoadedOnlyOnDemand(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		if strings.Contains(string(data), "required authorization for large-a") || strings.Contains(string(data), "bad UTF-8") {
+		if strings.Contains(string(data), "required authentication for large-a") || strings.Contains(string(data), "bad UTF-8") {
 			t.Error("unselected skill contents were injected")
 		}
 		fmt.Fprint(w, `{"output_text":"done"}`)
@@ -110,7 +110,7 @@ func TestUnselectedSkillContentsAreLoadedOnlyOnDemand(t *testing.T) {
 		t.Fatalf("unselected skills blocked request: calls=%d error=%v", backendCalls, err)
 	}
 	if _, err := executeLoadSkill(context.Background(), `{"name":"fixture-skill"}`); SkillRecoveryMessage(err) != skillResetMessage {
-		t.Fatalf("invalid selected authorization accepted: %v", err)
+		t.Fatalf("invalid selected authentication accepted: %v", err)
 	}
 }
 

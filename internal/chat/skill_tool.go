@@ -17,7 +17,7 @@ const (
 	skillActionNotice   = "Some actions may already have completed. Check their results before continuing or repeating any action."
 	skillResetMessage   = skillActionNotice + " Skill guidance could not be loaded or restored. Check the installed skill files; use /clear if the selection cannot be restored."
 	skillChangedMessage = skillActionNotice + " Skill guidance changed. Restore the original files or use /clear to discard the selection."
-	skillBudgetMessage  = skillActionNotice + " Skill guidance does not fit in the conversation. Review installed skills in ~/.goaster/artefacts/skills and retain their safety and authorization requirements; use /clear if selected skills or conversation history still do not fit."
+	skillBudgetMessage  = skillActionNotice + " Skill guidance does not fit in the conversation. Review installed skills in ~/.goaster/artefacts/skills and retain their authentication guidance, workflow, safety, and any legacy AUTH.md authorization requirements; use /clear if selected skills or conversation history still do not fit."
 	skillSaveMessage    = skillActionNotice + " Skill selection could not be saved. Restart to reload the conversation, then use /clear if needed."
 )
 
@@ -112,7 +112,7 @@ func validSelectedSkills(selected []selectedSkill) bool {
 var loadSkillCodexTool = codexTool{
 	Type:        "function",
 	Name:        "load_skill",
-	Description: "Load an available skill's workflow and authorization requirements before using it.",
+	Description: "Load an available skill's authentication guidance and workflow before using it; existing user-owned AUTH.md files may also contain legacy authorization requirements, and the guidance does not grant authorization.",
 	Parameters: map[string]any{
 		"type":                 "object",
 		"properties":           map[string]any{"name": map[string]any{"type": "string"}},

@@ -195,7 +195,7 @@ func checkStarterSourceValidation(t interface {
 	}
 	for name, content := range map[string]string{
 		"MEMORY.md": "memory", "example/META.md": "name: example\ndescription: example\n",
-		"example/SKILL.md": "workflow", "example/AUTH.md": "authorization",
+		"example/SKILL.md": "workflow", "example/AUTH.md": "authentication",
 	} {
 		if err := os.WriteFile(filepath.Join(assets, filepath.FromSlash(name)), []byte(content), 0600); err != nil {
 			t.Fatal(err)
@@ -386,7 +386,7 @@ func checkInvalidExistingSkillText(t interface {
 			}
 			for name, text := range map[string]string{
 				"META.md":  "name: custom\ndescription: existing skill\n",
-				"SKILL.md": "workflow", "AUTH.md": "authorization",
+				"SKILL.md": "workflow", "AUTH.md": "authentication",
 				filename: content,
 			} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0600); err != nil {

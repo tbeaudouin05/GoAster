@@ -2,6 +2,11 @@
 
 Use this skill when the user wants GoAster to store or access environment secrets in Bitwarden Secrets Manager.
 
+Setup and migration change credential storage. Explain the proposed steps first
+and obtain explicit approval before creating machine-account access, writing
+secrets, switching GoAster away from the server-local environment, or deleting
+the local copy.
+
 ## Setup principles
 
 - Bitwarden Secrets Manager is optional. Do not block normal GoAster installation or operation if the user does not choose it.

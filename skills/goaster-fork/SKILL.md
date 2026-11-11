@@ -7,7 +7,7 @@ and its two standard branches:
 - `goaster-contributions`: contribution manifests.
 
 Use the [github-auth skill](../github-auth/SKILL.md) and its
-[authorization rules](../github-auth/AUTH.md) for all GitHub access.
+[authentication guidance](../github-auth/AUTH.md) for all GitHub access.
 
 ## Preflight
 
@@ -20,8 +20,9 @@ Use the [github-auth skill](../github-auth/SKILL.md) and its
 
 3. Check for `<account>/GoAster`. If it exists, verify that it is the
    user's public fork of `tbeaudouin05/GoAster`, and verify its default
-   branch and commit. If it is not the correct fork, stop and ask the
-   user how to proceed. A 404 alone does not prove it is absent.
+   branch and commit. If the upstream or fork cannot be verified, stop and
+   report the blocker. If it is not the correct fork, stop and ask the user how
+   to proceed. A 404 alone does not prove it is absent.
 
 4. Check both standard branches if the fork exists. Ask the user
    explicitly before reusing an existing branch at its observed commit.
@@ -34,8 +35,9 @@ Use the [github-auth skill](../github-auth/SKILL.md) and its
 ## Approval
 
 Before creating anything, present the exact plan: account, public fork,
-default branch and base commit, both branch names and their creation or
-reuse status, and any local checkout path and setup.
+default branch and base commit, both standard branch names and their creation
+or reuse status, intended actions, and any local checkout path and setup. Do
+not ask the user to choose arbitrary branch names.
 
 Get explicit approval. If an approved detail changes, stop and obtain
 new approval. Recheck the account and target immediately before each
@@ -43,8 +45,10 @@ creation.
 
 ## Create and verify
 
-1. If needed, create the approved fork once. Wait for it to become ready
-   and verify its identity, visibility, parent, default branch, and commit.
+1. If needed, create the approved fork once. The forks endpoint creates a
+   separate public fork and does not modify upstream contents. Wait for it to
+   become ready and verify its identity, visibility, parent, default branch,
+   and commit.
    Do not automatically retry an uncertain creation.
 
 2. Recheck each standard branch. Create a missing branch at its approved
@@ -68,4 +72,10 @@ Report the verified account, fork URL and visibility, upstream default
 branch and commit, both branch names and commits, whether each was created
 or reused, and the checkout path if applicable.
 
-Stop after verification. Do not modify or push to the upstream repository.
+Stop after verification. Never write to the upstream repository; do not modify
+or push to it.
+Only the approved fork may receive branch changes. Approval does not authorize
+changes to upstream contents, refs, settings, or access, nor commits, pushes,
+deletes, overwrites, force pushes, resets, or pull requests. Keep credentials
+and device information in the user's local GitHub authentication flow; never
+request or report secrets.

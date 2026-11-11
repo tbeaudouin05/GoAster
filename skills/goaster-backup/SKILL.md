@@ -8,8 +8,8 @@ an optional second path and never replaces the local bundle.
 
 Confirm the approved host identity, service, active release SHA, install path,
 stable helper path, and the source/binary checksum. On that same server,
-create a private, non-secret bundle under a dedicated rollback directory such
-as:
+create a private rollback bundle that is non-secret by default under a
+dedicated rollback directory such as:
 
 ```text
 /var/lib/goaster/rollback/<timestamp>-<active-sha>/
@@ -28,10 +28,13 @@ the files intentionally excluded.
 
 Include the currently active executable and the non-secret service/helper
 configuration needed to restore it. Do not copy `env` files, OpenAI or
-Telegram credentials, private keys, cookies, or other secret-bearing state by
-default. If a secret-bearing state file is essential, stop for explicit
-approval before copying it; record its protection and retention without
-printing its value.
+Telegram credentials, private keys, cookies, or other secret-bearing state
+into this default bundle. If a secret-bearing state file is essential, do not
+put it in the default bundle: stop for separate explicit approval for a
+secret-inclusive bundle, naming the exact data, purpose, protection,
+retention, and deletion plan before copying it. Apply the approved protection
+and retention, and record them without printing the secret value. Approval for
+the ordinary local bundle does not approve secret inclusion.
 
 Verify the bundle before deployment: every listed file is a regular file, the
 recorded SHA matches the active executable, the manifest matches the approved
@@ -65,7 +68,8 @@ for a backup and
 `DELETE /cloud/project/{serviceName}/region/{regionName}/workflow/backup/{backupWorkflowId}`
 for a schedule. Do not broaden to account-wide access. If creation or
 inspection cannot be verified, skip the optional backup and continue with the
-local bundle. For other operations, skip only the unverified operation.
+local bundle. For other operations, skip only the unverified operation. Never
+guess an endpoint or permission row.
 
 OVH documents default automatic schedules that retain the last 7 or last 14
 daily backups, as well as custom schedules. No universal cap on manually

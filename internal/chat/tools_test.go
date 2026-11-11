@@ -55,7 +55,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 					}})
 				} else {
 					payload, err := json.Marshal(request.Input)
-					if err != nil || strings.Count(string(payload), "PRIVATE WORKFLOW TEXT") != 1 || strings.Count(string(payload), "FIXTURE AUTHORIZATION") != 1 {
+					if err != nil || strings.Count(string(payload), "PRIVATE WORKFLOW TEXT") != 1 || strings.Count(string(payload), "FIXTURE AUTHENTICATION") != 1 {
 						t.Errorf("skill content was duplicated: %s, %v", payload, err)
 					}
 					if step == 2 {
@@ -105,7 +105,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 					if overlapCheck != nil {
 						overlapCheck()
 					}
-					if strings.Contains(text, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHORIZATION") {
+					if strings.Contains(text, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHENTICATION") {
 						t.Error("installed guidance or selection state was incorrect")
 					}
 					json.NewEncoder(w).Encode(codexResponse{Output: []codexOutputItem{
@@ -113,7 +113,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 						call("premature", "shell_execute", `{"command":"premature"}`),
 					}})
 				case 2:
-					if !strings.Contains(text, "PRIVATE WORKFLOW TEXT") || !strings.Contains(text, "FIXTURE AUTHORIZATION") || !strings.Contains(text, "Tool not executed") {
+					if !strings.Contains(text, "PRIVATE WORKFLOW TEXT") || !strings.Contains(text, "FIXTURE AUTHENTICATION") || !strings.Contains(text, "Tool not executed") {
 						t.Errorf("initial selection did not provide full guidance or suppress shell: %s", text)
 					}
 					state, err := os.ReadFile(selectedSessionPath)
@@ -122,12 +122,12 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 					}
 					fmt.Fprint(w, `{"output_text":"Approve showing the status of host A?"}`)
 				case 3, 7, 8:
-					if strings.Contains(text, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHORIZATION") {
+					if strings.Contains(text, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHENTICATION") {
 						t.Errorf("another or cleared session received selected skill guidance: %s", text)
 					}
 					fmt.Fprint(w, `{"output_text":"No selected skill."}`)
 				case 4, 5, 6:
-					if strings.Count(text, "PRIVATE WORKFLOW TEXT") != 1 || strings.Count(text, "FIXTURE AUTHORIZATION") != 1 || !strings.Contains(text, "Reloading a skill grants no authorization") {
+					if strings.Count(text, "PRIVATE WORKFLOW TEXT") != 1 || strings.Count(text, "FIXTURE AUTHENTICATION") != 1 || !strings.Contains(text, "Reloading a skill grants no authorization") {
 						t.Errorf("continuation omitted or duplicated guidance: %s", text)
 					}
 					foundCall, foundOutput := false, false
@@ -135,7 +135,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 						if item.CallID == "call_goaster_restored_skill_0" && item.Type == "function_call" && item.Name == "load_skill" {
 							foundCall = true
 						}
-						if strings.Contains(item.Output, "FIXTURE AUTHORIZATION") && item.Type == "function_call_output" && item.CallID == "call_goaster_restored_skill_0" {
+						if strings.Contains(item.Output, "FIXTURE AUTHENTICATION") && item.Type == "function_call_output" && item.CallID == "call_goaster_restored_skill_0" {
 							foundOutput = true
 						}
 					}
@@ -182,12 +182,12 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 				}
 				text := string(payload)
 				if step == 1 {
-					if len(request.Tools) != 0 || strings.Contains(text, "PRIVATE WORKFLOW TEXT") || strings.Contains(text, "FIXTURE AUTHORIZATION") {
+					if len(request.Tools) != 0 || strings.Contains(text, "PRIVATE WORKFLOW TEXT") || strings.Contains(text, "FIXTURE AUTHENTICATION") {
 						t.Errorf("summarizer unexpectedly received skill guidance or tools: %s", text)
 					}
 					fmt.Fprint(w, `{"output_text":"Earlier conversation summarized."}`)
 				} else {
-					if strings.Count(text, "PRIVATE WORKFLOW TEXT") != 1 || strings.Count(text, "FIXTURE AUTHORIZATION") != 1 {
+					if strings.Count(text, "PRIVATE WORKFLOW TEXT") != 1 || strings.Count(text, "FIXTURE AUTHENTICATION") != 1 {
 						t.Errorf("compacted session lost skill guidance: %s", text)
 					}
 					fmt.Fprint(w, `{"output_text":"done"}`)
@@ -224,7 +224,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 			}
 			fmt.Fprint(w, `{"output":[{"type":"function_call","call_id":"call-load","name":"load_skill","arguments":"{\"name\":\"fixture-skill\"}"},{"type":"function_call","call_id":"call-shell","name":"shell_execute","arguments":"{\"command\":\"echo should-not-run\"}"}]}`)
 		case 2:
-			if len(request.Input) != 5 || request.Input[3].CallID != "call-load" || !strings.Contains(request.Input[3].Output, "FIXTURE AUTHORIZATION") || !strings.Contains(request.Input[3].Output, "PRIVATE WORKFLOW TEXT") || request.Input[4].CallID != "call-shell" || !strings.Contains(request.Input[4].Output, "Tool not executed") {
+			if len(request.Input) != 5 || request.Input[3].CallID != "call-load" || !strings.Contains(request.Input[3].Output, "FIXTURE AUTHENTICATION") || !strings.Contains(request.Input[3].Output, "PRIVATE WORKFLOW TEXT") || request.Input[4].CallID != "call-shell" || !strings.Contains(request.Input[4].Output, "Tool not executed") {
 				t.Errorf("loaded skill output = %+v", request.Input)
 			}
 			writeCodexFunctionCall(t, w, "call-skill", "skill_echo", `{"value":"from skill"}`)
@@ -322,7 +322,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 	for _, name := range []string{"big-a", "big-b"} {
 		dir := filepath.Join(home, ".goaster", "artefacts", "skills", name)
 		writeFixture(t, filepath.Join(dir, "META.md"), "name: "+name+"\ndescription: large skill\n")
-		writeFixture(t, filepath.Join(dir, "AUTH.md"), "authorization")
+		writeFixture(t, filepath.Join(dir, "AUTH.md"), "authentication")
 		writeFixture(t, filepath.Join(dir, "SKILL.md"), strings.Repeat("x", 256<<10))
 	}
 	scenario = "skill-budget"
@@ -393,7 +393,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 		t.Fatal("stale session reached the backend or shell")
 	}
 	saved := readFixture(t, sessionPath)
-	if !strings.Contains(saved, `"name": "fixture-skill"`) || !strings.Contains(saved, `"digest":`) || strings.Contains(saved, "PRIVATE WORKFLOW TEXT") || strings.Contains(saved, "FIXTURE AUTHORIZATION") {
+	if !strings.Contains(saved, `"name": "fixture-skill"`) || !strings.Contains(saved, `"digest":`) || strings.Contains(saved, "PRIVATE WORKFLOW TEXT") || strings.Contains(saved, "FIXTURE AUTHENTICATION") {
 		t.Fatalf("session saved the wrong skill state: %s", saved)
 	}
 	if _, err := other.Reply(context.Background(), "An unrelated session"); err != nil {
@@ -403,20 +403,20 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 	// If current guidance changes or becomes unavailable, an old approval
 	// must never reach the model or an action before the workflow is restarted.
 	authPath := filepath.Join(home, ".goaster", "artefacts", "skills", "fixture-skill", "AUTH.md")
-	writeFixture(t, authPath, "CHANGED AUTHORIZATION")
+	writeFixture(t, authPath, "CHANGED AUTHENTICATION")
 	if reply, err := first.Reply(context.Background(), "Yes, show host A status"); err == nil || !strings.Contains(err.Error(), "changed since it was loaded") || reply != "" {
-		t.Fatalf("changed authorization continuation = %q, %v", reply, err)
+		t.Fatalf("changed authentication continuation = %q, %v", reply, err)
 	}
 	if err := os.Remove(authPath); err != nil {
 		t.Fatal(err)
 	}
 	if reply, err := first.Reply(context.Background(), "Yes, show host A status"); err == nil || !strings.Contains(err.Error(), "reload selected skill") || reply != "" {
-		t.Fatalf("missing authorization continuation = %q, %v", reply, err)
+		t.Fatalf("missing authentication continuation = %q, %v", reply, err)
 	}
 	if backendRequests.Load() != 3 || len(shellCalls) != 0 {
-		t.Fatal("backend or shell ran with changed or missing authorization")
+		t.Fatal("backend or shell ran with changed or missing authentication guidance")
 	}
-	writeFixture(t, authPath, "FIXTURE AUTHORIZATION")
+	writeFixture(t, authPath, "FIXTURE AUTHENTICATION")
 	workflowPath := filepath.Join(home, ".goaster", "artefacts", "skills", "fixture-skill", "SKILL.md")
 	writeFixture(t, workflowPath, "CHANGED WORKFLOW")
 	if _, err := first.Reply(context.Background(), "Yes, show host A status"); err == nil || !strings.Contains(err.Error(), "changed since it was loaded") {
@@ -625,7 +625,7 @@ func TestCodexProviderRegistersAndExecutesSkillTool(t *testing.T) {
 		name := fmt.Sprintf("limited-%d", i)
 		dir := filepath.Join(home, ".goaster", "artefacts", "skills", name)
 		writeFixture(t, filepath.Join(dir, "META.md"), "name: "+name+"\ndescription: limited fixture\n")
-		writeFixture(t, filepath.Join(dir, "AUTH.md"), "authorization")
+		writeFixture(t, filepath.Join(dir, "AUTH.md"), "authentication")
 		writeFixture(t, filepath.Join(dir, "SKILL.md"), "workflow")
 		arguments := fmt.Sprintf(`{"name":%q}`, name)
 		content, err := executeLoadSkill(context.Background(), arguments)

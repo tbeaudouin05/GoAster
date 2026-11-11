@@ -10,8 +10,10 @@ import (
 	"unicode/utf8"
 )
 
-// Discover reads only metadata. The workflow and authorization are loaded on
-// demand, so changes to user-owned skills take effect without a rebuild.
+// Discover reads only metadata. The workflow and authentication guidance are
+// loaded on demand, so changes to user-owned skills take effect without a
+// rebuild. Existing user-owned AUTH.md files can retain legacy authorization
+// requirements; they are loaded unchanged and are not migrated automatically.
 func Discover() (string, error) {
 	root, err := Root()
 	if err != nil {
@@ -77,7 +79,8 @@ func discoverAt(root string) (string, error) {
 	return strings.Join(descriptions, "\n\n"), nil
 }
 
-// Load returns both the workflow and its authorization requirements.
+// Load returns the authentication guidance, any legacy authorization guidance,
+// and workflow for a skill.
 func Load(name string) (string, error) {
 	root, err := Root()
 	if err != nil {
@@ -104,7 +107,7 @@ func loadAt(root, name string) (string, error) {
 	if err := validateMetadata(name, metadata); err != nil {
 		return "", err
 	}
-	auth, err := readSkillFile(filepath.Join(base, name, "AUTH.md"), metadataLimit)
+	authentication, err := readSkillFile(filepath.Join(base, name, "AUTH.md"), metadataLimit)
 	if err != nil {
 		return "", err
 	}
@@ -112,13 +115,13 @@ func loadAt(root, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(string(auth)) == "" || strings.TrimSpace(string(skill)) == "" {
-		return "", fmt.Errorf("skill %s has empty authorization or workflow", name)
+	if strings.TrimSpace(string(authentication)) == "" || strings.TrimSpace(string(skill)) == "" {
+		return "", fmt.Errorf("skill %s has empty authentication guidance or workflow", name)
 	}
-	if !utf8.Valid(auth) || !utf8.Valid(skill) {
-		return "", fmt.Errorf("skill %s authorization and workflow must be valid UTF-8", name)
+	if !utf8.Valid(authentication) || !utf8.Valid(skill) {
+		return "", fmt.Errorf("skill %s authentication guidance and workflow must be valid UTF-8", name)
 	}
-	return "Authorization requirements (follow these before acting):\n" + string(auth) + "\n\nSkill workflow:\n" + string(skill), nil
+	return "Authentication guidance (this does not grant authorization). Existing user-owned AUTH.md files may also contain legacy authorization or safety requirements; continue honoring them until the user explicitly migrates them to SKILL.md. No automatic migration is assumed.\n\n" + string(authentication) + "\n\nSkill workflow and safety requirements:\n" + string(skill), nil
 }
 
 func checkSkillFile(path string, limit int64) error {

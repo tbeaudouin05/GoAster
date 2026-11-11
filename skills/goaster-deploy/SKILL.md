@@ -1,8 +1,11 @@
 # GoAster deployment
 
-Deploy only a passing `goaster-build-test` result to the approved host. The
-deployment contract keeps a stable helper in place while application releases
-remain versioned and replaceable.
+Deploy only a passing `goaster-build-test` result to the approved host. Before
+starting, obtain explicit deployment approval naming the exact source SHA,
+binary checksum, host, service, install paths, rollback bundle, restart,
+health checks, prompt smoke test, and any rollback action. The deployment
+contract keeps a stable helper in place while application releases remain
+versioned and replaceable.
 
 ## Stable helper and release layout
 
@@ -31,8 +34,8 @@ it and obtain separate approval for any unrelated change.
 
 1. Confirm the exact host identity, service name, approved source SHA, binary
    SHA-256, release path, helper checksum, and verified local rollback bundle.
-   Recheck the host immediately before transfer. A changed identity or address
-   is a new host approval.
+   Recheck the host immediately before transfer. A changed checksum, host
+   identity, address, path, or SHA requires fresh approval.
 2. Stage the artifact in a same-filesystem temporary release directory that is
    not active. Preserve the source checksum and a small non-secret manifest.
    Do not build on the target, pull arbitrary code, or put secrets in the

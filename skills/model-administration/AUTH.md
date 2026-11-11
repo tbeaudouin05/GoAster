@@ -1,3 +1,5 @@
-# Authorization
+# Authentication
 
-Only the owner or operator may request model configuration changes. Preserve and restore the prior valid OpenAI configuration if validation fails. Do not expose credentials.
+Use the authenticated owner/operator GoAster session and its protected OpenAI
+credentials for the real prompt test. Never request, expose, or copy those
+credentials into configuration, output, or reports.

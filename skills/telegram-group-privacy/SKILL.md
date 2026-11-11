@@ -51,14 +51,6 @@ with commands or replies Telegram makes visible to it, but ordinary group text
 will not be delivered. Telegram notes that changes can take a few minutes to
 take effect.
 
-## Protect the bot token
-
-Never ask the user to paste a bot token into chat. Never reveal, quote, log,
-screen-capture, place in a command argument, or include a token in a report or
-repository file. Keep it in the approved protected local secret store used by
-the setup workflow. If a token is exposed, stop and tell the user to revoke or
-regenerate it with BotFather; do not repeat it.
-
 ## References
 
 - [Telegram Bot Features: Privacy Mode and BotFather settings](https://core.telegram.org/bots/features#privacy-mode)

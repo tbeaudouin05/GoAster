@@ -528,6 +528,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 		for _, want := range []string{
 			"All user-facing assistant replies, whether shown in the terminal UI or sent through Telegram, must use plain text only.",
 			"Before a skill-dependent workflow, call load_skill",
+			"For backwards compatibility, an existing user-owned AUTH.md may also contain legacy authorization or safety requirements; continue honoring them until the user explicitly migrates them to SKILL.md, and do not assume automatic migration.",
 			"name: fixture-skill",
 			"description: A fixture for progressive skill loading.",
 		} {
@@ -535,8 +536,8 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 				t.Errorf("Codex instructions missing %q", want)
 			}
 		}
-		if strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHORIZATION") {
-			t.Error("unselected skill workflow or authorization was injected")
+		if strings.Contains(request.Instructions, "PRIVATE WORKFLOW TEXT") || strings.Contains(request.Instructions, "FIXTURE AUTHENTICATION") {
+			t.Error("unselected skill workflow or authentication guidance was injected")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\n")
