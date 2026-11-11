@@ -8,7 +8,7 @@ description: Safely publish an approved GoAster source or local-skill contributi
 Use this skill when the user asks to share one GoAster customization publicly.
 Load the [github-auth skill](../github-auth/SKILL.md) first and use the verified
 handoffs from [goaster-fork](../goaster-fork/SKILL.md) and
-[goaster-source](../goaster-source/SKILL.md) when they apply. This workflow
+[modify-goaster-source-code](../modify-goaster-source-code/SKILL.md) when they apply. This workflow
 publishes a small manifest in the user's own fork; it never writes to
 `tbeaudouin05/GoAster`.
 
@@ -18,7 +18,7 @@ publishes a small manifest in the user's own fork; it never writes to
   discovery, and the generic approval rules for GitHub writes.
 - `goaster-fork` owns fork preparation and branch creation. Use it when either
   standard branch is missing; do not invent a fork or branch setup here.
-- `goaster-source` owns source-code changes in the approved checkout. This
+- `modify-goaster-source-code` owns source-code changes in the approved checkout. This
   skill does not edit or duplicate source implementation.
 - This skill owns validation and staging of a selected local skill artifact,
   and the contribution manifest that describes an already committed change.
@@ -58,11 +58,11 @@ Before proposing a write:
 ## Source contribution
 
 The requested source change must already be committed in the approved fork's
-`goaster-customizations` branch. Use `goaster-source` for any missing source
+`goaster-customizations` branch. Use `modify-goaster-source-code` for any missing source
 edit or source commit. Verify the exact full commit SHA and the existing path
 or paths to be shared before preparing a manifest. If the source branch is
 dirty or the requested change is not in a committed tree, stop and hand back
-to `goaster-source`.
+to `modify-goaster-source-code`.
 
 The manifest on `goaster-contributions` references that exact repository,
 branch, full SHA, and existing path. Do not copy the implementation into the

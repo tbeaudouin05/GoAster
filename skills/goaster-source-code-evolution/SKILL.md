@@ -7,5 +7,5 @@ your need instead of changing GoAster's source code?"
 ## Workflow
 
 ```text
-goaster-fork -> github-auth -> goaster-source -> goaster-build-test -> goaster-backup -> goaster-deploy
+goaster-fork -> github-auth -> modify-goaster-source-code -> goaster-build-test -> goaster-backup -> goaster-deploy
 ```

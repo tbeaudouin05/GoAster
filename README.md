@@ -157,7 +157,7 @@ normal requests. Telegram users can use `/m` to view the current model and
 ## User-owned source workflow
 
 The [fork workflow](skills/goaster-fork/SKILL.md), [source
-workflow](skills/goaster-source/SKILL.md), and [contribution sharing
+workflow](skills/modify-goaster-source-code/SKILL.md), and [contribution sharing
 workflow](skills/goaster-share-contribution/SKILL.md) keep upstream read-only
 and put user changes on the user's own branches. Use the
 [contribution discovery](skills/goaster-find-contributions/SKILL.md) workflow
