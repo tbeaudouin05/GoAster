@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 . "$script_dir/assets.sh"
 
-expected_starter_skills='background-command-administration bitwarden-secrets-manager github-auth goaster-backup goaster-build-test goaster-source-code-evolution goaster-deploy goaster-env goaster-find-contributions goaster-fork goaster-share-contribution hetzner-auth hetzner-auto-backup manage-skills modify-goaster-source-code internet-fetch model-administration project-memory read-write-temp-files ripgrep-search memory-consolidation goaster-telegram-groups-best-practices telegram-commands'
+expected_starter_skills='background-command-administration bitwarden-secrets-manager github-auth goaster-backup goaster-build-test goaster-source-code-evolution goaster-deploy goaster-env goaster-find-contributions goaster-fork goaster-migration goaster-share-contribution hetzner-auth hetzner-auto-backup manage-skills modify-goaster-source-code internet-fetch model-administration project-memory read-write-temp-files ripgrep-search memory-consolidation goaster-telegram-groups-best-practices telegram-commands'
 if [ "$starter_skills" != "$expected_starter_skills" ]; then
 	printf 'starter skill allowlist changed unexpectedly\nexpected: %s\nactual: %s\n' \
 		"$expected_starter_skills" "$starter_skills" >&2
@@ -63,6 +63,25 @@ for phrase in (
 ):
     if phrase not in workflow:
         raise SystemExit(f"hetzner-auto-backup workflow missing required guidance: {phrase!r}")
+
+migration = (root / "skills" / "goaster-migration" / "SKILL.md").read_text(encoding="utf-8")
+for phrase in (
+    "Hard blocker: GoAsterWeb handoff is not available",
+    "must not:",
+    "register a migration handoff",
+    "schedule or run an availability monitor",
+    "create, reserve, allocate",
+    "private-key delivery capability",
+    "Initial pairing requires a private Telegram chat",
+    "ordinary conversations and some commands can also be used in groups",
+    "absolute seven-day (7-day) expiry",
+    "30-minute availability cadence",
+    "No backup or snapshot is required for this manual-move",
+    "manual",
+    "Never delete automatically",
+):
+    if phrase not in migration:
+        raise SystemExit(f"goaster-migration workflow missing required guidance: {phrase!r}")
 
 # Check local Markdown links so renamed skills and stale skill paths fail in
 # the same offline test as the package allowlist.
