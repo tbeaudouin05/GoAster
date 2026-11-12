@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -47,6 +48,11 @@ type adapter struct {
 type update struct {
 	ID      int64    `json:"update_id"`
 	Message *message `json:"message"`
+}
+
+type telegramBotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
 }
 
 type message struct {
@@ -139,6 +145,19 @@ const (
 
 const telegramEnvironmentInstructions = "To update settings, attach a document named goaster.env to /env in the same message. Never paste secret values into chat."
 
+const telegramCommandRegistrationTimeout = 5 * time.Second
+
+var telegramBotCommands = []telegramBotCommand{
+	{Command: "help", Description: "Show available commands"},
+	{Command: "stop", Description: "Cancel the current agent turn"},
+	{Command: "start", Description: "Show pairing or readiness guidance"},
+	{Command: "pair", Description: "Pair this account with GoAster"},
+	{Command: "clear", Description: "Clear this chat's history"},
+	{Command: "m", Description: "Show or select this chat's model"},
+	{Command: "env", Description: "Preview an environment update"},
+	{Command: "get_env", Description: "Download the saved environment file"},
+}
+
 const telegramHelpText = "Available Telegram commands:\n" +
 	"/help — Show this list.\n" +
 	"/stop — Cancel the current agent turn in this chat/thread (paired account).\n" +
@@ -206,6 +225,7 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 	if !a.agentEndpointAvailable(ctx, "/livez") {
 		return fmt.Errorf("remote agent is unavailable")
 	}
+	a.registerTelegramCommands(ctx)
 	if ready != nil {
 		if err := ready(); err != nil {
 			return fmt.Errorf("could not report Telegram service readiness")
@@ -349,6 +369,16 @@ func (a *adapter) getUpdates(ctx context.Context, offset int64, timeout int) ([]
 		return nil, fmt.Errorf("Telegram response was invalid")
 	}
 	return updates, err
+}
+
+func (a *adapter) registerTelegramCommands(ctx context.Context) {
+	registrationCtx, cancel := context.WithTimeout(ctx, telegramCommandRegistrationTimeout)
+	defer cancel()
+	if err := a.call(registrationCtx, "setMyCommands", struct {
+		Commands []telegramBotCommand `json:"commands"`
+	}{Commands: telegramBotCommands}, nil); err != nil {
+		fmt.Fprintln(os.Stderr, "telegram: command menu registration failed")
+	}
 }
 
 func (a *adapter) call(ctx context.Context, method string, payload any, result any) error {

@@ -716,6 +716,19 @@ func TestPollingReadinessOffsetAndRedactedErrors(t *testing.T) {
 		}
 		return response(200, "ok\n"), nil
 	}), client: doerFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/setMyCommands") {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := json.Marshal(struct {
+				Commands []telegramBotCommand `json:"commands"`
+			}{Commands: telegramBotCommands})
+			if err != nil || string(body) != string(want) {
+				t.Fatalf("setMyCommands payload = %s, want %s", body, want)
+			}
+			return response(http.StatusBadGateway, `{"ok":false,"description":"temporary failure"}`), nil
+		}
 		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
 			return response(200, `{"ok":true,"result":{}}`), nil
 		}
@@ -753,6 +766,25 @@ func TestPollingReadinessOffsetAndRedactedErrors(t *testing.T) {
 	})
 	if err := a.run(context.Background(), func() error { ready = true; return nil }); err == nil || ready {
 		t.Fatal("invalid polling response was accepted as ready")
+	}
+}
+
+func TestTelegramCommandMenuUsesSupportedHelpCommands(t *testing.T) {
+	want := []string{"help", "stop", "start", "pair", "clear", "m", "env", "get_env"}
+	if len(telegramBotCommands) != len(want) {
+		t.Fatalf("Telegram command count = %d, want %d", len(telegramBotCommands), len(want))
+	}
+	for index, name := range want {
+		command := telegramBotCommands[index]
+		if command.Command != name || strings.Contains(command.Command, "/") || strings.Contains(command.Command, "-") {
+			t.Fatalf("Telegram command %q at index %d is not a valid expected identifier", command.Command, index)
+		}
+		if command.Description == "" || len(command.Description) > 256 {
+			t.Fatalf("Telegram command %q has an invalid description", command.Command)
+		}
+		if !strings.Contains(telegramHelpText, "/"+command.Command) {
+			t.Fatalf("Telegram help does not describe /%s", command.Command)
+		}
 	}
 }
 
@@ -1057,6 +1089,9 @@ func TestPollingAndClearWorkWhenProviderAuthenticationIsUnavailable(t *testing.T
 			}
 		}),
 		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/setMyCommands") {
+				return response(http.StatusBadGateway, `{"ok":false,"description":"temporary failure"}`), nil
+			}
 			if strings.HasSuffix(r.URL.Path, "/getUpdates") {
 				polls++
 				if polls == 1 {
