@@ -29,8 +29,9 @@ The agent must not:
   Telegram consumer, switch credentials, restart services, or delete either
   server.
 
-An approved plan is not an implementation or an authorization. Do not remove
-this blocker because a user asks to proceed, because a server ID is known, or
+An approved plan does not implement the missing capability, and this checkout
+has no authority to carry it out while the blocker remains. Do not remove this
+blocker because a user asks to proceed, because a server ID is known, or
 because a provider request appears simple. Do not invent an endpoint, tool,
 URL, cloud-init contract, Redis operation, installer command, service name,
 path, or recovery capability. This starter contains no GoAsterWeb migration
@@ -87,28 +88,34 @@ stop and ask the owner to resolve them.
 
 ## Approved availability monitor: future policy only
 
-An “approved monitor” means a separately implemented and reviewed,
-owner-approved, read-only availability check. It is not available in this
-checkout. The current agent must not schedule, run, emulate, or claim to have
-run one, including a 30-minute recurring check.
+This policy applies only after the GoAsterWeb handoff is implemented, reviewed,
+deployed, and verified. It is not available in this checkout. The current
+agent must not schedule, run, emulate, or claim to have run one, or create a
+server.
 
-If a later release passes the handoff gate, the monitor must remain separate
-from provisioning and must:
+In a future approved workflow, the owner's approval to start a 30-minute
+availability monitor also authorizes the creation of exactly one server that
+matches the approved terms. The monitor runs every 30 minutes, 24/7, with no
+fixed stop date, until that server is successfully created or creation returns
+a confirmed error. As soon as an available offer matches the approved terms,
+the workflow immediately submits the one authorized create operation; no
+separate create approval is required. There is no separate price ceiling. The
+owner approves the exact server type, architecture, eligible locations,
+image, network, and current hourly price in advance. If current offer terms
+differ from those approved, stop and report without creating a server.
 
-- use the owner's exact approved target terms and a bounded, explicitly
-  approved cadence and duration;
-- report availability and current terms privately without reserving,
-  creating, rebuilding, or deleting a server, generating a key, or starting a
-  setup session;
-- stop and report on expiry, authentication failure, provider error, timeout,
-  inconsistent data, or an unknown result; it must not blindly retry or turn
-  availability into creation; and
-- stop before any separately approved create operation, and stay disabled
-  until the owner manually reconciles an uncertain or billable result.
-
-Finding a matching offer is not approval to create it. The owner must still
-review the exact server type, architecture, location, image, network, price,
-and overlap cost in the approved workflow.
+The future implementation must prevent overlapping monitor runs and
+concurrent creation attempts, and must enforce the one-server limit across
+restarts and instances. Availability checks are read-only until the exact
+approved offer is found. Stop the monitor on an authentication failure,
+provider error, timeout, inconsistent data, or unknown result. Stop on any
+creation error; if creation may have succeeded but its result is uncertain,
+disable the monitor and require manual reconciliation. Do not automatically
+retry a failed availability request or create operation. After an error,
+require manual reconciliation and fresh owner approval before a new attempt.
+Never delete a server automatically. A successful creation ends the monitor
+and prevents another creation. The monitoring period has no fixed expiry; any
+handoff created for the server remains subject to its separate handoff expiry.
 
 ## Target guidance, not a provisioning instruction
 
@@ -120,20 +127,21 @@ fit light use without builds, tests, browsers, or other heavy work. Ask for a
 location preference and otherwise prefer all eligible locations for faster
 availability. These are preferences, not current product or price claims.
 
-Before any future approved creation, the owner must see the selected server
-type, architecture, eligible locations, image, network, expected hourly price,
-and overlap cost for both servers. There is no separate price ceiling in the
-approved direction: stop if the current terms differ from what the owner
-approved. Creation would be billable immediately, including if migration
-fails or a handoff expires. None of these checks authorizes creation while
-the hard blocker remains.
+Before approving a future monitor, the owner must see and approve the exact
+server type, architecture, eligible locations, image, network, current hourly
+price, and expected overlap cost while both servers exist. That approval
+includes the monitor and its one matching create operation; there is no
+separate price ceiling or fixed stop date. Stop if the current offer terms
+differ from what the owner approved. Creation would be billable immediately,
+including if migration fails or a handoff expires. None of these checks
+authorizes creation while the hard blocker remains.
 
 ## Owner-managed migration checklist
 
-This checklist describes actions for the owner after a separately approved
-destination exists and its identity and access are verified. The agent may
-explain the checklist; it must not perform the actions or claim that this
-repository supplies the missing installer or transfer service.
+This checklist describes actions for the owner after a destination matching
+the approved terms exists and its identity and access are verified. The
+agent may explain the checklist; it must not perform the actions or claim
+that this repository supplies the missing installer or transfer service.
 
 ### 1. Preflight the old host
 
@@ -253,7 +261,7 @@ the current agent:
 | Condition | Required behavior | Owner action |
 | --- | --- | --- |
 | Handoff is missing, expired, lost, conflicted, or unverified | Fail closed; do not SSH, create, transfer, or start setup. | Reconcile the approved system manually and obtain a new approved handoff if needed. Expiry never deletes infrastructure. |
-| Monitor or provider returns an error, timeout, inconsistent record, or unknown result | Stop the monitor and any create workflow; do not blindly retry or create a duplicate. | Inspect the exact attempt and provider project manually. Treat an unknown result as unknown until reconciled. |
+| Monitor or provider returns an error, timeout, inconsistent record, or unknown result | Stop the monitor and any create workflow; do not retry automatically or create a duplicate. | Inspect the exact attempt and provider project manually. Treat an unknown result as unknown until reconciled. |
 | Host key is missing, changed, or conflicts with the recorded key | Do not connect over SSH. | Identify the exact affected server; if the reviewed procedure requires starting over, the owner deletes that server in Hetzner after seeing the permanent-data-loss warning, then retries manually. |
 | Key, project, server ID, address, login identity, or owner channel does not match | Do not deliver a key, upload state, or continue setup. | Correct the identity or stop; never substitute an address-only or server-ID-only match. |
 | Manual copy, permissions, checksum, install, or validation fails | Do not cut over or stop the old agent. | Keep the old server for recovery and repair or repeat the selected move manually. |
@@ -323,18 +331,24 @@ If a later reviewed release explicitly clears the handoff gate, it must add
 an implementation-specific workflow and tests before enabling any of these
 operations. The intended policy is:
 
-- the owner approves the exact target terms, current hourly price, eligible
-  locations, and immediate creation of exactly one matching server; a
-  30-minute availability cadence could run 24/7 only after the handoff is
-  fully available and verified and the owner has approved it;
+- the owner's approval to start the 30-minute availability monitor includes
+  permission to create exactly one server immediately when available under
+  the approved terms; it runs 24/7 with no fixed stop date until successful
+  creation or a confirmed creation error, and no separate price ceiling or
+  create approval applies;
+- the monitor stops if current offer terms differ from those approved, and
+  the implementation prevents overlapping monitor runs and concurrent create
+  attempts;
 - the workflow registers one immutable attempt before creation, uses a fresh
   dedicated SSH key, and submits one provider create operation. On a timeout
-  or unknown result it stops, disables any approved monitor, reconciles by
-  the exact attempt label, and never blindly retries or creates a duplicate;
-- on a confirmed creation error or timeout, it reports the issue and asks the
-  owner to inspect and delete any accidentally created server. It never
-  retries or deletes automatically. On confirmed success it marks the task
-  done and prevents another creation;
+  or unknown result it stops, disables the monitor, reconciles by the exact
+  attempt label, and never automatically retries or creates a duplicate. Any
+  availability or creation error stops the workflow; an uncertain create
+  result requires manual reconciliation;
+- on a confirmed creation error, it reports the issue and stops. The owner
+  inspects the provider project manually if needed. It never retries
+  automatically or deletes automatically. On confirmed success it marks the
+  task done and prevents another creation;
 - the owner receives status and cost information privately. The owner uploads
   the private key to the verified GoAsterWeb handoff, and the web side pins
   and strictly verifies the captured host key before SSH;
