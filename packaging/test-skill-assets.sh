@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 . "$script_dir/assets.sh"
 
-expected_starter_skills='background-command-administration bitwarden-secrets-manager github-auth goaster-backup goaster-build-test goaster-source-code-evolution goaster-deploy goaster-env goaster-find-contributions goaster-fork goaster-share-contribution hetzner-auth manage-skills modify-goaster-source-code internet-fetch model-administration project-memory read-write-temp-files ripgrep-search memory-consolidation goaster-telegram-groups-best-practices telegram-commands'
+expected_starter_skills='background-command-administration bitwarden-secrets-manager github-auth goaster-backup goaster-build-test goaster-source-code-evolution goaster-deploy goaster-env goaster-find-contributions goaster-fork goaster-share-contribution hetzner-auth hetzner-auto-backup manage-skills modify-goaster-source-code internet-fetch model-administration project-memory read-write-temp-files ripgrep-search memory-consolidation goaster-telegram-groups-best-practices telegram-commands'
 if [ "$starter_skills" != "$expected_starter_skills" ]; then
 	printf 'starter skill allowlist changed unexpectedly\nexpected: %s\nactual: %s\n' \
 		"$expected_starter_skills" "$starter_skills" >&2
@@ -46,6 +46,23 @@ for name in expected:
         if not path.is_file() or path.is_symlink():
             raise SystemExit(f"invalid starter file: {path}")
         path.read_text(encoding="utf-8")
+
+workflow = (root / "skills" / "hetzner-auto-backup" / "SKILL.md").read_text(encoding="utf-8")
+for phrase in (
+    "goaster-backup",
+    "POST /servers/{id}/actions/enable_backup",
+    "GET /servers/{id}/actions/{action_id}",
+    "explicitly approve",
+    "recurring backup charge",
+    "daily automatic",
+    "seven backup slots",
+    "application-consistent",
+    "Attached Volumes are not included",
+    "If backups are already enabled",
+    "stop and report",
+):
+    if phrase not in workflow:
+        raise SystemExit(f"hetzner-auto-backup workflow missing required guidance: {phrase!r}")
 
 # Check local Markdown links so renamed skills and stale skill paths fail in
 # the same offline test as the package allowlist.

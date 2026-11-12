@@ -63,11 +63,14 @@ func TestInstallBundledStartersOnce(t *testing.T) {
 		}
 	}
 	metadata, err := discoverAt(root)
-	if err != nil || !strings.Contains(metadata, "name: goaster-fork") {
-		t.Fatalf("installed GoAster fork workflow was not discoverable: %q, %v", metadata, err)
+	if err != nil || !strings.Contains(metadata, "name: goaster-fork") || !strings.Contains(metadata, "name: hetzner-auto-backup") {
+		t.Fatalf("installed starter workflows were not discoverable: %q, %v", metadata, err)
 	}
 	if _, err := loadAt(root, "goaster-fork"); err != nil {
 		t.Fatalf("installed GoAster fork workflow was not loadable: %v", err)
+	}
+	if _, err := loadAt(root, "hetzner-auto-backup"); err != nil {
+		t.Fatalf("installed Hetzner automatic-backup workflow was not loadable: %v", err)
 	}
 	memoryPath := filepath.Join(root, "memory", "MEMORY.md")
 	memory, err := os.ReadFile(memoryPath)
