@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -133,6 +134,640 @@ func TestPairedAttachmentDownloadsAndForwardsBytesAndCaption(t *testing.T) {
 
 	if len(forwarded.Attachments) != 1 || forwarded.Message != "please inspect" || forwarded.ChatID != 42 || len(sent) != 1 || sent[0] != "processed" {
 		t.Fatalf("forwarded message = %+v, sent = %q", forwarded, sent)
+	}
+}
+
+func TestTelegramEnvironmentDocumentNeverEntersOrdinaryChat(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	sent := 0
+	a := adapter{
+		token:   testToken,
+		pairing: paired,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+				t.Fatalf("reserved environment document reached Telegram download: %s", r.URL.Path)
+			}
+			sent++
+			return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+		}),
+		agent: doerFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("reserved environment document reached the model")
+			return nil, nil
+		}),
+	}
+	for _, tc := range []struct {
+		caption  string
+		chatType string
+		chatID   int64
+	}{
+		{chatType: "private", chatID: 42},
+		{caption: "please inspect", chatType: "private", chatID: 42},
+		{chatType: "group", chatID: -100123},
+	} {
+		m := privateMessage(42, "")
+		m.Caption = tc.caption
+		m.Chat.Type = tc.chatType
+		m.Chat.ID = tc.chatID
+		if err := json.Unmarshal([]byte(`{"document":{"file_id":"env-file","file_name":"goaster.env","mime_type":"text/plain","file_size":17}}`), m); err != nil {
+			t.Fatal(err)
+		}
+		a.handle(context.Background(), m)
+	}
+	if sent != 3 {
+		t.Fatalf("reserved environment document responses = %d, want 3", sent)
+	}
+}
+
+func TestTelegramEnvironmentRequiresExactAttachmentAndBindsAcceptanceIdentity(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	payload := []byte("EXISTING=updated-secret\nADDED=new-secret\n")
+	var sent []string
+	var forwarded []struct {
+		Message     string                `json:"message"`
+		ChatID      int64                 `json:"chat_id"`
+		UserID      int64                 `json:"user_id"`
+		Attachments []attachment.Incoming `json:"attachments"`
+	}
+	a := adapter{
+		token:   testToken,
+		pairing: paired,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			case strings.HasSuffix(r.URL.Path, "/getFile"):
+				var request struct {
+					FileID string `json:"file_id"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.FileID != "env-file" {
+					t.Fatalf("environment getFile request = %+v, err = %v", request, err)
+				}
+				return response(http.StatusOK, `{"ok":true,"result":{"file_size":40,"file_path":"documents/goaster.env"}}`), nil
+			case strings.HasPrefix(r.URL.Path, "/file/bot"):
+				fileResponse := response(http.StatusOK, string(payload))
+				fileResponse.ContentLength = int64(len(payload))
+				return fileResponse, nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var request struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				sent = append(sent, request.Text)
+				if strings.Contains(request.Text, "updated-secret") || strings.Contains(request.Text, "new-secret") {
+					t.Fatalf("Telegram message exposed an environment value: %q", request.Text)
+				}
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request struct {
+				Message     string                `json:"message"`
+				ChatID      int64                 `json:"chat_id"`
+				UserID      int64                 `json:"user_id"`
+				Attachments []attachment.Incoming `json:"attachments"`
+			}
+			if err := json.Unmarshal(body, &request); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(body), `"path"`) {
+				t.Fatal("environment request contained a client-controlled path")
+			}
+			if request.Message == telegramEnvironmentCommand {
+				if len(request.Attachments) == 0 {
+					return response(http.StatusOK, `{"type":"final","reply":"Environment proposal cleared."}`+"\n"), nil
+				}
+				if request.ChatID != 42 || request.UserID != 42 || len(request.Attachments) != 1 || request.Attachments[0].Filename != telegramEnvironmentFilename {
+					t.Fatalf("environment preview identity or attachment = %+v", request)
+				}
+				forwarded = append(forwarded, request)
+				return response(http.StatusOK, `{"type":"final","reply":"Environment proposal (values hidden). Added: ADDED. Modified: EXISTING. Reply exactly ACCEPT."}`+"\n"), nil
+			}
+			if request.Message != "/env ACCEPT" || request.ChatID != 42 || request.UserID != 42 || len(request.Attachments) != 0 {
+				t.Fatalf("environment acceptance request = %+v", request)
+			}
+			forwarded = append(forwarded, request)
+			return response(http.StatusOK, `{"type":"final","reply":"Environment settings saved locally."}`+"\n"), nil
+		}),
+	}
+
+	a.handle(context.Background(), privateMessage(42, telegramEnvironmentCommand))
+	if len(sent) != 1 || !strings.Contains(sent[0], "goaster.env") || !strings.Contains(sent[0], "same message") {
+		t.Fatalf("missing-file instructions = %q", sent)
+	}
+
+	wrongName := privateMessage(42, telegramEnvironmentCommand)
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"wrong-file","file_name":"settings.env"}}`), wrongName); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), wrongName)
+	if len(sent) != 2 || !strings.Contains(sent[1], "named goaster.env") {
+		t.Fatalf("wrong-name response = %q", sent)
+	}
+
+	tooLarge := privateMessage(42, telegramEnvironmentCommand)
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"large-file","file_name":"goaster.env","file_size":1048577}}`), tooLarge); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), tooLarge)
+	if len(sent) != 3 || !strings.Contains(sent[2], "1 MiB") {
+		t.Fatalf("oversized environment response = %q", sent)
+	}
+
+	unauthorized := privateMessage(99, telegramEnvironmentCommand)
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"env-file","file_name":"goaster.env"}}`), unauthorized); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), unauthorized)
+	if len(forwarded) != 0 {
+		t.Fatal("unauthorized environment attachment reached the agent")
+	}
+
+	preview := privateMessage(42, telegramEnvironmentCommand)
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"env-file","file_name":"goaster.env","mime_type":"text/plain","file_size":1}}`), preview); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), preview)
+	if len(forwarded) != 1 || len(sent) != 4 || !strings.Contains(sent[3], "values hidden") || strings.Contains(sent[3], "updated-secret") || strings.Contains(sent[3], "new-secret") {
+		t.Fatalf("environment preview forwarding = %+v, sent = %q", forwarded, sent)
+	}
+	a.handle(context.Background(), privateMessage(42, " ACCEPT "))
+	if len(forwarded) != 1 || len(sent) != 5 || !strings.Contains(sent[4], "Reply exactly ACCEPT") {
+		t.Fatalf("non-exact acceptance changed proposal state: forwarded = %+v, sent = %q", forwarded, sent)
+	}
+	a.handle(context.Background(), privateMessage(42, telegramEnvironmentAcceptKeyword))
+	if len(forwarded) != 2 || len(sent) != 6 || sent[5] != "Environment settings saved locally." {
+		t.Fatalf("environment acceptance forwarding = %+v, sent = %q", forwarded, sent)
+	}
+}
+
+func TestTelegramMentionedEnvironmentCommandStaysOutOfNormalChat(t *testing.T) {
+	payload := []byte("MENTIONED=fake-secret\n")
+	var sent []string
+	var agentMessage string
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	a := adapter{
+		token:   testToken,
+		pairing: paired,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			case strings.HasSuffix(r.URL.Path, "/getFile"):
+				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/goaster.env"}}`), nil
+			case strings.HasPrefix(r.URL.Path, "/file/bot"):
+				fileResponse := response(http.StatusOK, string(payload))
+				fileResponse.ContentLength = int64(len(payload))
+				return fileResponse, nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var request struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				sent = append(sent, request.Text)
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var request struct {
+				Message     string                `json:"message"`
+				Attachments []attachment.Incoming `json:"attachments"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.Message != telegramEnvironmentCommand || len(request.Attachments) != 1 {
+				t.Fatalf("mentioned environment request fell through or was malformed: %+v", request)
+			}
+			agentMessage = request.Message
+			return response(http.StatusOK, `{"type":"final","reply":"Environment proposal (values hidden). Reply exactly ACCEPT."}`+"\n"), nil
+		}),
+	}
+	m := privateMessage(42, "/env@botname")
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"env-file","file_name":"goaster.env","mime_type":"text/plain","file_size":1}}`), m); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), m)
+
+	if agentMessage != telegramEnvironmentCommand || len(sent) != 1 || !strings.Contains(sent[0], "values hidden") || strings.Contains(sent[0], "fake-secret") {
+		t.Fatalf("mentioned environment handling = agent %q, sent %q", agentMessage, sent)
+	}
+}
+
+func TestTelegramEnvironmentPreviewDeliveryFailureInvalidatesProposal(t *testing.T) {
+	payload := []byte("KEY=fake-secret\n")
+	var sent []string
+	var agentMessages []string
+	proposalPending := false
+	sendMessages := 0
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	a := adapter{
+		token:   testToken,
+		pairing: paired,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			case strings.HasSuffix(r.URL.Path, "/getFile"):
+				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/goaster.env"}}`), nil
+			case strings.HasPrefix(r.URL.Path, "/file/bot"):
+				fileResponse := response(http.StatusOK, string(payload))
+				fileResponse.ContentLength = int64(len(payload))
+				return fileResponse, nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				sendMessages++
+				if sendMessages == 2 {
+					return response(http.StatusBadGateway, `{"ok":false}`), nil
+				}
+				var request struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				sent = append(sent, request.Text)
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var request struct {
+				Message     string                `json:"message"`
+				Attachments []attachment.Incoming `json:"attachments"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			agentMessages = append(agentMessages, request.Message)
+			switch request.Message {
+			case telegramEnvironmentCommand:
+				if len(request.Attachments) == 0 {
+					proposalPending = false
+					return response(http.StatusOK, `{"type":"final","reply":"proposal cleared"}`+"\n"), nil
+				}
+				proposalPending = true
+				return response(http.StatusOK, `{"type":"final","reply":"`+strings.Repeat("P", 2001)+`"}`+"\n"), nil
+			case telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword:
+				if proposalPending {
+					return response(http.StatusOK, `{"type":"final","reply":"unexpectedly saved"}`+"\n"), nil
+				}
+				return response(http.StatusOK, `{"type":"final","reply":"No environment proposal is pending"}`+"\n"), nil
+			default:
+				t.Fatalf("unexpected agent message %q", request.Message)
+				return nil, nil
+			}
+		}),
+	}
+	preview := privateMessage(42, telegramEnvironmentCommand)
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"env-file","file_name":"goaster.env","mime_type":"text/plain","file_size":1}}`), preview); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), preview)
+	a.handle(context.Background(), privateMessage(42, telegramEnvironmentAcceptKeyword))
+
+	if !reflect.DeepEqual(agentMessages, []string{
+		telegramEnvironmentCommand,
+		telegramEnvironmentCommand,
+		telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword,
+	}) {
+		t.Fatalf("preview delivery invalidation sequence = %q", agentMessages)
+	}
+	if proposalPending {
+		t.Fatal("preview delivery failure left a proposal pending")
+	}
+	if len(sent) != 2 || !strings.Contains(sent[1], "No environment proposal is pending") {
+		t.Fatalf("acceptance after preview delivery failure = %q", sent)
+	}
+}
+
+func TestTelegramEnvironmentSecretFlowIsPrivateOnly(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	var sent []string
+	getFileCalls := 0
+	agentCalls := 0
+	a := adapter{
+		token:   testToken,
+		pairing: paired,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var request struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				sent = append(sent, request.Text)
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			case strings.HasSuffix(r.URL.Path, "/getFile"):
+				getFileCalls++
+				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/goaster.env"}}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(*http.Request) (*http.Response, error) {
+			agentCalls++
+			return response(http.StatusOK, `{"type":"final","reply":"unexpected"}`+"\n"), nil
+		}),
+	}
+	group := textMessage(42, -100123, "group", telegramEnvironmentCommand)
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"secret-file","file_name":"goaster.env","file_size":32}}`), group); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), group)
+	if getFileCalls != 0 || agentCalls != 0 {
+		t.Fatalf("group environment upload reached a secret flow: getFile=%d agent=%d", getFileCalls, agentCalls)
+	}
+	if len(sent) != 1 || !strings.Contains(sent[0], "only in a private chat") {
+		t.Fatalf("group restriction response = %q", sent)
+	}
+}
+
+func TestTelegramMalformedEnvironmentCommandsCannotBypassGroupRestriction(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	var sent []string
+	a := adapter{
+		token:   testToken,
+		pairing: paired,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+			}
+			var request struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			sent = append(sent, request.Text)
+			return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+		}),
+		agent: doerFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("malformed group environment command reached the agent")
+			return nil, nil
+		}),
+	}
+	for _, text := range []string{"/env\nwith extra", "/env\twith extra", "ACCEPT now"} {
+		group := textMessage(42, -100123, "group", text)
+		if err := json.Unmarshal([]byte(`{"document":{"file_id":"secret-file","file_name":"goaster.env","file_size":32}}`), group); err != nil {
+			t.Fatal(err)
+		}
+		a.handle(context.Background(), group)
+	}
+	if len(sent) != 3 {
+		t.Fatalf("group malformed environment responses = %q", sent)
+	}
+	for _, reply := range sent {
+		if !strings.Contains(reply, "only in a private chat") {
+			t.Fatalf("group malformed environment response = %q", reply)
+		}
+	}
+}
+
+func TestTelegramRejectedReplacementInvalidatesPendingProposal(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	payload := []byte("NEW_VALUE=new-secret\n")
+	var sent []string
+	proposalPending := false
+	var agentCalls []string
+	a := adapter{
+		token:   testToken,
+		pairing: paired,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			case strings.HasSuffix(r.URL.Path, "/getFile"):
+				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/goaster.env"}}`), nil
+			case strings.HasPrefix(r.URL.Path, "/file/bot"):
+				fileResponse := response(http.StatusOK, string(payload))
+				fileResponse.ContentLength = int64(len(payload))
+				return fileResponse, nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var request struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				sent = append(sent, request.Text)
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var request struct {
+				Message     string                `json:"message"`
+				Attachments []attachment.Incoming `json:"attachments"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			agentCalls = append(agentCalls, request.Message)
+			switch request.Message {
+			case telegramEnvironmentCommand:
+				if len(request.Attachments) == 0 {
+					proposalPending = false
+					return response(http.StatusOK, `{"type":"final","reply":"proposal cleared"}`+"\n"), nil
+				}
+				proposalPending = true
+				return response(http.StatusOK, `{"type":"final","reply":"preview"}`+"\n"), nil
+			case telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword:
+				if proposalPending {
+					proposalPending = false
+					return response(http.StatusOK, `{"type":"final","reply":"saved"}`+"\n"), nil
+				}
+				return response(http.StatusOK, `{"type":"final","reply":"No environment proposal is pending"}`+"\n"), nil
+			default:
+				t.Fatalf("unexpected agent message %q", request.Message)
+				return nil, nil
+			}
+		}),
+	}
+	preview := privateMessage(42, telegramEnvironmentCommand)
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"env-file","file_name":"goaster.env","file_size":1}}`), preview); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), preview)
+	rejected := privateMessage(42, telegramEnvironmentCommand+" extra")
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"env-file","file_name":"goaster.env","file_size":1}}`), rejected); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), rejected)
+	a.handle(context.Background(), privateMessage(42, telegramEnvironmentAcceptKeyword))
+	if !reflect.DeepEqual(agentCalls, []string{telegramEnvironmentCommand, telegramEnvironmentCommand, telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword}) {
+		t.Fatalf("agent invalidation sequence = %q", agentCalls)
+	}
+	if len(sent) != 3 || !strings.Contains(sent[1], "To update settings") || !strings.Contains(sent[2], "No environment proposal is pending") {
+		t.Fatalf("rejected replacement acceptance = %q", sent)
+	}
+}
+
+func TestTelegramMediaGroupEnvironmentReplacementInvalidatesPendingProposal(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	payload := []byte("NEW_VALUE=new-secret\n")
+	var sent []string
+	proposalPending := false
+	var agentCalls []string
+	a := adapter{
+		token:   testToken,
+		pairing: paired,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			case strings.HasSuffix(r.URL.Path, "/getFile"):
+				return response(http.StatusOK, `{"ok":true,"result":{"file_path":"documents/goaster.env"}}`), nil
+			case strings.HasPrefix(r.URL.Path, "/file/bot"):
+				fileResponse := response(http.StatusOK, string(payload))
+				fileResponse.ContentLength = int64(len(payload))
+				return fileResponse, nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var request struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				sent = append(sent, request.Text)
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			default:
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+				return nil, nil
+			}
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			var request struct {
+				Message     string                `json:"message"`
+				Attachments []attachment.Incoming `json:"attachments"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			agentCalls = append(agentCalls, request.Message)
+			switch request.Message {
+			case telegramEnvironmentCommand:
+				if len(request.Attachments) == 0 {
+					proposalPending = false
+					return response(http.StatusOK, `{"type":"final","reply":"proposal cleared"}`+"\n"), nil
+				}
+				proposalPending = true
+				return response(http.StatusOK, `{"type":"final","reply":"preview"}`+"\n"), nil
+			case telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword:
+				if proposalPending {
+					proposalPending = false
+					return response(http.StatusOK, `{"type":"final","reply":"saved"}`+"\n"), nil
+				}
+				return response(http.StatusOK, `{"type":"final","reply":"No environment proposal is pending"}`+"\n"), nil
+			default:
+				t.Fatalf("unexpected agent message %q", request.Message)
+				return nil, nil
+			}
+		}),
+	}
+	preview := privateMessage(42, telegramEnvironmentCommand)
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"env-file","file_name":"goaster.env","file_size":1}}`), preview); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), preview)
+	mediaGroupReplacement := privateMessage(42, telegramEnvironmentCommand)
+	mediaGroupReplacement.MediaGroupID = "album-1"
+	if err := json.Unmarshal([]byte(`{"document":{"file_id":"env-file","file_name":"goaster.env","file_size":1}}`), mediaGroupReplacement); err != nil {
+		t.Fatal(err)
+	}
+	a.handle(context.Background(), mediaGroupReplacement)
+	if proposalPending {
+		t.Fatal("media-group replacement left the fake proposal pending before acceptance")
+	}
+	a.handle(context.Background(), privateMessage(42, telegramEnvironmentAcceptKeyword))
+
+	if !reflect.DeepEqual(agentCalls, []string{
+		telegramEnvironmentCommand,
+		telegramEnvironmentCommand,
+		telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword,
+	}) {
+		t.Fatalf("media-group invalidation sequence = %q", agentCalls)
+	}
+	if proposalPending {
+		t.Fatal("media-group replacement left a proposal pending")
+	}
+	if len(sent) != 2 || sent[0] != "preview" || !strings.Contains(sent[1], "No environment proposal is pending") {
+		t.Fatalf("media-group replacement responses = %q", sent)
 	}
 }
 

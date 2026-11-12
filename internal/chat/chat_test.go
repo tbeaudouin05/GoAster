@@ -569,6 +569,51 @@ func TestInteractiveMalformedEnvironmentPathReturnsToPrompt(t *testing.T) {
 	}
 }
 
+type testValueOutput map[bool][]byte
+
+func (output testValueOutput) Write(data []byte) (int, error) {
+	output[true] = append(output[true], data...)
+	return len(data), nil
+}
+
+func (output testValueOutput) String() string {
+	return string(output[true])
+}
+
+func TestEnvironmentPreviewReportsEnvironmentReloadFailure(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "env")
+	target := filepath.Join(directory, "unrelated")
+	if err := os.WriteFile(target, []byte("SECRET=value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("cannot create symbolic link: %v", err)
+	}
+
+	store := localenv.NewStoreAt(path)
+	output := testValueOutput{}
+	providerCalls := 0
+	provider := providerFunc(func(context.Context, string, string) (string, error) {
+		providerCalls++
+		return "unexpected", nil
+	})
+	pickerCalls := 0
+	picker := EnvironmentFilePickerFunc(func() (string, error) {
+		pickerCalls++
+		return "", errors.New("picker must not run after an environment reload failure")
+	})
+	if err := RunWithEnvStoreAndPicker(context.Background(), strings.NewReader("/env\nhello\n"), output, NewSession(defaultConfig(t), provider), store, picker); err != nil {
+		t.Fatal(err)
+	}
+	if providerCalls != 0 || pickerCalls != 0 {
+		t.Fatalf("reload failure reached provider or picker: provider=%d picker=%d", providerCalls, pickerCalls)
+	}
+	if !strings.Contains(output.String(), "Environment settings could not be loaded") {
+		t.Fatalf("reload failure was not reported: %q", output.String())
+	}
+}
+
 func TestEnvUsesPickerAndCancellationPreservesSavedValues(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "env")
 	store := localenv.NewStoreAt(storePath)
@@ -822,7 +867,7 @@ func TestFileCommandForwardsDocumentAndContinues(t *testing.T) {
 	}
 }
 
-func TestEnvPathSyntaxIsNotACommand(t *testing.T) {
+func TestEnvMalformedCommandDoesNotReachChat(t *testing.T) {
 	store := localenv.NewStoreAt(filepath.Join(t.TempDir(), "env"))
 	if err := store.Save(map[string]string{"EXISTING": "before"}); err != nil {
 		t.Fatal(err)
@@ -845,16 +890,14 @@ func TestEnvPathSyntaxIsNotACommand(t *testing.T) {
 	if pickerCalls != 0 {
 		t.Fatalf("picker calls = %d, want 0", pickerCalls)
 	}
-	if !reflect.DeepEqual(messages, []string{message}) {
-		t.Fatalf("provider messages = %q, want %q", messages, []string{message})
+	if len(messages) != 0 {
+		t.Fatalf("provider messages = %q, want no model request", messages)
 	}
 	if !reflect.DeepEqual(store.Values(), map[string]string{"EXISTING": "before"}) {
 		t.Fatalf("path syntax changed saved values: %v", localenvNames(store.Values()))
 	}
-	for _, unwanted := range []string{"Environment file rejected:", "Review environment values", "Environment setup canceled."} {
-		if strings.Contains(output.String(), unwanted) {
-			t.Errorf("path syntax entered environment setup: %s", &output)
-		}
+	if !strings.Contains(output.String(), "Usage: /env") {
+		t.Errorf("malformed /env command did not report usage: %s", output.String())
 	}
 }
 

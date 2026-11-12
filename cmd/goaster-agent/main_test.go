@@ -25,6 +25,7 @@ import (
 	"goaster/internal/chat"
 	"goaster/internal/command"
 	"goaster/internal/controlsecret"
+	"goaster/internal/localenv"
 )
 
 type fakeProvider struct{ err error }
@@ -179,6 +180,29 @@ func postChatWithAttachments(t testing.TB, h http.Handler, chatID int64, message
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
+}
+
+func postEnvironmentRequest(t testing.TB, h http.Handler, userID, chatID int64, message, filename string, data []byte) httptest.ResponseRecorder {
+	t.Helper()
+	attachments := []attachment.Incoming(nil)
+	if data != nil {
+		attachments = []attachment.Incoming{{Type: "document", Filename: filename, MIMEType: "text/plain", Size: int64(len(data)), Data: data}}
+	}
+	body, err := json.Marshal(struct {
+		Message     string                `json:"message"`
+		ChatID      int64                 `json:"chat_id"`
+		UserID      int64                 `json:"user_id"`
+		Attachments []attachment.Incoming `json:"attachments,omitempty"`
+	}{message, chatID, userID, attachments})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(controlAuthorizationHeader, testControlSecret)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return *w
 }
 
 func TestAgentLoopbackHandler(t *testing.T) {
@@ -553,13 +577,14 @@ func TestAgentRecognizesImageDocumentAndMakesItReadable(t *testing.T) {
 func TestAgentRejectsUntrustedAttachmentMetadata(t *testing.T) {
 	h := handler(fakeProvider{}, readyAuth)
 	for name, body := range map[string]string{
-		"path authority":  `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":1,"data":"eA==","path":"/etc/passwd"}]}`,
-		"unsafe filename": `{"chat_id":1,"attachments":[{"type":"document","filename":"../x","size":1,"data":"eA=="}]}`,
-		"wrong size":      `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":2,"data":"eA=="}]}`,
-		"missing data":    `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":0}]}`,
-		"bad base64":      `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":1,"data":"%%%"}]}`,
-		"invalid mime":    `{"chat_id":1,"attachments":[{"type":"document","filename":"x","mime_type":"text/plain\nextra","size":1,"data":"eA=="}]}`,
-		"multiple":        `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":1,"data":"eA=="},{"type":"document","filename":"y","size":1,"data":"eQ=="}]}`,
+		"path authority":                `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":1,"data":"eA==","path":"/etc/passwd"}]}`,
+		"unsafe filename":               `{"chat_id":1,"attachments":[{"type":"document","filename":"../x","size":1,"data":"eA=="}]}`,
+		"reserved environment filename": `{"chat_id":1,"message":"inspect","attachments":[{"type":"document","filename":"goaster.env","mime_type":"text/plain","size":1,"data":"eA=="}]}`,
+		"wrong size":                    `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":2,"data":"eA=="}]}`,
+		"missing data":                  `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":0}]}`,
+		"bad base64":                    `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":1,"data":"%%%"}]}`,
+		"invalid mime":                  `{"chat_id":1,"attachments":[{"type":"document","filename":"x","mime_type":"text/plain\nextra","size":1,"data":"eA=="}]}`,
+		"multiple":                      `{"chat_id":1,"attachments":[{"type":"document","filename":"x","size":1,"data":"eA=="},{"type":"document","filename":"y","size":1,"data":"eQ=="}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", strings.NewReader(body))
@@ -598,6 +623,274 @@ func TestAgentAttachmentAndEnvelopeSizeLimits(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("oversized text-only request status = %d", w.Code)
+	}
+}
+
+func TestEnvironmentProposalIsChatBoundAndUpsertsWithoutLeakingValues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	store := localenv.NewStoreAt(filepath.Join(home, ".goaster", "env"))
+	if err := store.Save(map[string]string{"EXISTING": "old-secret", "UNRELATED": "keep-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	h := handler(fakeProvider{}, readyAuth)
+	postEnvironment := func(userID, chatID int64, message string, data []byte) httptest.ResponseRecorder {
+		attachments := []attachment.Incoming(nil)
+		if data != nil {
+			attachments = []attachment.Incoming{{Type: "document", Filename: "goaster.env", MIMEType: "text/plain", Size: int64(len(data)), Data: data}}
+		}
+		body, err := json.Marshal(struct {
+			Message     string                `json:"message"`
+			ChatID      int64                 `json:"chat_id"`
+			UserID      int64                 `json:"user_id"`
+			Attachments []attachment.Incoming `json:"attachments,omitempty"`
+		}{message, chatID, userID, attachments})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/chat", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set(controlAuthorizationHeader, testControlSecret)
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, request)
+		return *response
+	}
+
+	invalid := postEnvironment(42, 101, environmentCommand, []byte("DUPLICATE=first\nDUPLICATE=second\n"))
+	if invalid.Code != http.StatusOK || !strings.Contains(invalid.Body.String(), "unique KEY=VALUE") || strings.Contains(invalid.Body.String(), "first") || strings.Contains(invalid.Body.String(), "second") {
+		t.Fatalf("invalid environment response = %d %q", invalid.Code, invalid.Body.String())
+	}
+
+	secretValues := []string{"updated-secret", "new-secret"}
+	preview := postEnvironment(42, 101, environmentCommand, []byte("EXISTING="+secretValues[0]+"\nADDED="+secretValues[1]+"\n"))
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, body = %q", preview.Code, preview.Body.String())
+	}
+	for _, want := range []string{"values hidden", "Added: ADDED", "Modified: EXISTING", "Reply exactly ACCEPT"} {
+		if !strings.Contains(preview.Body.String(), want) {
+			t.Errorf("preview missing %q: %q", want, preview.Body.String())
+		}
+	}
+	for _, secret := range append(secretValues, "old-secret", "keep-secret") {
+		if strings.Contains(preview.Body.String(), secret) {
+			t.Errorf("preview exposed environment value %q", secret)
+		}
+	}
+
+	wrongUser := postEnvironment(99, 101, environmentAcceptCommand, nil)
+	if wrongUser.Code != http.StatusOK || !strings.Contains(wrongUser.Body.String(), "No environment proposal is pending") {
+		t.Fatalf("unbound user acceptance response = %d %q", wrongUser.Code, wrongUser.Body.String())
+	}
+	wrongChat := postEnvironment(42, 202, environmentAcceptCommand, nil)
+	if wrongChat.Code != http.StatusOK || !strings.Contains(wrongChat.Body.String(), "No environment proposal is pending") {
+		t.Fatalf("unbound chat acceptance response = %d %q", wrongChat.Code, wrongChat.Body.String())
+	}
+	unchanged := localenv.NewStoreAt(filepath.Join(home, ".goaster", "env"))
+	if err := unchanged.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(unchanged.Values(), map[string]string{"EXISTING": "old-secret", "UNRELATED": "keep-secret"}) {
+		t.Fatal("unbound acceptance changed saved settings")
+	}
+
+	applied := postEnvironment(42, 101, environmentAcceptCommand, nil)
+	if applied.Code != http.StatusOK {
+		t.Fatalf("acceptance status = %d, body = %q", applied.Code, applied.Body.String())
+	}
+	for _, want := range []string{"saved locally", "Added: ADDED", "Modified: EXISTING", "subsequent GoAster shell commands", "may require a restart", "no services were restarted"} {
+		if !strings.Contains(applied.Body.String(), want) {
+			t.Errorf("applied response missing %q: %q", want, applied.Body.String())
+		}
+	}
+	for _, secret := range append(secretValues, "old-secret", "keep-secret") {
+		if strings.Contains(applied.Body.String(), secret) {
+			t.Errorf("applied response exposed environment value %q", secret)
+		}
+	}
+	loaded := localenv.NewStoreAt(filepath.Join(home, ".goaster", "env"))
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Values(), map[string]string{"EXISTING": "updated-secret", "ADDED": "new-secret", "UNRELATED": "keep-secret"}) {
+		t.Fatal("upsert did not preserve unrelated settings")
+	}
+	runtimeValues, err := runtimeEnvironment()
+	if err != nil || !reflect.DeepEqual(runtimeValues, loaded.Values()) {
+		t.Fatal("runtime environment did not reload saved settings")
+	}
+	replayed := postEnvironment(42, 101, environmentAcceptCommand, nil)
+	if replayed.Code != http.StatusOK || !strings.Contains(replayed.Body.String(), "No environment proposal is pending") {
+		t.Fatalf("replayed acceptance response = %d %q", replayed.Code, replayed.Body.String())
+	}
+}
+
+func TestEnvironmentProposalRejectsStaleSettingsAndRequiresFreshPreview(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	path := filepath.Join(home, ".goaster", "env")
+	initial := localenv.NewStoreAt(path)
+	if err := initial.Save(map[string]string{"BASE": "old", "UNRELATED": "keep"}); err != nil {
+		t.Fatal(err)
+	}
+	h := handler(fakeProvider{}, readyAuth)
+	proposal := []byte("BASE=new\nADDED=secret\n")
+	preview := postEnvironmentRequest(t, h, 42, 101, environmentCommand, environmentFilename, proposal)
+	if !strings.Contains(preview.Body.String(), "Reply exactly ACCEPT") {
+		t.Fatalf("preview = %q", preview.Body.String())
+	}
+	other := localenv.NewStoreAt(path)
+	if err := other.Load(); err != nil {
+		t.Fatal(err)
+	}
+	otherValues := other.Values()
+	otherValues["OTHER"] = "changed"
+	if err := other.Save(otherValues); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := postEnvironmentRequest(t, h, 42, 101, environmentAcceptCommand, environmentFilename, nil)
+	if !strings.Contains(stale.Body.String(), "changed since this preview") || !strings.Contains(stale.Body.String(), "fresh proposal") {
+		t.Fatalf("stale acceptance = %q", stale.Body.String())
+	}
+	loaded := localenv.NewStoreAt(path)
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Values(), map[string]string{"BASE": "old", "UNRELATED": "keep", "OTHER": "changed"}) {
+		t.Fatalf("stale acceptance changed settings: %v", loaded.Values())
+	}
+	replayed := postEnvironmentRequest(t, h, 42, 101, environmentAcceptCommand, environmentFilename, nil)
+	if !strings.Contains(replayed.Body.String(), "No environment proposal is pending") {
+		t.Fatalf("stale proposal remained actionable: %q", replayed.Body.String())
+	}
+
+	fresh := postEnvironmentRequest(t, h, 42, 101, environmentCommand, environmentFilename, proposal)
+	if !strings.Contains(fresh.Body.String(), "Reply exactly ACCEPT") {
+		t.Fatalf("fresh preview = %q", fresh.Body.String())
+	}
+	applied := postEnvironmentRequest(t, h, 42, 101, environmentAcceptCommand, environmentFilename, nil)
+	if !strings.Contains(applied.Body.String(), "saved locally") {
+		t.Fatalf("fresh acceptance = %q", applied.Body.String())
+	}
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"BASE": "new", "ADDED": "secret", "UNRELATED": "keep", "OTHER": "changed"}
+	if !reflect.DeepEqual(loaded.Values(), want) {
+		t.Fatalf("fresh acceptance values = %v, want %v", loaded.Values(), want)
+	}
+}
+
+func TestRejectedEnvironmentReplacementInvalidatesOlderProposal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	path := filepath.Join(home, ".goaster", "env")
+	initial := localenv.NewStoreAt(path)
+	if err := initial.Save(map[string]string{"KEEP": "old"}); err != nil {
+		t.Fatal(err)
+	}
+	h := handler(fakeProvider{}, readyAuth)
+	preview := postEnvironmentRequest(t, h, 42, 101, environmentCommand, environmentFilename, []byte("REPLACED=new-secret\n"))
+	if !strings.Contains(preview.Body.String(), "Reply exactly ACCEPT") {
+		t.Fatalf("preview = %q", preview.Body.String())
+	}
+	rejected := postEnvironmentRequest(t, h, 42, 101, environmentCommand, environmentFilename, []byte("DUPLICATE=one\nDUPLICATE=two\n"))
+	if !strings.Contains(rejected.Body.String(), "file was rejected") {
+		t.Fatalf("rejected replacement = %q", rejected.Body.String())
+	}
+	accept := postEnvironmentRequest(t, h, 42, 101, environmentAcceptCommand, environmentFilename, nil)
+	if !strings.Contains(accept.Body.String(), "No environment proposal is pending") {
+		t.Fatalf("rejected replacement left proposal actionable: %q", accept.Body.String())
+	}
+	loaded := localenv.NewStoreAt(path)
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Values(), map[string]string{"KEEP": "old"}) {
+		t.Fatalf("rejected replacement changed settings: %v", loaded.Values())
+	}
+}
+
+func TestMalformedEnvironmentCommandsNeverReachTheModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	providerCalls := 0
+	h := handler(inspectingProvider(func(context.Context, string) (string, error) {
+		providerCalls++
+		return "unexpected model reply", nil
+	}), readyAuth)
+
+	for _, tc := range []struct {
+		name, message string
+		data          []byte
+		want          string
+		unwanted      string
+	}{
+		{name: "newline command", message: "/env\nwith extra", data: []byte("SECRET=newline-secret\n"), want: "goaster.env", unwanted: "newline-secret"},
+		{name: "tab command", message: "/env\twith extra", data: []byte("SECRET=tab-secret\n"), want: "goaster.env", unwanted: "tab-secret"},
+		{name: "malformed acceptance", message: "ACCEPT now", want: "Reply exactly ACCEPT", unwanted: "unexpected model reply"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := postEnvironmentRequest(t, h, 42, 101, tc.message, environmentFilename, tc.data)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.want) {
+				t.Fatalf("malformed environment response = %d %q", response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), tc.unwanted) {
+				t.Fatalf("malformed environment response exposed or reached unwanted content: %q", response.Body.String())
+			}
+		})
+	}
+	if providerCalls != 0 {
+		t.Fatalf("malformed environment commands reached the model %d times", providerCalls)
+	}
+}
+
+func TestMentionedEnvironmentCommandStaysInEnvironmentFlow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	providerCalls := 0
+	h := handler(inspectingProvider(func(context.Context, string) (string, error) {
+		providerCalls++
+		return "unexpected model reply", nil
+	}), readyAuth)
+
+	preview := postEnvironmentRequest(t, h, 42, 101, "/env@botname", environmentFilename, []byte("MENTIONED=fake-secret\n"))
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), "Reply exactly ACCEPT") || strings.Contains(preview.Body.String(), "fake-secret") {
+		t.Fatalf("mentioned environment preview = %d %q", preview.Code, preview.Body.String())
+	}
+	if providerCalls != 0 {
+		t.Fatalf("mentioned environment command reached the model %d times", providerCalls)
+	}
+
+	applied := postEnvironmentRequest(t, h, 42, 101, environmentAcceptCommand, environmentFilename, nil)
+	if applied.Code != http.StatusOK || !strings.Contains(applied.Body.String(), "saved locally") {
+		t.Fatalf("mentioned environment acceptance = %d %q", applied.Code, applied.Body.String())
+	}
+}
+
+func TestRuntimeEnvironmentReportsReloadFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	directory := filepath.Join(home, ".goaster")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, "unrelated-env")
+	if err := os.WriteFile(target, []byte("SECRET=value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(directory, "env")); err != nil {
+		t.Skipf("cannot create symbolic link: %v", err)
+	}
+	values, err := runtimeEnvironment()
+	if err == nil || values != nil {
+		t.Fatalf("runtime environment = %v, error = %v; want a reported reload failure", values, err)
 	}
 }
 

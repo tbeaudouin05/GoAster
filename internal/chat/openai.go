@@ -1032,18 +1032,33 @@ func executeShell(ctx context.Context, arguments string) (string, error) {
 	if err != nil {
 		return formatShellExecuteResult(command.Result{ExitCode: -1}, &safeShellExecutionError{message: "malformed shell_execute arguments"}), nil
 	}
+	if shellEnvironmentUnavailable(ctx) {
+		return formatShellExecuteResult(command.Result{ExitCode: -1}, errShellEnvironmentUnavailable), nil
+	}
 	environment := shellEnvironmentFromContext(ctx)
 	request.Env = environment
 	result, err := command.Execute(ctx, request)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return "", ctxErr
 	}
-	result.Stdout = redactShellOutput(result.Stdout, environment)
-	result.Stderr = redactShellOutput(result.Stderr, environment)
+	if result.StdoutTruncated {
+		result.Stdout = "[output omitted because it was truncated]"
+	} else {
+		result.Stdout = redactShellOutput(result.Stdout, environment)
+	}
+	if result.StderrTruncated {
+		result.Stderr = "[output omitted because it was truncated]"
+	} else {
+		result.Stderr = redactShellOutput(result.Stderr, environment)
+	}
 	return formatShellExecuteResult(result, err), nil
 }
 
 type shellEnvironmentContextKey struct{}
+
+type shellEnvironmentUnavailableContextKey struct{}
+
+var errShellEnvironmentUnavailable = errors.New("environment settings could not be loaded; shell command was not run")
 
 // WithShellEnvironment makes local settings available only to shell_execute
 // child processes. Values are copied and are not added to model context.
@@ -1055,25 +1070,86 @@ func WithShellEnvironment(ctx context.Context, values map[string]string) context
 	return context.WithValue(ctx, shellEnvironmentContextKey{}, environment)
 }
 
+// WithShellEnvironmentUnavailable prevents shell_execute from running when a
+// request could not reload the saved local settings.
+func WithShellEnvironmentUnavailable(ctx context.Context) context.Context {
+	return context.WithValue(ctx, shellEnvironmentUnavailableContextKey{}, true)
+}
+
 func shellEnvironmentFromContext(ctx context.Context) map[string]string {
 	environment, _ := ctx.Value(shellEnvironmentContextKey{}).(map[string]string)
 	return environment
 }
 
+func shellEnvironmentUnavailable(ctx context.Context) bool {
+	unavailable, _ := ctx.Value(shellEnvironmentUnavailableContextKey{}).(bool)
+	return unavailable
+}
+
 func redactShellOutput(output string, environment map[string]string) string {
-	values := make([]string, 0, len(environment))
-	for _, value := range environment {
-		if value != "" {
-			values = append(values, value)
+	values := shellEnvironmentValues(environment)
+	coverage := make([]int, len(output)+1)
+	hasCoverage := false
+	for _, value := range values {
+		if value == "" || len(value) > len(output) {
+			continue
 		}
+		for start := 0; start <= len(output)-len(value); {
+			match := strings.Index(output[start:], value)
+			if match < 0 {
+				break
+			}
+			match += start
+			coverage[match]++
+			coverage[match+len(value)]--
+			hasCoverage = true
+			start = match + 1
+		}
+	}
+	if !hasCoverage {
+		return output
+	}
+
+	var redacted strings.Builder
+	redacted.Grow(len(output))
+	last := 0
+	active := 0
+	for index := 0; index < len(output); index++ {
+		active += coverage[index]
+		if active <= 0 {
+			continue
+		}
+		redacted.WriteString(output[last:index])
+		redacted.WriteString("[REDACTED]")
+		for index++; index < len(output); index++ {
+			active += coverage[index]
+			if active <= 0 {
+				break
+			}
+		}
+		last = index
+	}
+	redacted.WriteString(output[last:])
+	return redacted.String()
+}
+
+func shellEnvironmentValues(environment map[string]string) []string {
+	seen := make(map[string]struct{})
+	values := make([]string, 0)
+	for _, value := range environment {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
 	}
 	sort.Slice(values, func(i, j int) bool {
 		return len(values[i]) > len(values[j])
 	})
-	for _, value := range values {
-		output = strings.ReplaceAll(output, value, "[REDACTED]")
-	}
-	return output
+	return values
 }
 
 func formatShellExecuteResult(result command.Result, executionErr error) string {
@@ -1107,6 +1183,8 @@ func safeShellExecutionErrorMessage(err error) string {
 		return safeErr.message
 	}
 	switch {
+	case errors.Is(err, errShellEnvironmentUnavailable):
+		return "environment settings could not be loaded; shell command was not run"
 	case errors.Is(err, command.ErrOutputLimit):
 		return "command output exceeded the limit"
 	case errors.Is(err, context.Canceled):

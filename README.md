@@ -80,6 +80,19 @@ stored pairing material are operational secrets and must remain outside chat,
 command lines, logs, and the repository; the one-time pairing code is accepted
 only through the private-chat pairing flow.
 
+To update local environment settings from Telegram, use a private chat: send
+`/env` with a document named `goaster.env` attached in the same message.
+GoAster parses it outside the model and previews only added or modified
+variable names. Reply with exactly `ACCEPT` to apply the pending proposal for
+that authorized user and chat; values are never shown in the preview or
+confirmation. The update is an upsert into `~/.goaster/env`, preserving
+unrelated settings. Each subsequent GoAster shell request reloads the saved
+settings; if they cannot be loaded, the request is reported and no shell
+command is run. Truncated shell output streams are omitted because they may
+contain partial saved values. Long-lived processes that read environment values only at
+startup may require a restart. GoAster does not restart services as part of
+this flow.
+
 ## Models
 
 The shipped model template is `config/openai-models.json`. Runtime

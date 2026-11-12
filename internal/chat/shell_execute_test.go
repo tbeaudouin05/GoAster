@@ -176,8 +176,14 @@ func TestLoadedLocalEnvironmentReachesShellWithoutLeakingSecret(t *testing.T) {
 	if err := loadedStore.Load(); err != nil {
 		t.Fatal(err)
 	}
+	updatedSecret := "updated-shell-secret-with-a-different-length"
+	updatedValues := loadedStore.Values()
+	updatedValues[name] = updatedSecret
+	if err := loadedStore.Save(updatedValues); err != nil {
+		t.Fatal(err)
+	}
 
-	arguments, err := json.Marshal(map[string]string{"command": shellPrintEnvironmentCommand(name)})
+	arguments, err := json.Marshal(map[string]string{"command": shellCheckEnvironmentLengthCommand(name, len(updatedSecret))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +210,9 @@ func TestLoadedLocalEnvironmentReachesShellWithoutLeakingSecret(t *testing.T) {
 		case 1:
 			writeCodexFunctionCall(t, w, "call-shell-secret", "shell_execute", string(arguments))
 		case 2:
+			if !strings.Contains(string(body), "exit_code: 0") {
+				t.Errorf("shell did not use the reloaded environment: %s", body)
+			}
 			for _, item := range request.Input {
 				if item.Type != "function_call_output" {
 					continue
@@ -347,6 +356,57 @@ func TestFormatShellExecuteResultIsExplicitAndSecretSafe(t *testing.T) {
 	}
 }
 
+func TestExecuteShellOmitsTruncatedOutput(t *testing.T) {
+	arguments, err := json.Marshal(map[string]any{"command": "yes x | head -c 1100000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executeShell(WithShellEnvironment(context.Background(), map[string]string{"TEST_SECRET": "xxxsecret"}), string(arguments))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "[output omitted because it was truncated]") || strings.Contains(result, strings.Repeat("x\n", 50)) {
+		t.Fatalf("truncated output was not omitted: %.200q", result)
+	}
+}
+
+func TestShellOutputRedactionUsesOutputBoundedCoverageForOverlappingSecrets(t *testing.T) {
+	const (
+		outputLength     = 32 << 10
+		overlappingCount = 256
+	)
+	environment := make(map[string]string, overlappingCount)
+	for length := 1; length <= overlappingCount; length++ {
+		environment[fmt.Sprintf("OVERLAPPING_%d", length)] = strings.Repeat("a", length)
+	}
+
+	redacted := redactShellOutput(strings.Repeat("a", outputLength), environment)
+	if redacted != "[REDACTED]" {
+		t.Fatalf("overlapping shell output was not fully redacted: length=%d suffix=%q", len(redacted), redacted[len(redacted)-min(len(redacted), 64):])
+	}
+}
+
+func TestShellOutputRedactionDeduplicatesRepeatedSecrets(t *testing.T) {
+	const (
+		repeatedCount = 2048
+		secret        = "repeated-shell-secret"
+	)
+	environment := make(map[string]string, repeatedCount)
+	for index := 0; index < repeatedCount; index++ {
+		environment[fmt.Sprintf("REPEATED_%d", index)] = secret
+	}
+	if values := shellEnvironmentValues(environment); len(values) != 1 || values[0] != secret {
+		t.Fatalf("shell environment secrets were not deduplicated: %#v", values)
+	}
+
+	output := strings.Repeat(secret+"|", repeatedCount)
+	redacted := redactShellOutput(output, environment)
+	want := strings.Repeat("[REDACTED]|", repeatedCount)
+	if redacted != want {
+		t.Fatalf("repeated shell secrets were not redacted: suffix=%q", redacted[len(redacted)-min(len(redacted), 64):])
+	}
+}
+
 func TestExecuteShellReportsTimeoutAsUncertainResult(t *testing.T) {
 	arguments, err := json.Marshal(map[string]any{
 		"command":    shellLoopCommand(),
@@ -366,6 +426,24 @@ func TestExecuteShellReportsTimeoutAsUncertainResult(t *testing.T) {
 	}
 }
 
+func TestExecuteShellRefusesToRunWhenEnvironmentReloadFails(t *testing.T) {
+	arguments, err := json.Marshal(map[string]string{"command": "printf should-not-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted, err := executeShell(WithShellEnvironmentUnavailable(context.Background()), string(arguments))
+	if err != nil {
+		t.Fatalf("executeShell() error = %v", err)
+	}
+	for _, want := range []string{"environment settings could not be loaded; shell command was not run", "exit_code: -1"} {
+		if !strings.Contains(formatted, want) {
+			t.Errorf("unavailable-environment result missing %q: %q", want, formatted)
+		}
+	}
+	if strings.Contains(formatted, "should-not-run") {
+		t.Fatalf("unavailable-environment result contained command output: %q", formatted)
+	}
+}
 func newShellTestProvider(t *testing.T, backend *httptest.Server) *CodexProvider {
 	t.Helper()
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
@@ -414,6 +492,13 @@ func shellPrintEnvironmentCommand(name string) string {
 		return "[Console]::Write($env:" + name + ")"
 	}
 	return "printf '%s' \"$" + name + "\""
+}
+
+func shellCheckEnvironmentLengthCommand(name string, length int) string {
+	if runtime.GOOS == "windows" {
+		return `if ($env:` + name + `.Length -eq ` + fmt.Sprint(length) + `) { Write-Output $env:` + name + `; exit 0 }; exit 1`
+	}
+	return `if [ "${#` + name + `}" -eq ` + fmt.Sprint(length) + ` ]; then printf '%s' "$` + name + `"; else exit 1; fi`
 }
 
 func shellLoopCommand() string {

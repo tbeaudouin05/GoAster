@@ -17,6 +17,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"goaster/internal/artefacts"
 	"goaster/internal/attachment"
@@ -24,9 +25,18 @@ import (
 	"goaster/internal/command"
 	"goaster/internal/controlsecret"
 	"goaster/internal/controltransport"
+	"goaster/internal/localenv"
 )
 
 const maxChatEnvelopeBytes int64 = 1 << 20
+
+const (
+	environmentCommand       = "/env"
+	environmentAcceptKeyword = "ACCEPT"
+	environmentAcceptCommand = environmentCommand + " " + environmentAcceptKeyword
+	environmentFilename      = "goaster.env"
+	environmentProposalTTL   = 10 * time.Minute
+)
 
 const controlAuthorizationHeader = "X-GoAster-GitHub-Auth-Control"
 
@@ -34,6 +44,27 @@ type countingReader struct {
 	io.Reader
 	bytesRead int64
 }
+
+type environmentProposalKey struct {
+	userID int64
+	chatID int64
+}
+
+type environmentProposal struct {
+	baseDigest string
+	values     map[string]string
+	expiresAt  time.Time
+}
+
+type environmentRequestKind uint8
+
+const (
+	environmentRequestNone environmentRequestKind = iota
+	environmentPreviewRequest
+	environmentAcceptRequest
+	environmentMalformedPreviewRequest
+	environmentMalformedAcceptRequest
+)
 
 func (r *countingReader) Read(p []byte) (int, error) {
 	n, err := r.Reader.Read(p)
@@ -230,6 +261,8 @@ func serve(store chat.CredentialStore) (serveErr error) {
 func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error, registry chat.ModelRegistry, controlSecret string) http.Handler {
 	var sessionsMu sync.Mutex
 	sessions := make(map[int64]*chat.Session)
+	var environmentSerialMu sync.Mutex
+	environmentProposals := make(map[environmentProposalKey]environmentProposal)
 	sessionFor := func(chatID int64) *chat.Session {
 		sessionsMu.Lock()
 		defer sessionsMu.Unlock()
@@ -275,16 +308,44 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 		var request struct {
 			Message     string                `json:"message"`
 			ChatID      int64                 `json:"chat_id"`
+			UserID      int64                 `json:"user_id,omitempty"`
 			Attachments []attachment.Incoming `json:"attachments,omitempty"`
 		}
 		maxBodyBytes := int64(base64.StdEncoding.EncodedLen(int(attachment.MaxBytes))) + maxChatEnvelopeBytes
 		body := &countingReader{Reader: http.MaxBytesReader(w, r.Body, maxBodyBytes)}
 		dec := json.NewDecoder(body)
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&request); err != nil ||
-			request.ChatID == 0 ||
-			(strings.TrimSpace(request.Message) == "" && len(request.Attachments) == 0) ||
-			len(request.Attachments) > attachment.MaxAttachments {
+		if err := dec.Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if request.ChatID == 0 || (strings.TrimSpace(request.Message) == "" && len(request.Attachments) == 0) {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		environmentKind := classifyEnvironmentRequest(request.Message)
+		isEnvironment := environmentKind != environmentRequestNone
+		if isEnvironment && request.UserID <= 0 {
+			http.Error(w, "invalid environment request", http.StatusBadRequest)
+			return
+		}
+		if !isEnvironment && hasReservedEnvironmentAttachment(request.Attachments) {
+			http.Error(w, "goaster.env uploads require /env", http.StatusBadRequest)
+			return
+		}
+		if isEnvironment {
+			environmentSerialMu.Lock()
+			defer environmentSerialMu.Unlock()
+		}
+		// Any /env command-shaped request is a replacement attempt, even when
+		// its attachment or command spelling is malformed and will be rejected
+		// below. This prevents an older proposal from surviving a replacement
+		// attempt.
+		if environmentKind == environmentPreviewRequest || environmentKind == environmentMalformedPreviewRequest {
+			key := environmentProposalKey{userID: request.UserID, chatID: request.ChatID}
+			delete(environmentProposals, key)
+		}
+		if len(request.Attachments) > attachment.MaxAttachments {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -315,7 +376,20 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			}
 			metadata = append(metadata, validated)
 		}
-		if !chat.IsClearCommand(request.Message) && !chat.IsModelCommand(request.Message) && (checkAuth == nil || checkAuth(r.Context()) != nil) {
+		if isEnvironment && environmentKind == environmentPreviewRequest &&
+			len(request.Attachments) > 0 &&
+			(len(request.Attachments) != 1 || len(metadata) != 1 ||
+				request.Attachments[0].Filename != environmentFilename ||
+				metadata[0].Filename != environmentFilename || metadata[0].Type != "document" ||
+				metadata[0].Size > int64(localenv.MaxFileBytes)) {
+			http.Error(w, "invalid environment request", http.StatusBadRequest)
+			return
+		}
+		if isEnvironment && request.Message == environmentAcceptCommand && len(request.Attachments) != 0 {
+			http.Error(w, "invalid environment request", http.StatusBadRequest)
+			return
+		}
+		if !chat.IsClearCommand(request.Message) && !chat.IsModelCommand(request.Message) && !isEnvironment && (checkAuth == nil || checkAuth(r.Context()) != nil) {
 			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
 			return
 		}
@@ -351,6 +425,80 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 					return
 				}
 			}
+		}
+		environmentReply := func(userID, chatID int64, _ string, incoming []attachment.Incoming, metadata []attachment.Metadata) string {
+			key := environmentProposalKey{userID: userID, chatID: chatID}
+			now := time.Now()
+			for proposalKey, proposal := range environmentProposals {
+				if now.After(proposal.expiresAt) {
+					delete(environmentProposals, proposalKey)
+				}
+			}
+			if environmentKind == environmentMalformedPreviewRequest {
+				delete(environmentProposals, key)
+				return "Send /env with a document named goaster.env attached in the same message."
+			}
+			if environmentKind == environmentMalformedAcceptRequest {
+				return "Reply exactly ACCEPT as a text message after reviewing the environment preview."
+			}
+			if environmentKind == environmentPreviewRequest {
+				delete(environmentProposals, key)
+				if len(metadata) != 1 || len(incoming) != 1 || metadata[0].Path == "" {
+					return "Send /env with a document named goaster.env attached in the same message."
+				}
+				store, err := localenv.NewStore()
+				if err != nil || store.Load() != nil {
+					return "Environment settings are unavailable; no changes were saved."
+				}
+				values, err := localenv.LoadFile(metadata[0].Path)
+				if err != nil {
+					return "The goaster.env file was rejected: use unique KEY=VALUE names, one setting per line, with no blank lines. No changes were saved."
+				}
+				changes := localenv.Changes(store.Values(), values)
+				if len(changes.Added) == 0 && len(changes.Modified) == 0 {
+					delete(environmentProposals, key)
+					return "No environment changes detected; nothing was saved."
+				}
+				environmentProposals[key] = environmentProposal{
+					baseDigest: localenv.Digest(store.Values()),
+					values:     localenv.Merge(nil, values),
+					expiresAt:  time.Now().Add(environmentProposalTTL),
+				}
+				return formatEnvironmentProposal(changes)
+			}
+
+			proposal, ok := environmentProposals[key]
+			if !ok || now.After(proposal.expiresAt) {
+				delete(environmentProposals, key)
+				return "No environment proposal is pending. Send /env with goaster.env attached in the same message."
+			}
+			delete(environmentProposals, key)
+
+			store, err := localenv.NewStore()
+			if err != nil || store.Load() != nil {
+				return "Environment settings are unavailable; no changes were saved."
+			}
+			changes, err := store.UpsertIfUnchanged(proposal.baseDigest, proposal.values)
+			if errors.Is(err, localenv.ErrChanged) {
+				return "Environment settings changed since this preview; send /env with goaster.env attached in the same message to review a fresh proposal."
+			}
+			if err != nil {
+				return "Environment settings could not be saved; no changes were applied."
+			}
+			if len(changes.Added) == 0 && len(changes.Modified) == 0 {
+				return "No environment changes detected; nothing was saved."
+			}
+			return formatEnvironmentApplied(changes)
+		}
+		if isEnvironment {
+			reply := environmentReply(request.UserID, request.ChatID, request.Message, request.Attachments, metadata)
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			w.Header().Set("Cache-Control", "no-cache")
+			_ = json.NewEncoder(w).Encode(struct {
+				Type  string `json:"type"`
+				Reply string `json:"reply"`
+			}{"final", reply})
+			return
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -392,6 +540,12 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			}
 		}
 		requestContext := chat.WithToolCallObserver(r.Context(), observer)
+		values, environmentErr := runtimeEnvironment()
+		if environmentErr != nil {
+			requestContext = chat.WithShellEnvironmentUnavailable(requestContext)
+		} else if len(values) > 0 {
+			requestContext = chat.WithShellEnvironment(requestContext, values)
+		}
 		reply, err := session.ReplyWithAttachments(requestContext, request.Message, metadata)
 		if err != nil {
 			if errors.Is(err, attachment.ErrUnsupportedImage) {
@@ -462,6 +616,105 @@ func validControlRequest(r *http.Request, controlSecret string) bool {
 	}
 	provided := r.Header.Get(controlAuthorizationHeader)
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(controlSecret)) == 1
+}
+
+func isEnvironmentRequest(message string) bool {
+	return classifyEnvironmentRequest(message) != environmentRequestNone
+}
+
+func hasReservedEnvironmentAttachment(attachments []attachment.Incoming) bool {
+	for _, item := range attachments {
+		if attachment.SanitizeFilename(item.Filename) == environmentFilename {
+			return true
+		}
+	}
+	return false
+}
+
+func classifyEnvironmentRequest(message string) environmentRequestKind {
+	switch message {
+	case environmentCommand:
+		return environmentPreviewRequest
+	case environmentAcceptCommand:
+		return environmentAcceptRequest
+	case environmentAcceptKeyword:
+		return environmentMalformedAcceptRequest
+	}
+	if isEnvironmentCommandMention(message) {
+		return environmentPreviewRequest
+	}
+	if strings.HasPrefix(message, environmentCommand+"@") {
+		return environmentMalformedPreviewRequest
+	}
+	if hasEnvironmentWhitespacePrefix(message, environmentCommand) {
+		return environmentMalformedPreviewRequest
+	}
+	if hasEnvironmentWhitespacePrefix(message, environmentAcceptKeyword) {
+		return environmentMalformedAcceptRequest
+	}
+	return environmentRequestNone
+}
+
+func hasEnvironmentWhitespacePrefix(message, prefix string) bool {
+	if !strings.HasPrefix(message, prefix) {
+		return false
+	}
+	rest := message[len(prefix):]
+	for _, character := range rest {
+		return unicode.IsSpace(character)
+	}
+	return false
+}
+
+func isEnvironmentCommandMention(message string) bool {
+	prefix := environmentCommand + "@"
+	if !strings.HasPrefix(message, prefix) {
+		return false
+	}
+	username := message[len(prefix):]
+	if username == "" {
+		return false
+	}
+	for _, character := range username {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func formatEnvironmentNames(label string, names []string) string {
+	if len(names) == 0 {
+		return label + ": none"
+	}
+	return label + ": " + strings.Join(names, ", ")
+}
+
+func formatEnvironmentProposal(changes localenv.ChangeSet) string {
+	return "Environment proposal (values hidden).\n" +
+		formatEnvironmentNames("Added", changes.Added) + "\n" +
+		formatEnvironmentNames("Modified", changes.Modified) + "\n" +
+		"Reply exactly ACCEPT to apply this proposal."
+}
+
+func formatEnvironmentApplied(changes localenv.ChangeSet) string {
+	return "Environment settings saved locally (values hidden).\n" +
+		formatEnvironmentNames("Added", changes.Added) + "\n" +
+		formatEnvironmentNames("Modified", changes.Modified) + "\n" +
+		"The new settings are available to subsequent GoAster shell commands. Settings read by long-lived processes at startup may require a restart; no services were restarted."
+}
+
+func runtimeEnvironment() (map[string]string, error) {
+	store, err := localenv.NewStore()
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Load(); err != nil {
+		return nil, err
+	}
+	return store.Values(), nil
 }
 
 func modelCommandReply(registry chat.ModelRegistry, chatID int64, message string) string {

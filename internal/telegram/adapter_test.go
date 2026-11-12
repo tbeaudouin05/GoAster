@@ -9,11 +9,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
 
+	"goaster/internal/attachment"
 	"goaster/internal/controlsecret"
 	"goaster/internal/controltransport"
 )
@@ -630,6 +633,137 @@ func TestPollingDispatchesUpdatesConcurrentlyAndCancelsHandlers(t *testing.T) {
 	}
 	if len(canceled) != 2 {
 		t.Fatalf("canceled handlers = %d, want 2", len(canceled))
+	}
+}
+
+func TestPollingProcessesEnvironmentUpdatesInTelegramOrder(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer timeoutCancel()
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	var stateMu sync.Mutex
+	var agentMessages []string
+	var sent []string
+	pending := false
+	var sentDone sync.Once
+	sentComplete := make(chan struct{})
+	a := adapter{
+		token: testToken, pairing: paired, apiBase: "https://example.invalid",
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/livez" {
+				return response(200, "ok\n"), nil
+			}
+			var request struct {
+				Message     string                `json:"message"`
+				Attachments []attachment.Incoming `json:"attachments"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				return nil, err
+			}
+			stateMu.Lock()
+			agentMessages = append(agentMessages, request.Message)
+			switch request.Message {
+			case telegramEnvironmentCommand:
+				pending = len(request.Attachments) == 1
+			case telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword:
+				if pending {
+					pending = false
+				}
+			}
+			currentPending := pending
+			stateMu.Unlock()
+			switch request.Message {
+			case telegramEnvironmentCommand:
+				if len(request.Attachments) == 1 {
+					return response(200, `{"type":"final","reply":"preview A=one"}`+"\n"), nil
+				}
+				return response(200, `{"type":"final","reply":"cleared"}`+"\n"), nil
+			case telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword:
+				if currentPending {
+					return response(200, `{"type":"final","reply":"saved"}`+"\n"), nil
+				}
+				return response(200, `{"type":"final","reply":"no pending"}`+"\n"), nil
+			default:
+				return nil, fmt.Errorf("unexpected agent message %q", request.Message)
+			}
+		}),
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/getUpdates"):
+				var request struct {
+					Offset int64 `json:"offset"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					return nil, err
+				}
+				if request.Offset == 0 {
+					return response(200, `{"ok":true,"result":[
+						{"update_id":10,"message":{"text":"/env","document":{"file_id":"env-file","file_name":"goaster.env","mime_type":"text/plain","file_size":7},"from":{"id":42},"chat":{"id":42,"type":"private"}}},
+						{"update_id":11,"message":{"text":"/env\nrejected","from":{"id":42},"chat":{"id":42,"type":"private"}}},
+						{"update_id":12,"message":{"text":"ACCEPT","from":{"id":42},"chat":{"id":42,"type":"private"}}}
+					]}`), nil
+				}
+				select {
+				case <-sentComplete:
+					runCancel()
+					return response(200, `{"ok":true,"result":[]}`), nil
+				case <-r.Context().Done():
+					return nil, r.Context().Err()
+				case <-time.After(2 * time.Second):
+					return nil, errors.New("environment replies did not complete")
+				}
+			case strings.HasSuffix(r.URL.Path, "/getFile"):
+				return response(200, `{"ok":true,"result":{"file_size":7,"file_path":"documents/goaster.env"}}`), nil
+			case strings.HasPrefix(r.URL.Path, "/file/bot"):
+				fileResponse := response(200, "A=one\n")
+				fileResponse.ContentLength = 6
+				return fileResponse, nil
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(200, `{"ok":true,"result":true}`), nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var request struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					return nil, err
+				}
+				stateMu.Lock()
+				sent = append(sent, request.Text)
+				if len(sent) == 3 {
+					sentDone.Do(func() { close(sentComplete) })
+				}
+				stateMu.Unlock()
+				return response(200, `{"ok":true,"result":{}}`), nil
+			default:
+				return nil, fmt.Errorf("unexpected Telegram request %s", r.URL.Path)
+			}
+		}),
+	}
+	done := make(chan error, 1)
+	go func() { done <- a.run(runCtx, nil) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-timeoutCtx.Done():
+		stateMu.Lock()
+		t.Fatalf("ordered environment polling did not finish: agent=%q sent=%q", agentMessages, sent)
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if !reflect.DeepEqual(agentMessages, []string{telegramEnvironmentCommand, telegramEnvironmentCommand, telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword}) {
+		t.Fatalf("agent environment request order = %q", agentMessages)
+	}
+	if len(sent) != 3 || !strings.Contains(sent[0], "preview A=one") || !strings.Contains(sent[1], "same message") || !strings.Contains(sent[2], "no pending") {
+		t.Fatalf("environment replies = %q", sent)
 	}
 }
 

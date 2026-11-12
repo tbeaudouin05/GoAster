@@ -13,11 +13,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"goaster/internal/attachment"
 	"goaster/internal/chat"
 	"goaster/internal/controlsecret"
 	"goaster/internal/controltransport"
+	"goaster/internal/localenv"
 )
 
 type httpDoer interface {
@@ -28,6 +30,8 @@ type adapter struct {
 	token              string
 	pairing            *pairing
 	pairingMu          sync.Mutex
+	environmentMu      sync.Mutex
+	environmentBlocked map[environmentProposalKey]bool
 	client             httpDoer
 	agent              httpDoer
 	controlSecret      string
@@ -79,6 +83,11 @@ type attachmentSource struct {
 	fileSize int64
 }
 
+type environmentProposalKey struct {
+	userID int64
+	chatID int64
+}
+
 type telegramFile struct {
 	FileSize int64  `json:"file_size"`
 	FilePath string `json:"file_path"`
@@ -102,7 +111,12 @@ const (
 	telegramControlAuthorizationHeader = "X-GoAster-GitHub-Auth-Control"
 	telegramPairCommand                = "/pair"
 	telegramStartCommand               = "/start"
+	telegramEnvironmentCommand         = "/env"
+	telegramEnvironmentAcceptKeyword   = "ACCEPT"
+	telegramEnvironmentFilename        = "goaster.env"
 )
+
+const telegramEnvironmentInstructions = "To update settings, attach a document named goaster.env to /env in the same message. Never paste secret values into chat."
 
 // Run starts polling only after the token and pairing state are protected.
 // ready is called after the agent process is available and Telegram accepts
@@ -172,11 +186,15 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 			if item.ID < offset {
 				continue
 			}
-			handlers.Add(1)
-			go func() {
-				defer handlers.Done()
+			if item.Message != nil && isTelegramEnvironmentUpdate(*item.Message) {
 				a.handle(ctx, item.Message)
-			}()
+			} else {
+				handlers.Add(1)
+				go func() {
+					defer handlers.Done()
+					a.handle(ctx, item.Message)
+				}()
+			}
 			if item.ID < int64(^uint64(0)>>1) {
 				offset = item.ID + 1
 			}
@@ -277,7 +295,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if m == nil || m.From == nil || m.From.IsBot || m.From.ID <= 0 || m.Chat.ID == 0 || len(m.SenderChat) != 0 && string(m.SenderChat) != "null" {
 		return
 	}
-	if m.MediaGroupID != "" {
+	if m.MediaGroupID != "" && !isTelegramEnvironmentUpdate(*m) {
 		return
 	}
 	if m.Chat.Type != "private" && m.Chat.Type != "group" && m.Chat.Type != "supergroup" {
@@ -287,9 +305,13 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		return
 	}
 	hasAttachment := m.hasAttachment()
-	text := strings.TrimSpace(m.Text)
-	if text == "" && hasAttachment {
-		text = strings.TrimSpace(m.Caption)
+	rawText := m.Text
+	if rawText == "" && hasAttachment {
+		rawText = m.Caption
+	}
+	text := strings.TrimSpace(rawText)
+	if isTelegramEnvironmentCommandMention(text) {
+		text = telegramEnvironmentCommand
 	}
 	a.pairingMu.Lock()
 	pairedUserID := a.pairing.userID
@@ -320,12 +342,130 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if m.From.ID != pairedUserID {
 		return
 	}
+	if m.MediaGroupID != "" {
+		if m.Chat.Type == "private" && isTelegramEnvironmentCommandVariant(text) {
+			proposalKey := environmentProposalKey{userID: m.From.ID, chatID: m.Chat.ID}
+			a.environmentMu.Lock()
+			a.environmentBlocked = invalidateEnvironmentProposalLocked(ctx, proposalKey, a.agent, a.controlSecret, a.environmentBlocked)
+			a.environmentMu.Unlock()
+		}
+		return
+	}
 	if text == telegramPairCommand || strings.HasPrefix(text, telegramPairCommand+" ") ||
 		text == telegramStartCommand || strings.HasPrefix(text, telegramStartCommand+" ") {
 		if a.agentEndpointAvailable(ctx, "/healthz") {
 			a.send(ctx, m.Chat.ID, "GoAster is ready for text messages, images, and documents. Use /m to view the model, /m MODEL_OR_ALIAS to select one, and /clear to clear this chat's history.")
 		} else {
 			a.send(ctx, m.Chat.ID, "The remote agent is not ready; check its remote authentication. You can still use /m to view or select a model and /clear to clear this chat's history.")
+		}
+		return
+	}
+	if isTelegramEnvironmentDocument(*m) && !isTelegramEnvironmentMessage(text) {
+		if m.Chat.Type != "private" {
+			a.send(ctx, m.Chat.ID, "Environment updates are available only in a private chat.")
+			return
+		}
+		if !isTelegramEnvironmentUploadCommand(*m, text) {
+			a.send(ctx, m.Chat.ID, telegramEnvironmentInstructions)
+			return
+		}
+	}
+	if isTelegramEnvironmentMessage(text) {
+		if m.Chat.Type != "private" {
+			a.send(ctx, m.Chat.ID, "Environment updates are available only in a private chat.")
+			return
+		}
+		a.environmentMu.Lock()
+		defer a.environmentMu.Unlock()
+		proposalKey := environmentProposalKey{userID: m.From.ID, chatID: m.Chat.ID}
+		invalidateProposal := func() {
+			a.environmentBlocked = invalidateEnvironmentProposalLocked(ctx, proposalKey, a.agent, a.controlSecret, a.environmentBlocked)
+		}
+		if text == telegramEnvironmentAcceptKeyword {
+			if rawText != telegramEnvironmentAcceptKeyword {
+				a.send(ctx, m.Chat.ID, "Reply exactly ACCEPT as a text message after reviewing the environment preview.")
+				return
+			}
+			if hasAttachment {
+				a.send(ctx, m.Chat.ID, "Reply exactly ACCEPT as a text message after reviewing the environment preview.")
+				return
+			}
+			if a.environmentBlocked[proposalKey] {
+				invalidateProposal()
+				a.send(ctx, m.Chat.ID, "No environment proposal is pending. Send /env with goaster.env attached in the same message.")
+				return
+			}
+			reply, err := askAgentWithUser(ctx, telegramEnvironmentCommand+" "+telegramEnvironmentAcceptKeyword, m.Chat.ID, m.From.ID, nil, nil, a.agent, a.controlSecret)
+			if err != nil {
+				a.send(ctx, m.Chat.ID, "The environment update could not be completed.")
+				return
+			}
+			for _, chunk := range splitTelegramMarkdown(reply, 2000) {
+				a.send(ctx, m.Chat.ID, chunk)
+			}
+			return
+		}
+		if isTelegramEnvironmentAcceptanceVariant(text) {
+			a.send(ctx, m.Chat.ID, "Reply exactly ACCEPT as a text message after reviewing the environment preview.")
+			return
+		}
+		if text != telegramEnvironmentCommand {
+			invalidateProposal()
+			a.send(ctx, m.Chat.ID, telegramEnvironmentInstructions)
+			return
+		}
+		if len(m.Photo) > 0 || m.Document == nil {
+			invalidateProposal()
+			a.send(ctx, m.Chat.ID, telegramEnvironmentInstructions)
+			return
+		}
+		if strings.TrimSpace(m.Document.FileName) != telegramEnvironmentFilename {
+			invalidateProposal()
+			a.send(ctx, m.Chat.ID, "Attach a document named goaster.env with /env in the same message.")
+			return
+		}
+		if m.Document.FileSize < 0 || m.Document.FileSize > int64(localenv.MaxFileBytes) {
+			invalidateProposal()
+			a.send(ctx, m.Chat.ID, "The goaster.env document exceeds the 1 MiB upload limit.")
+			return
+		}
+		stopTyping := a.startTyping(ctx, m.Chat.ID)
+		attachments, err := a.downloadAttachments(ctx, m)
+		if err != nil {
+			stopTyping()
+			invalidateProposal()
+			if errors.Is(err, attachment.ErrUnsupportedImage) {
+				a.send(ctx, m.Chat.ID, "The goaster.env document must be a text document, not an image.")
+				return
+			}
+			a.send(ctx, m.Chat.ID, "The goaster.env document could not be downloaded safely.")
+			return
+		}
+		if len(attachments) != 1 || int64(len(attachments[0].Data)) > int64(localenv.MaxFileBytes) {
+			stopTyping()
+			invalidateProposal()
+			a.send(ctx, m.Chat.ID, "The goaster.env document exceeds the 1 MiB upload limit.")
+			return
+		}
+		reply, err := askAgentWithUser(ctx, telegramEnvironmentCommand, m.Chat.ID, m.From.ID, attachments, nil, a.agent, a.controlSecret)
+		stopTyping()
+		if err != nil {
+			invalidateProposal()
+			a.send(ctx, m.Chat.ID, "The environment file could not be reviewed safely.")
+			return
+		}
+		for _, chunk := range splitTelegramMarkdown(reply, 2000) {
+			if err := a.send(ctx, m.Chat.ID, chunk); err != nil {
+				// A proposal is actionable in the agent as soon as the preview
+				// response is produced. If Telegram does not deliver every
+				// preview chunk, remove it before a later ACCEPT can apply
+				// changes the user may not have seen.
+				invalidateProposal()
+				return
+			}
+		}
+		if a.environmentBlocked != nil {
+			delete(a.environmentBlocked, proposalKey)
 		}
 		return
 	}
@@ -419,6 +559,15 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	sendFinal(reply)
 }
 
+func invalidateEnvironmentProposalLocked(ctx context.Context, proposalKey environmentProposalKey, agent httpDoer, controlSecret string, environmentBlocked map[environmentProposalKey]bool) map[environmentProposalKey]bool {
+	_, err := askAgentWithUser(ctx, telegramEnvironmentCommand, proposalKey.chatID, proposalKey.userID, nil, nil, agent, controlSecret)
+	if environmentBlocked == nil {
+		environmentBlocked = make(map[environmentProposalKey]bool)
+	}
+	environmentBlocked[proposalKey] = err != nil
+	return environmentBlocked
+}
+
 func (a *adapter) startTyping(ctx context.Context, chatID int64) func() {
 	typingCtx, cancel := context.WithCancel(ctx)
 	stopped := make(chan struct{})
@@ -453,8 +602,9 @@ func (a *adapter) sendChatAction(ctx context.Context, chatID int64) {
 	}{chatID, "typing"}, nil)
 }
 
-func (a *adapter) send(ctx context.Context, userID int64, text string) {
-	_, _ = a.sendMessage(ctx, userID, text)
+func (a *adapter) send(ctx context.Context, userID int64, text string) error {
+	_, err := a.sendMessage(ctx, userID, text)
+	return err
 }
 
 func (a *adapter) sendMessage(ctx context.Context, chatID int64, text string) (int64, error) {
@@ -522,11 +672,16 @@ func truncateRunes(text string, max int) string {
 }
 
 func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attachments []attachment.Incoming, onToolCall func(string, string)) (string, error) {
+	return askAgentWithUser(ctx, text, chatID, 0, attachments, onToolCall, a.agent, a.controlSecret)
+}
+
+func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, attachments []attachment.Incoming, onToolCall func(string, string), agent httpDoer, controlSecret string) (string, error) {
 	body, err := json.Marshal(struct {
 		Message     string                `json:"message"`
 		ChatID      int64                 `json:"chat_id"`
+		UserID      int64                 `json:"user_id,omitempty"`
 		Attachments []attachment.Incoming `json:"attachments,omitempty"`
-	}{text, chatID, attachments})
+	}{Message: text, ChatID: chatID, UserID: userID, Attachments: attachments})
 	if err != nil {
 		return "", fmt.Errorf("agent request failed: %w", err)
 	}
@@ -535,8 +690,8 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 		return "", fmt.Errorf("agent request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(telegramControlAuthorizationHeader, a.controlSecret)
-	resp, err := a.agent.Do(req)
+	req.Header.Set(telegramControlAuthorizationHeader, controlSecret)
+	resp, err := agent.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("agent request failed: %w", err)
 	}
@@ -616,6 +771,92 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 		return "", fmt.Errorf("agent request failed")
 	}
 	return reply, nil
+}
+
+func isTelegramEnvironmentMessage(text string) bool {
+	return isTelegramEnvironmentCommandVariant(text) || isTelegramEnvironmentAcceptanceVariant(text)
+}
+
+func isTelegramEnvironmentDocument(m message) bool {
+	return m.Document != nil && attachment.SanitizeFilename(m.Document.FileName) == telegramEnvironmentFilename
+}
+
+func isTelegramEnvironmentUploadCommand(m message, text string) bool {
+	if !isTelegramEnvironmentCommandExact(text) {
+		return false
+	}
+	if strings.TrimSpace(m.Text) != "" && !isTelegramEnvironmentCommandExact(m.Text) {
+		return false
+	}
+	if strings.TrimSpace(m.Caption) != "" && !isTelegramEnvironmentCommandExact(m.Caption) {
+		return false
+	}
+	return true
+}
+
+func isTelegramEnvironmentCommandExact(text string) bool {
+	text = strings.TrimSpace(text)
+	return text == telegramEnvironmentCommand || isTelegramEnvironmentCommandMention(text)
+}
+
+func isTelegramEnvironmentCommandVariant(text string) bool {
+	if text == telegramEnvironmentCommand || isTelegramEnvironmentCommandMention(text) {
+		return true
+	}
+	if !strings.HasPrefix(text, telegramEnvironmentCommand) {
+		return false
+	}
+	if strings.HasPrefix(text, telegramEnvironmentCommand+"@") {
+		// Treat malformed command mentions as environment-shaped input too,
+		// so an attached document cannot enter ordinary chat handling.
+		return true
+	}
+	rest := text[len(telegramEnvironmentCommand):]
+	for _, character := range rest {
+		return unicode.IsSpace(character)
+	}
+	return false
+}
+
+func isTelegramEnvironmentCommandMention(text string) bool {
+	prefix := telegramEnvironmentCommand + "@"
+	if !strings.HasPrefix(text, prefix) {
+		return false
+	}
+	username := text[len(prefix):]
+	if username == "" {
+		return false
+	}
+	for _, character := range username {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isTelegramEnvironmentAcceptanceVariant(text string) bool {
+	if text == telegramEnvironmentAcceptKeyword {
+		return true
+	}
+	if !strings.HasPrefix(text, telegramEnvironmentAcceptKeyword) {
+		return false
+	}
+	rest := text[len(telegramEnvironmentAcceptKeyword):]
+	for _, character := range rest {
+		return unicode.IsSpace(character)
+	}
+	return false
+}
+
+func isTelegramEnvironmentUpdate(m message) bool {
+	rawText := m.Text
+	if rawText == "" && m.hasAttachment() {
+		rawText = m.Caption
+	}
+	return isTelegramEnvironmentMessage(strings.TrimSpace(rawText))
 }
 func (m *message) hasAttachment() bool {
 	return m != nil && (len(m.Photo) > 0 || m.Document != nil)

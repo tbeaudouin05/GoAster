@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"goaster/internal/attachment"
 	"goaster/internal/localenv"
@@ -69,6 +70,7 @@ type chatLoopSession interface {
 }
 
 type environmentValueStore interface {
+	Load() error
 	Save(map[string]string) error
 	Values() map[string]string
 }
@@ -130,7 +132,14 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 			}
 			continue
 		}
-		if message == "/env" {
+		if isEnvironmentCommand(message) {
+			if message != "/env" {
+				ui.renderError(w, "Usage: /env")
+				if err := w.Flush(); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := runEnvironmentFileSetupWithUI(terminalInput, w, store, picker, "", ui); err != nil {
 				if flushErr := w.Flush(); flushErr != nil {
 					return flushErr
@@ -211,6 +220,16 @@ func runChatLoopWithUI(ctx context.Context, terminalInput TerminalInput, output 
 			userMessage = fileInspectionMessage
 			attachments = []attachment.Metadata{metadata}
 			attachmentDirectory = directory
+		}
+		if err := store.Load(); err != nil {
+			if attachmentDirectory != "" {
+				_ = attachment.CleanupTemporaryDir(attachmentDirectory)
+			}
+			ui.renderError(w, fmt.Sprintf("Environment settings could not be loaded; request was not sent: %v", err))
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			continue
 		}
 		if ui.interactive {
 			ui.renderWorking(w)
@@ -367,6 +386,20 @@ func isEnvironmentFileCommand(message string) bool {
 	return len(strings.TrimSpace(rest)) < len(rest)
 }
 
+func isEnvironmentCommand(message string) bool {
+	if message == "/env" {
+		return true
+	}
+	if !strings.HasPrefix(message, "/env") {
+		return false
+	}
+	rest := message[len("/env"):]
+	for _, character := range rest {
+		return unicode.IsSpace(character)
+	}
+	return false
+}
+
 func environmentFileCommandPath(message string) (string, bool) {
 	arguments := strings.TrimSpace(strings.TrimPrefix(message, environmentFileCommand))
 	if arguments == "" {
@@ -395,6 +428,10 @@ func runEnvironmentFileSetup(input TerminalInput, output terminalOutput, store e
 }
 
 func runEnvironmentFileSetupWithUI(input TerminalInput, output terminalOutput, store environmentValueStore, picker EnvironmentFilePicker, path string, ui terminalUI) error {
+	if err := store.Load(); err != nil {
+		ui.renderError(output, fmt.Sprintf("Environment settings could not be loaded: %v", err))
+		return nil
+	}
 	if path == "" {
 		ui.renderInfo(output, environmentFileGuidance)
 		if err := output.Flush(); err != nil {
@@ -433,6 +470,10 @@ func reviewEnvironmentValues(input TerminalInput, output terminalOutput, store e
 }
 
 func reviewEnvironmentValuesWithUI(input TerminalInput, output terminalOutput, store environmentValueStore, values map[string]string, ui terminalUI) error {
+	if err := store.Load(); err != nil {
+		ui.renderError(output, fmt.Sprintf("Environment settings could not be loaded: %v", err))
+		return nil
+	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
@@ -461,6 +502,10 @@ func reviewEnvironmentValuesWithUI(input TerminalInput, output terminalOutput, s
 		return nil
 	}
 	if err := store.Save(values); err != nil {
+		if errors.Is(err, localenv.ErrChanged) {
+			ui.renderError(output, "Environment settings changed while waiting for confirmation. Review the file again before saving.")
+			return nil
+		}
 		return err
 	}
 	ui.renderOutcome(output, "Environment values saved locally.")
