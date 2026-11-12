@@ -1,2 +1,2 @@
 name: ripgrep-search
-description: Prefer ripgrep for fast repository search, explain grep versus rg, and guide safe installation when rg is unavailable.
+description: Use ripgrep for local repository searches, with grep fallbacks and approval-gated installation guidance when it is unavailable.

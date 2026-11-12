@@ -1,2 +1,2 @@
 name: goaster-deploy
-description: Review and deploy verified agent and Telegram binaries using an approved host-specific plan and verified Hetzner snapshot.
+description: Build and test GoAster binaries, install them, restart the services, and verify the tested binaries when requested.

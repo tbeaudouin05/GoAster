@@ -13,7 +13,7 @@ Before creating it:
   and confirm a separate recovery plan for it.
 - Confirm the user has independent Hetzner access for manual recovery.
 
-Use `hetzner-auth` for authentication. Wait for snapshot creation to complete,
+Wait for snapshot creation to complete,
 then verify that the snapshot is available and belongs to the target server.
 Record its ID for recovery.
 

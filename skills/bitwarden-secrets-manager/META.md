@@ -1,2 +1,2 @@
 name: bitwarden-secrets-manager
-description: Set up and use Bitwarden Secrets Manager with one scoped machine account for GoAster.
+description: Set up and use Bitwarden Secrets Manager through one GoAster machine account and the exact goaster project.

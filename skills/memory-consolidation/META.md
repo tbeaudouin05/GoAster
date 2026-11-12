@@ -1,2 +1,2 @@
 name: memory-consolidation
-description: Optional user-managed review of GoAster memory that keeps protected MEMORY.md as a concise index (target under 5 KB) to useful topic, project, and daily notes.
+description: Automatically consolidate GoAster memory into a concise index while preserving useful context and leaving project notes unchanged.
