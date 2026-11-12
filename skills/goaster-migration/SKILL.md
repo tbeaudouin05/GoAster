@@ -42,6 +42,20 @@ There is no safe partial handoff: an unknown, expired, conflicted, lost, or
 unverified handoff must fail closed. Expiry must not be treated as deletion of
 the billable server.
 
+## Current capability boundary
+
+This checkout contains no migration command or migration backend. In
+particular, it has no GoAsterWeb handoff endpoint, owner session, availability
+monitor, Hetzner provisioning client, migration installer or transfer service,
+or migration-specific private-key delivery path. The existing Telegram
+adapter's private-chat behavior does not turn ordinary messages or document
+attachments into a migration key channel.
+
+Do not replace a missing capability with a shell command, a guessed URL, a
+manual API request, an ordinary Telegram message, or a link. A read-only host
+inspection can collect facts for the owner, but it cannot create the missing
+handoff or authorize a cloud operation.
+
 ## What this skill may do now
 
 With the owner's existing authorization, the agent may explain the workflow
@@ -70,6 +84,31 @@ and perform read-only inspection of the current host. It may:
 Read-only inspection is not approval to create a server, incur cost, modify
 state, or deploy. If identity, paths, ownership, or scope are ambiguous,
 stop and ask the owner to resolve them.
+
+## Approved availability monitor: future policy only
+
+An “approved monitor” means a separately implemented and reviewed,
+owner-approved, read-only availability check. It is not available in this
+checkout. The current agent must not schedule, run, emulate, or claim to have
+run one, including a 30-minute recurring check.
+
+If a later release passes the handoff gate, the monitor must remain separate
+from provisioning and must:
+
+- use the owner's exact approved target terms and a bounded, explicitly
+  approved cadence and duration;
+- report availability and current terms privately without reserving,
+  creating, rebuilding, or deleting a server, generating a key, or starting a
+  setup session;
+- stop and report on expiry, authentication failure, provider error, timeout,
+  inconsistent data, or an unknown result; it must not blindly retry or turn
+  availability into creation; and
+- stop before any separately approved create operation, and stay disabled
+  until the owner manually reconciles an uncertain or billable result.
+
+Finding a matching offer is not approval to create it. The owner must still
+review the exact server type, architecture, location, image, network, price,
+and overlap cost in the approved workflow.
 
 ## Target guidance, not a provisioning instruction
 
@@ -139,6 +178,11 @@ long as they choose. Never automatically cut over, stop either agent, or
 require the old agent to stop before the new one starts. The owner should
 review scheduled work and other external integrations for duplicate effects.
 
+Pair the new bot independently. Do not copy the old bot token, pairing state,
+or Telegram adapter state as a shortcut. A bot identity and a pairing record
+are separate from the files selected for the manual move. The old bot remains
+the old agent's identity until the owner deliberately changes that setup.
+
 The approved move is manual and agent-guided, not direct server-to-server
 transfer. The owner chooses the files to move, checks permissions, symlinks,
 timestamps and checksums, and reauthenticates what should not be copied. A
@@ -163,7 +207,7 @@ server; deletion permanently removes its data. Never delete automatically.
 No backup or snapshot is required for this manual-move workflow; `goaster-backup`
 is not an authorization to change the plan.
 
-## Telegram privacy and key handling
+## Private owner channel and key handling
 
 Use the current runtime behavior, not a guessed command or capability:
 
@@ -180,17 +224,46 @@ Use the current runtime behavior, not a guessed command or capability:
 
 For any future migration key delivery, first verify that the chat is private,
 that it belongs to the already authorized owner, and that the delivery method
-is explicitly reviewed for this purpose. Never run this workflow in a group,
-send a private key or owner-access secret into a group, put a private key in a
-link or URL query, or assume that a server ID authorizes access. If a reviewed
-delivery capability is not present, stop and ask the owner to use an approved
-private method outside this skill; do not improvise one.
+is explicitly reviewed for this purpose. For this workflow, a private owner
+channel means a one-to-one private chat whose sender is the already paired
+owner. A paired account in a group is not a private owner channel; Telegram's
+group-privacy setting does not change that. The current `/env` and `/get_env`
+flows are limited to the saved `goaster.env` file and must not be used to
+carry a private key, owner-access secret, or migration link.
+
+Never run this workflow in a group, send a private key or owner-access secret
+into a group, put a private key in a link or URL query, or assume that a server
+ID authorizes access. If a reviewed delivery capability is not present, stop
+and ask the owner to use an approved private method outside this skill; do not
+improvise one.
 
 The approved future direction is a fresh, dedicated SSH login key for the
-newly created server. The owner would receive the private key only through a
-verified private channel and upload it to GoAsterWeb; it must never be placed
-in provider user-data, a link, logs, project memory, or a group. The current
-checkout cannot carry out or verify that delivery, so it remains blocked.
+newly created server. A later reviewed handoff would define how the owner
+receives and uploads the private half; this checkout cannot generate, carry,
+verify, or deliver it. The private key must never be placed in provider
+user-data, a link, logs, project memory, a command line, or a group.
+
+## Errors and manual reconciliation
+
+Every migration error is a stop condition, not permission to retry, fall back
+to an unreviewed path, or clean up automatically. The following policy is for
+owner guidance and any future reviewed implementation; it is not an API for
+the current agent:
+
+| Condition | Required behavior | Owner action |
+| --- | --- | --- |
+| Handoff is missing, expired, lost, conflicted, or unverified | Fail closed; do not SSH, create, transfer, or start setup. | Reconcile the approved system manually and obtain a new approved handoff if needed. Expiry never deletes infrastructure. |
+| Monitor or provider returns an error, timeout, inconsistent record, or unknown result | Stop the monitor and any create workflow; do not blindly retry or create a duplicate. | Inspect the exact attempt and provider project manually. Treat an unknown result as unknown until reconciled. |
+| Host key is missing, changed, or conflicts with the recorded key | Do not connect over SSH. | Identify the exact affected server; if the reviewed procedure requires starting over, the owner deletes that server in Hetzner after seeing the permanent-data-loss warning, then retries manually. |
+| Key, project, server ID, address, login identity, or owner channel does not match | Do not deliver a key, upload state, or continue setup. | Correct the identity or stop; never substitute an address-only or server-ID-only match. |
+| Manual copy, permissions, checksum, install, or validation fails | Do not cut over or stop the old agent. | Keep the old server for recovery and repair or repeat the selected move manually. |
+| A server may have been created but the result is uncertain | Do not repeat creation and do not delete it automatically. | Reconcile by the exact approved attempt label and decide in Hetzner what to retain or delete. |
+
+No automatic deletion applies to the old server, a partially prepared new
+server, a server with a missing or conflicting host key, or infrastructure
+whose handoff expired. The owner must explicitly decide deletion in the
+provider after identifying the exact server and understanding that deletion
+is permanent.
 
 ## Requirements before the blocker can be lifted
 

@@ -65,23 +65,65 @@ for phrase in (
         raise SystemExit(f"hetzner-auto-backup workflow missing required guidance: {phrase!r}")
 
 migration = (root / "skills" / "goaster-migration" / "SKILL.md").read_text(encoding="utf-8")
+migration_text = " ".join(migration.split())
 for phrase in (
     "Hard blocker: GoAsterWeb handoff is not available",
+    "Current capability boundary",
+    "no GoAsterWeb handoff endpoint",
     "must not:",
     "register a migration handoff",
     "schedule or run an availability monitor",
     "create, reserve, allocate",
+    "Approved availability monitor: future policy only",
+    "approved monitor",
+    "30-minute recurring check",
+    "Private owner channel and key handling",
+    "one-to-one private chat",
+    "distinct bot tokens",
+    "Pair the new bot independently",
+    "manual and agent-guided",
     "private-key delivery capability",
     "Initial pairing requires a private Telegram chat",
     "ordinary conversations and some commands can also be used in groups",
+    "must not be used to carry a private key",
     "absolute seven-day (7-day) expiry",
+    "Errors and manual reconciliation",
+    "unknown result",
+    "No automatic deletion applies",
     "30-minute availability cadence",
     "No backup or snapshot is required for this manual-move",
     "manual",
     "Never delete automatically",
 ):
-    if phrase not in migration:
+    if phrase not in migration_text:
         raise SystemExit(f"goaster-migration workflow missing required guidance: {phrase!r}")
+
+hard_blocker = migration.index("## Hard blocker:")
+future_policy = migration.index("## Future approved orchestration")
+if hard_blocker > future_policy:
+    raise SystemExit("migration hard blocker appears after future orchestration policy")
+
+current_policy = migration[hard_blocker:future_policy]
+current_policy_text = " ".join(current_policy.split())
+for phrase in (
+    "must not schedule, run, emulate, or claim to have run one",
+    "cannot generate, carry, verify, or deliver it",
+    "No automatic deletion applies",
+):
+    if phrase not in current_policy_text:
+        raise SystemExit(f"migration current policy lost blocked safeguard: {phrase!r}")
+
+future_policy_text = migration[future_policy:]
+future_policy_text = " ".join(future_policy_text.split())
+for phrase in (
+    "disables any approved monitor",
+    "never blindly retries or creates a duplicate",
+    "never retries or deletes automatically",
+    "distinct Telegram bot tokens",
+    "owner chooses when to stop the old agent",
+):
+    if phrase not in future_policy_text:
+        raise SystemExit(f"migration future policy missing safeguard: {phrase!r}")
 
 # Check local Markdown links so renamed skills and stale skill paths fail in
 # the same offline test as the package allowlist.
