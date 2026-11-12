@@ -58,8 +58,10 @@ and perform read-only inspection of the current host. It may:
    external data, symlinks, permissions, timestamps, filesystem space, and
    compatibility. Do not copy provider credentials by default.
 3. Explain what is essential, what is excluded, what must be reauthenticated,
-   and how shared Telegram bot credentials, active pollers, and scheduled jobs
-   can cause two active agents or duplicate work.
+   and how separate agents, Telegram bot credentials, active pollers, and
+   scheduled jobs behave during migration. The old and new agents operate
+   independently and may run concurrently; use distinct Telegram bot tokens
+   for them.
 4. Help the owner write down a target preference and the exact approval they
    would eventually need. Do not present a current price, server offer,
    location, or architecture as verified without checking an authoritative,
@@ -125,14 +127,17 @@ actual target host. Do not infer service ownership, paths, restart order,
 commands, or permissions from `docs/goasterweb-installation.md`; that page
 records observations, not a universal contract.
 
-### 3. Prepare without starting a duplicate
+### 3. Prepare the independent new agent
 
-Stage the destination only under the owner's manual control. Installation or
-file placement must not overwrite unrelated files. Stop before starting the
-new GoAster agent, Telegram consumer, or scheduled jobs. The owner must
-ensure that the old and new agents do not consume the same Telegram bot or
-other shared credentials concurrently and that scheduled work is not
-duplicated.
+Before migration, the owner must create a new Telegram bot with BotFather for
+the new agent. Use distinct bot tokens for the old and new agents; never share
+one token between them. Stage the destination only under the owner's manual
+control. Installation or file placement must not overwrite unrelated files.
+The old and new agents are independent and may be started and run concurrently.
+The owner chooses when to stop the old agent, and may keep it running for as
+long as they choose. Never automatically cut over, stop either agent, or
+require the old agent to stop before the new one starts. The owner should
+review scheduled work and other external integrations for duplicate effects.
 
 The approved move is manual and agent-guided, not direct server-to-server
 transfer. The owner chooses the files to move, checks permissions, symlinks,
@@ -142,13 +147,14 @@ and secure handling; no archive, backup, snapshot, or automated transfer is
 required by this workflow. Do not send a secret through an ordinary chat,
 URL, command line, log, project memory, or repository.
 
-### 4. Cut over and retain recovery
+### 4. Validate and retain recovery
 
-The owner controls the sequence: move only the selected state, validate the
-new agent, stop or switch the old consumer as appropriate, and confirm that
-exactly one intended agent is active. The agent may provide a checklist and
-help interpret non-secret results, but must not perform the cutover or delete
-the old server.
+The owner controls the sequence: move only the selected state and validate
+the new agent independently. Both agents may remain active concurrently,
+each using its own Telegram bot token. The owner decides whether and when to
+stop the old agent; no automatic cutover or stopping occurs. The agent may
+provide a checklist and help interpret non-secret results, but must not
+perform the cutover or delete the old server.
 
 Keep the old server until the owner has used the new agent long enough to be
 satisfied and has confirmed manual recovery. Both servers can accrue charges
@@ -259,9 +265,12 @@ operations. The intended policy is:
 - the owner receives status and cost information privately. The owner uploads
   the private key to the verified GoAsterWeb handoff, and the web side pins
   and strictly verifies the captured host key before SSH;
-- setup remains stop-before-start, the state move and agent switch remain
-  manual, and the owner retains the old server until satisfied. Any restart
-  during setup reports uncertain state and requires manual reconciliation.
+- the state move and agent setup remain manual; old and new agents operate
+  independently and may run concurrently with distinct Telegram bot tokens.
+  The owner chooses when to stop the old agent, if at all, and the old server
+  remains available until the owner is satisfied. No automatic cutover or
+  stopping occurs. Any restart during setup reports uncertain state and
+  requires manual reconciliation.
 
 These are policy constraints for a future implementation, not executable
 instructions for the current agent. Do not name or call a provider API,
