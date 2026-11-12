@@ -1,2 +1,2 @@
 name: goaster-deploy
-description: Build and test GoAster binaries, install them, restart the services, and verify the tested binaries when requested.
+description: Deploy GoAster's new binaries so it can evolve into an updated runtime.
