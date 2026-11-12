@@ -32,6 +32,9 @@ type adapter struct {
 	token              string
 	pairing            *pairing
 	pairingMu          sync.Mutex
+	turnMu             sync.Mutex
+	activeTurns        map[telegramTurnKey][]telegramActiveTurn
+	nextTurnID         uint64
 	environmentMu      sync.Mutex
 	environmentBlocked map[environmentProposalKey]bool
 	client             httpDoer
@@ -47,12 +50,13 @@ type update struct {
 }
 
 type message struct {
-	Text         string      `json:"text"`
-	Caption      string      `json:"caption"`
-	Photo        []photoSize `json:"photo"`
-	Document     *document   `json:"document"`
-	MediaGroupID string      `json:"media_group_id"`
-	Chat         struct {
+	Text            string      `json:"text"`
+	Caption         string      `json:"caption"`
+	Photo           []photoSize `json:"photo"`
+	Document        *document   `json:"document"`
+	MediaGroupID    string      `json:"media_group_id"`
+	MessageThreadID int64       `json:"message_thread_id"`
+	Chat            struct {
 		ID   int64  `json:"id"`
 		Type string `json:"type"`
 	} `json:"chat"`
@@ -90,6 +94,17 @@ type environmentProposalKey struct {
 	chatID int64
 }
 
+type telegramTurnKey struct {
+	chatID   int64
+	threadID int64
+}
+
+type telegramActiveTurn struct {
+	id     uint64
+	userID int64
+	cancel context.CancelFunc
+}
+
 type telegramFile struct {
 	FileSize int64  `json:"file_size"`
 	FilePath string `json:"file_path"`
@@ -113,6 +128,8 @@ const (
 	telegramControlAuthorizationHeader = "X-GoAster-GitHub-Auth-Control"
 	telegramPairCommand                = "/pair"
 	telegramStartCommand               = "/start"
+	telegramHelpCommand                = "/help"
+	telegramStopCommand                = "/stop"
 	telegramEnvironmentCommand         = "/env"
 	telegramGetEnvironmentCommand      = "/get_env"
 	telegramGetEnvironmentManualAlias  = "/get-env"
@@ -121,6 +138,21 @@ const (
 )
 
 const telegramEnvironmentInstructions = "To update settings, attach a document named goaster.env to /env in the same message. Never paste secret values into chat."
+
+const telegramHelpText = "Available Telegram commands:\n" +
+	"/help — Show this list.\n" +
+	"/stop — Cancel the current agent turn in this chat/thread (paired account).\n" +
+	"/start — Show pairing or readiness guidance; /start CODE does not pair.\n" +
+	"/pair CODE — Pair the first account with the one-time code (private chat only).\n" +
+	"/clear — Clear this chat's history (paired account).\n" +
+	"/m [MODEL_OR_ALIAS] — Show or select this chat's model (paired account).\n" +
+	"/env (attach goaster.env) — Preview settings changes; reply ACCEPT to apply (paired account, private chat only).\n" +
+	"/get_env, /get-env — Send the saved goaster.env file (paired account, private chat only).\n" +
+	"Before pairing, /help and bare /start provide guidance. After pairing, only the paired account can use the bot. " +
+	"Telegram topics in the same chat share conversation history and model settings. /env, ACCEPT, and environment file retrieval require a private chat. /env, /get_env, and /get-env accept @bot_username suffixes; use bare /help and /stop."
+
+const telegramStopMessage = "Stopped the current agent turn."
+const telegramNoActiveTurnMessage = "No agent turn is running."
 
 // Run starts polling only after the token and pairing state are protected.
 // ready is called after the agent process is available and Telegram accepts
@@ -181,6 +213,14 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 	}
 	var offset int64
 	var handlers sync.WaitGroup
+	tails := make(map[int64]chan struct{})
+	epochs := make(map[int64]context.Context)
+	epochCancels := make(map[int64]context.CancelFunc)
+	defer func() {
+		for _, cancel := range epochCancels {
+			cancel()
+		}
+	}()
 	defer handlers.Wait()
 	for {
 		for _, item := range updates {
@@ -190,14 +230,72 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 			if item.ID < offset {
 				continue
 			}
-			if item.Message != nil && isTelegramEnvironmentUpdate(*item.Message) {
-				a.handle(ctx, item.Message)
-			} else {
+			if item.Message != nil {
+				m := item.Message
+				started := make(chan struct{})
+				handlerCtx := context.WithValue(ctx, telegramStartedKey{}, started)
+				text := m.Text
+				if text == "" && m.hasAttachment() {
+					text = m.Caption
+				}
+				text = strings.TrimSpace(text)
+				isStop := text == telegramStopCommand
+				isClear := text == "/clear" && !m.hasAttachment() && a.authorizedClear(m)
+				if isClear {
+					if cancel := epochCancels[m.Chat.ID]; cancel != nil {
+						cancel()
+					}
+					epochs[m.Chat.ID], epochCancels[m.Chat.ID] = context.WithCancel(ctx)
+					handlerCtx = context.WithValue(handlerCtx, telegramOrderedClearKey{}, true)
+				}
+				isControl := isStop || !isClear && (chat.IsClearCommand(text) || chat.IsModelCommand(text))
+				if !isControl && !isClear {
+					if epochs[m.Chat.ID] == nil {
+						epochs[m.Chat.ID], epochCancels[m.Chat.ID] = context.WithCancel(ctx)
+					}
+					handlerCtx = context.WithValue(epochs[m.Chat.ID], telegramStartedKey{}, started)
+				}
+				var previous chan struct{}
+				var done chan struct{}
+				if !isControl {
+					previous = tails[m.Chat.ID]
+					done = make(chan struct{})
+					tails[m.Chat.ID] = done
+				}
+				waitStarted := isStop || !isControl && previous == nil
+				if previous != nil {
+					select {
+					case <-previous:
+						waitStarted = true
+					default:
+					}
+				}
 				handlers.Add(1)
 				go func() {
 					defer handlers.Done()
-					a.handle(ctx, item.Message)
+					if done != nil {
+						defer close(done)
+					}
+					if previous != nil {
+						select {
+						case <-previous:
+						case <-ctx.Done():
+							return
+						}
+					}
+					if handlerCtx.Err() != nil {
+						close(started)
+						return
+					}
+					a.handle(handlerCtx, m)
 				}()
+				if waitStarted {
+					select {
+					case <-started:
+					case <-ctx.Done():
+						return nil
+					}
+				}
 			}
 			if item.ID < int64(^uint64(0)>>1) {
 				offset = item.ID + 1
@@ -295,7 +393,38 @@ func pairingCommandCode(text string) (string, bool) {
 	return "", false
 }
 
+func telegramTurnKeyForMessage(m message) telegramTurnKey {
+	return telegramTurnKey{chatID: m.Chat.ID, threadID: m.MessageThreadID}
+}
+
+func (a *adapter) authorizedClear(m *message) bool {
+	if m.From == nil || m.From.IsBot || m.From.ID <= 0 || m.Chat.ID == 0 || m.MediaGroupID != "" || len(m.SenderChat) != 0 && string(m.SenderChat) != "null" {
+		return false
+	}
+	if m.Chat.Type != "private" && m.Chat.Type != "group" && m.Chat.Type != "supergroup" || m.Chat.Type == "private" && m.From.ID != m.Chat.ID {
+		return false
+	}
+	a.pairingMu.Lock()
+	defer a.pairingMu.Unlock()
+	return a.pairing.userID != 0 && a.pairing.userID == m.From.ID
+}
+
+type telegramOrderedClearKey struct{}
+type telegramStartedKey struct{}
+type telegramThreadKey struct{}
+
 func (a *adapter) handle(ctx context.Context, m *message) {
+	started, _ := ctx.Value(telegramStartedKey{}).(chan struct{})
+	signalStarted := func() {
+		if started != nil {
+			close(started)
+			started = nil
+		}
+	}
+	defer signalStarted()
+	if m != nil {
+		ctx = context.WithValue(ctx, telegramThreadKey{}, m.MessageThreadID)
+	}
 	if m == nil || m.From == nil || m.From.IsBot || m.From.ID <= 0 || m.Chat.ID == 0 || len(m.SenderChat) != 0 && string(m.SenderChat) != "null" {
 		return
 	}
@@ -330,7 +459,12 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	}
 	a.pairingMu.Unlock()
 	if pairedUserID == 0 {
+		signalStarted()
 		if m.Chat.Type != "private" {
+			return
+		}
+		if text == telegramHelpCommand {
+			a.send(ctx, m.Chat.ID, telegramHelpText)
 			return
 		}
 		if text == telegramPairCommand || text == telegramStartCommand {
@@ -349,6 +483,81 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if m.From.ID != pairedUserID {
 		return
 	}
+	if chat.IsClearCommand(text) && text == "/clear" && !hasAttachment && ctx.Value(telegramOrderedClearKey{}) == nil {
+		a.turnMu.Lock()
+		for key, turns := range a.activeTurns {
+			if key.chatID == m.Chat.ID {
+				for _, turn := range turns {
+					turn.cancel()
+				}
+			}
+		}
+		a.turnMu.Unlock()
+	}
+	if text == telegramHelpCommand {
+		signalStarted()
+		a.send(ctx, m.Chat.ID, telegramHelpText)
+		return
+	}
+	if strings.HasPrefix(text, telegramStopCommand+"@") || strings.HasPrefix(text, telegramHelpCommand+"@") {
+		return
+	}
+	if text == telegramStopCommand {
+		key := telegramTurnKeyForMessage(*m)
+		stopped := false
+		a.turnMu.Lock()
+		turns := a.activeTurns[key]
+		for index, turn := range turns {
+			if turn.userID == m.From.ID {
+				turns = append(turns[:index], turns[index+1:]...)
+				if len(turns) == 0 {
+					delete(a.activeTurns, key)
+				} else {
+					a.activeTurns[key] = turns
+				}
+				turn.cancel()
+				stopped = true
+				break
+			}
+		}
+		a.turnMu.Unlock()
+		signalStarted()
+		if stopped {
+			a.send(ctx, m.Chat.ID, telegramStopMessage)
+		} else {
+			a.send(ctx, m.Chat.ID, telegramNoActiveTurnMessage)
+		}
+		return
+	}
+	turnCtx, cancelTurn := context.WithCancel(ctx)
+	key := telegramTurnKeyForMessage(*m)
+	a.turnMu.Lock()
+	if a.activeTurns == nil {
+		a.activeTurns = make(map[telegramTurnKey][]telegramActiveTurn)
+	}
+	a.nextTurnID++
+	turnID := a.nextTurnID
+	a.activeTurns[key] = append(a.activeTurns[key], telegramActiveTurn{id: turnID, userID: m.From.ID, cancel: cancelTurn})
+	a.turnMu.Unlock()
+	defer func() {
+		a.turnMu.Lock()
+		turns := a.activeTurns[key]
+		for index, turn := range turns {
+			if turn.id == turnID {
+				turns = append(turns[:index], turns[index+1:]...)
+				if len(turns) == 0 {
+					delete(a.activeTurns, key)
+				} else {
+					a.activeTurns[key] = turns
+				}
+				break
+			}
+		}
+		a.turnMu.Unlock()
+		cancelTurn()
+	}()
+	signalStarted()
+	ctx = turnCtx
 	if m.MediaGroupID != "" {
 		if m.Chat.Type == "private" && isTelegramEnvironmentCommandVariant(text) {
 			proposalKey := environmentProposalKey{userID: m.From.ID, chatID: m.Chat.ID}
@@ -419,7 +628,13 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 			}
 			reply, err := askAgentWithUser(ctx, telegramEnvironmentCommand+" "+telegramEnvironmentAcceptKeyword, m.Chat.ID, m.From.ID, nil, nil, a.agent, a.controlSecret)
 			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				a.send(ctx, m.Chat.ID, "The environment update could not be completed.")
+				return
+			}
+			if ctx.Err() != nil {
 				return
 			}
 			for _, chunk := range splitTelegramMarkdown(reply, 2000) {
@@ -473,10 +688,22 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		stopTyping()
 		if err != nil {
 			invalidateProposal()
+			if ctx.Err() != nil {
+				return
+			}
 			a.send(ctx, m.Chat.ID, "The environment file could not be reviewed safely.")
 			return
 		}
-		for _, chunk := range splitTelegramMarkdown(reply, 2000) {
+		if ctx.Err() != nil {
+			invalidateProposal()
+			return
+		}
+		chunks := splitTelegramMarkdown(reply, 2000)
+		if len(chunks) == 0 {
+			invalidateProposal()
+			return
+		}
+		for _, chunk := range chunks {
 			if err := a.send(ctx, m.Chat.ID, chunk); err != nil {
 				// A proposal is actionable in the agent as soon as the preview
 				// response is produced. If Telegram does not deliver every
@@ -498,7 +725,13 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		}
 		reply, err := a.askAgent(ctx, text, m.Chat.ID, nil, nil)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			a.send(ctx, m.Chat.ID, "Conversation history could not be cleared.")
+			return
+		}
+		if ctx.Err() != nil {
 			return
 		}
 		a.send(ctx, m.Chat.ID, reply)
@@ -511,7 +744,13 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		}
 		reply, err := a.askAgent(ctx, text, m.Chat.ID, nil, nil)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			a.send(ctx, m.Chat.ID, "Model selection could not be completed.")
+			return
+		}
+		if ctx.Err() != nil {
 			return
 		}
 		a.send(ctx, m.Chat.ID, reply)
@@ -531,6 +770,9 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	defer stopTyping()
 	var progressMessageID int64
 	showToolCall := func(name, arguments string) {
+		if ctx.Err() != nil {
+			return
+		}
 		text := toolFeedbackText(name, arguments)
 		if progressMessageID == 0 {
 			progressMessageID, _ = a.sendMessage(ctx, m.Chat.ID, text)
@@ -540,6 +782,9 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	}
 	sendFinal := func(text string) {
 		stopTyping()
+		if ctx.Err() != nil {
+			return
+		}
 		chunks := splitTelegramMarkdown(text, 2000)
 		if len(chunks) == 0 {
 			return
@@ -565,6 +810,9 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	}
 	reply, err := a.askAgent(ctx, text, m.Chat.ID, attachments, showToolCall)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		if errors.Is(err, attachment.ErrUnsupportedImage) {
 			sendFinal("That image format is unsupported. Supported image formats are JPEG, PNG, GIF, and WebP.")
 			return
@@ -615,13 +863,19 @@ func (a *adapter) startTyping(ctx context.Context, chatID int64) func() {
 	}
 }
 
+func telegramThreadID(ctx context.Context) int64 {
+	id, _ := ctx.Value(telegramThreadKey{}).(int64)
+	return id
+}
+
 func (a *adapter) sendChatAction(ctx context.Context, chatID int64) {
 	actionCtx, cancel := context.WithTimeout(ctx, telegramTypingActionTimeout)
 	defer cancel()
 	_ = a.call(actionCtx, "sendChatAction", struct {
-		ChatID int64  `json:"chat_id"`
-		Action string `json:"action"`
-	}{chatID, "typing"}, nil)
+		ChatID   int64  `json:"chat_id"`
+		ThreadID int64  `json:"message_thread_id,omitempty"`
+		Action   string `json:"action"`
+	}{chatID, telegramThreadID(ctx), "typing"}, nil)
 }
 
 func (a *adapter) send(ctx context.Context, userID int64, text string) error {
@@ -635,9 +889,10 @@ func (a *adapter) sendMessage(ctx context.Context, chatID int64, text string) (i
 	}
 	payload := struct {
 		ChatID    int64  `json:"chat_id"`
+		ThreadID  int64  `json:"message_thread_id,omitempty"`
 		Text      string `json:"text"`
 		ParseMode string `json:"parse_mode,omitempty"`
-	}{ChatID: chatID, Text: markdownToTelegramHTML(text), ParseMode: "HTML"}
+	}{ChatID: chatID, ThreadID: telegramThreadID(ctx), Text: markdownToTelegramHTML(text), ParseMode: "HTML"}
 	err := a.call(ctx, "sendMessage", payload, &result)
 	if isTelegramFormattingError(err) {
 		payload.Text = text
@@ -652,6 +907,11 @@ func sendDocument(ctx context.Context, client httpDoer, apiBase, token string, c
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
 		return fmt.Errorf("Telegram request failed")
+	}
+	if threadID := telegramThreadID(ctx); threadID != 0 {
+		if err := writer.WriteField("message_thread_id", strconv.FormatInt(threadID, 10)); err != nil {
+			return fmt.Errorf("Telegram request failed")
+		}
 	}
 	part, err := writer.CreateFormFile("document", filename)
 	if err != nil {

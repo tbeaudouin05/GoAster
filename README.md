@@ -66,12 +66,22 @@ the originating chat. Pairing binds one numeric Telegram user ID; other
 accounts are ignored. The adapter supports private chats and groups subject
 to Telegram's group privacy setting.
 
-To pair the first account, send `/pair TOKEN` in a private chat, where `TOKEN`
+To pair the first account, send `/pair CODE` in a private chat, where `CODE`
 is the one-time code provided by GoAsterWeb setup. Bare `/start` remains a welcome command,
-but `/start TOKEN` is not a pairing command: it is rejected without pairing
+but `/start CODE` is not a pairing command: it is rejected without pairing
 and is never forwarded to the remote agent. Pairing binds the first valid
-numeric user ID and consumes the code once; other users and group messages are
+numeric user ID and consumes the code once; messages from other accounts are
 ignored.
+
+Send bare `/help` in a private chat before pairing, or as the paired account
+afterward, to see the available Telegram commands and their access limits.
+
+While the paired account has an agent turn running, send bare `/stop` in the same chat and Telegram thread to cancel that
+turn. It does not cancel turns in other chats or threads; unauthorized
+accounts cannot use it. When no turn is active, the bot reports that it has
+nothing to stop. Topics within the same chat share conversation history and model
+settings; `/clear` cancels active turns and clears the whole chat. Ordinary
+requests in that chat run in order; `/m` remains available during a turn.
 
 The adapter handles ordinary text, one image or document attachment, and
 `/clear`. Media is validated and bounded before the current turn; temporary

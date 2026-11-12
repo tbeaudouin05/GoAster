@@ -393,6 +393,7 @@ func TestTelegramEnvironmentPreviewDeliveryFailureInvalidatesProposal(t *testing
 	var sent []string
 	var agentMessages []string
 	proposalPending := false
+	var cancelPreview context.CancelFunc
 	sendMessages := 0
 	paths := testPaths(t)
 	setupTest(t, paths)
@@ -445,10 +446,16 @@ func TestTelegramEnvironmentPreviewDeliveryFailureInvalidatesProposal(t *testing
 			switch request.Message {
 			case telegramEnvironmentCommand:
 				if len(request.Attachments) == 0 {
+					if r.Context().Err() != nil {
+						return nil, r.Context().Err()
+					}
 					proposalPending = false
 					return response(http.StatusOK, `{"type":"final","reply":"proposal cleared"}`+"\n"), nil
 				}
 				proposalPending = true
+				if cancelPreview != nil {
+					cancelPreview()
+				}
 				return response(http.StatusOK, `{"type":"final","reply":"`+strings.Repeat("P", 2001)+`"}`+"\n"), nil
 			case telegramEnvironmentCommand + " " + telegramEnvironmentAcceptKeyword:
 				if proposalPending {
@@ -480,6 +487,14 @@ func TestTelegramEnvironmentPreviewDeliveryFailureInvalidatesProposal(t *testing
 	}
 	if len(sent) != 2 || !strings.Contains(sent[1], "No environment proposal is pending") {
 		t.Fatalf("acceptance after preview delivery failure = %q", sent)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelPreview = cancel
+	a.handle(ctx, preview)
+	a.handle(context.Background(), privateMessage(42, telegramEnvironmentAcceptKeyword))
+	if proposalPending || !strings.Contains(sent[len(sent)-1], "No environment proposal is pending") {
+		t.Fatal("canceled unseen preview remained actionable")
 	}
 }
 

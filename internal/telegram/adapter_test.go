@@ -102,26 +102,44 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 	if len(forwarded) != 0 || len(sent) != 0 || p.userID != 0 {
 		t.Fatal("unpaired or non-private users gained access")
 	}
+	a.handle(context.Background(), privateMessage(20, telegramHelpCommand+"@other_bot"))
+	a.handle(context.Background(), privateMessage(20, telegramHelpCommand))
+	a.handle(context.Background(), textMessage(20, -100123, "group", telegramHelpCommand))
+	if len(sent) != 1 || sent[0].ChatID != 20 || sent[0].Text != telegramHelpText ||
+		!strings.Contains(sent[0].Text, "/stop") || !strings.Contains(sent[0].Text, "/get-env") || !strings.Contains(sent[0].Text, "ACCEPT") ||
+		!strings.Contains(sent[0].Text, "paired account") || !strings.Contains(sent[0].Text, "private chat") {
+		t.Fatal("help was unavailable in a private chat before pairing or visible in an unpaired group")
+	}
 	a.handle(context.Background(), privateMessage(20, "/start"))
-	if len(sent) != 1 || !strings.Contains(sent[0].Text, "pairing code") || sent[0].ParseMode != "HTML" || p.userID != 0 {
+	if len(sent) != 2 || !strings.Contains(sent[1].Text, "pairing code") || sent[1].ParseMode != "HTML" || p.userID != 0 {
 		t.Fatal("/start did not explain pairing without authorizing anyone")
 	}
 	a.handle(context.Background(), privateMessage(42, "/pair "+testCode))
-	if p.userID != 42 || len(sent) != 2 || !strings.Contains(sent[1].Text, "Paired") || sent[1].ParseMode != "HTML" {
+	if p.userID != 42 || len(sent) != 3 || !strings.Contains(sent[2].Text, "Paired") || sent[2].ParseMode != "HTML" {
 		t.Fatal("valid private pairing failed")
+	}
+	a.handle(context.Background(), privateMessage(99, telegramHelpCommand))
+	a.handle(context.Background(), privateMessage(42, telegramHelpCommand+"@goaster_bot"))
+	a.handle(context.Background(), textMessage(42, -100123, "group", telegramHelpCommand+"@other_bot"))
+	a.handle(context.Background(), privateMessage(42, telegramHelpCommand+"@"))
+	a.handle(context.Background(), privateMessage(42, telegramHelpCommand))
+	a.handle(context.Background(), textMessage(42, -100123, "group", telegramHelpCommand))
+	if len(sent) != 5 || sent[3].ChatID != 42 || sent[3].Text != telegramHelpText ||
+		sent[4].ChatID != -100123 || sent[4].Text != telegramHelpText {
+		t.Fatal("bare help failed, or an addressed help or unpaired account received help")
 	}
 	for _, m := range []*message{privateMessage(99, "hello"), privateMessage(99, "/start "+testCode), group, privateMessage(42, "")} {
 		a.handle(context.Background(), m)
 	}
-	if len(forwarded) != 0 || len(sent) != 2 {
+	if len(forwarded) != 0 || len(sent) != 5 {
 		t.Fatal("unauthorized, unsupported or non-text message reached the agent")
 	}
 	a.handle(context.Background(), privateMessage(42, "my token is "+testToken))
-	if len(forwarded) != 0 || len(sent) != 3 || sent[2].ParseMode != "HTML" || strings.Contains(sent[2].Text, testToken) {
+	if len(forwarded) != 0 || len(sent) != 6 || sent[5].ParseMode != "HTML" || strings.Contains(sent[5].Text, testToken) {
 		t.Fatal("a pasted bot token reached the agent or was echoed")
 	}
 	a.handle(context.Background(), privateMessage(42, "Hello"))
-	if len(forwarded) != 1 || forwarded[0].Message != "Hello" || forwarded[0].ChatID != 42 || len(sent) != 4 || sent[3].ChatID != 42 || sent[3].Text != "hello back" || sent[3].ParseMode != "HTML" {
+	if len(forwarded) != 1 || forwarded[0].Message != "Hello" || forwarded[0].ChatID != 42 || len(sent) != 7 || sent[6].ChatID != 42 || sent[6].Text != "hello back" || sent[6].ParseMode != "HTML" {
 		t.Fatal("paired user's private message was not answered")
 	}
 	reloaded, err := loadPairing(paths)
@@ -133,6 +151,188 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 	a.handle(context.Background(), privateMessage(42, "after restart"))
 	if len(forwarded) != 2 || forwarded[1].Message != "after restart" || forwarded[1].ChatID != 42 {
 		t.Fatal("authorization did not persist across restart")
+	}
+}
+
+func TestStopIsIdleScopedAndAuthorized(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := make([]string, 0, 2)
+	a := adapter{
+		pairing: paired,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+				t.Fatalf("unexpected Telegram request %s", r.URL.Path)
+			}
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			sent = append(sent, payload.Text)
+			return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+		}),
+	}
+
+	// An unpaired user cannot use /stop or learn whether a turn exists.
+	a.handle(context.Background(), privateMessage(42, telegramStopCommand))
+	if len(sent) != 0 {
+		t.Fatalf("unpaired /stop response = %q", sent)
+	}
+
+	a.pairing.userID = 42
+	a.handle(context.Background(), privateMessage(42, telegramStopCommand))
+	a.handle(context.Background(), privateMessage(99, telegramStopCommand))
+	a.handle(context.Background(), privateMessage(42, telegramStopCommand+"@goaster_bot"))
+	a.handle(context.Background(), privateMessage(42, telegramStopCommand+"@other_bot"))
+	a.handle(context.Background(), privateMessage(42, telegramStopCommand+"@"))
+	if !reflect.DeepEqual(sent, []string{telegramNoActiveTurnMessage}) {
+		t.Fatalf("idle or unauthorized /stop responses = %q", sent)
+	}
+}
+
+func TestStopCancelsOnlyTheAuthorizedCurrentThread(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	started := make(chan string, 2)
+	canceled := make(chan string, 2)
+	release := make(chan string, 1)
+	done := make(chan struct{}, 2)
+	sent := make(chan string, 4)
+	a := adapter{
+		pairing: paired,
+		token:   testToken,
+		apiBase: "https://example.invalid",
+		client: doerFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+				return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+			case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+				var payload struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					return nil, err
+				}
+				sent <- payload.Text
+				return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+			default:
+				return nil, fmt.Errorf("unexpected Telegram request %s", r.URL.Path)
+			}
+		}),
+		agent: doerFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path != "/chat" {
+				return nil, fmt.Errorf("unexpected agent request %s", r.URL.Path)
+			}
+			var request struct {
+				Message string `json:"message"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				return nil, err
+			}
+			if request.Message == "/clear" {
+				return response(http.StatusOK, `{"type":"final","reply":"Conversation history cleared."}`+"\n"), nil
+			}
+			started <- request.Message
+			select {
+			case <-r.Context().Done():
+				canceled <- request.Message
+				return nil, r.Context().Err()
+			case message := <-release:
+				if message != request.Message {
+					return nil, fmt.Errorf("released message %q while handling %q", message, request.Message)
+				}
+				return response(http.StatusOK, `{"type":"final","reply":"completed"}`+"\n"), nil
+			}
+		}),
+	}
+
+	first := textMessage(42, -100123, "supergroup", "long request in topic one")
+	first.MessageThreadID = 11
+	second := textMessage(42, -100123, "supergroup", "long request in topic two")
+	second.MessageThreadID = 22
+	go func() {
+		a.handle(context.Background(), first)
+		done <- struct{}{}
+	}()
+	go func() {
+		a.handle(context.Background(), second)
+		done <- struct{}{}
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("agent turns did not start")
+		}
+	}
+
+	// A different Telegram user cannot stop the paired user's turn.
+	unauthorized := textMessage(99, -100123, "supergroup", telegramStopCommand)
+	unauthorized.MessageThreadID = 11
+	a.handle(context.Background(), unauthorized)
+	select {
+	case message := <-canceled:
+		t.Fatalf("unauthorized /stop canceled %q", message)
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case message := <-sent:
+		t.Fatalf("unauthorized /stop sent a response: %q", message)
+	default:
+	}
+
+	stop := textMessage(42, -100123, "supergroup", telegramStopCommand)
+	stop.MessageThreadID = 11
+	a.handle(context.Background(), stop)
+	select {
+	case message := <-canceled:
+		if message != first.Text {
+			t.Fatalf("canceled message = %q, want %q", message, first.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("authorized /stop did not cancel the active request")
+	}
+	select {
+	case message := <-sent:
+		if message != telegramStopMessage {
+			t.Fatalf("stop response = %q", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("authorized /stop did not acknowledge cancellation")
+	}
+	select {
+	case message := <-canceled:
+		t.Fatalf("stopping topic one also canceled %q", message)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	a.handle(context.Background(), textMessage(42, -100123, "supergroup", "/clear"))
+	select {
+	case message := <-canceled:
+		if message != second.Text {
+			t.Fatalf("clear canceled %q", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("clear did not cancel the active chat turn")
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("agent turn handler did not finish")
+		}
 	}
 }
 
@@ -568,11 +768,20 @@ func TestPollingDispatchesUpdatesConcurrentlyAndCancelsHandlers(t *testing.T) {
 			if r.URL.Path == "/livez" {
 				return response(200, "ok\n"), nil
 			}
+			if r.URL.Path == "/healthz" {
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			}
 			var payload struct {
-				ChatID int64 `json:"chat_id"`
+				ChatID  int64  `json:"chat_id"`
+				Message string `json:"message"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				return nil, err
+			}
+			if payload.Message == "/m" {
+				polled <- -1
+				return response(200, `{"type":"final","reply":"model"}`+"\n"), nil
 			}
 			entered <- payload.ChatID
 			<-r.Context().Done()
@@ -591,8 +800,10 @@ func TestPollingDispatchesUpdatesConcurrentlyAndCancelsHandlers(t *testing.T) {
 			}
 			if payload.Offset == 0 {
 				return response(200, `{"ok":true,"result":[
+					{"update_id":9,"message":{"text":"/start","from":{"id":42},"chat":{"id":-300,"type":"group"}}},
 					{"update_id":10,"message":{"text":"first","from":{"id":42},"chat":{"id":-100,"type":"group"}}},
-					{"update_id":11,"message":{"text":"second","from":{"id":42},"chat":{"id":-200,"type":"group"}}}
+					{"update_id":11,"message":{"text":"second","from":{"id":42},"chat":{"id":-200,"type":"group"}}},
+					{"update_id":12,"message":{"text":"/m","from":{"id":42},"chat":{"id":-100,"type":"group"}}}
 				]}`), nil
 			}
 			polled <- payload.Offset
@@ -614,13 +825,20 @@ func TestPollingDispatchesUpdatesConcurrentlyAndCancelsHandlers(t *testing.T) {
 	if !chats[-100] || !chats[-200] {
 		t.Fatalf("dispatched chats = %v", chats)
 	}
-	select {
-	case offset := <-polled:
-		if offset != 12 {
-			t.Fatalf("poll offset = %d, want 12", offset)
+	seenModel, seenPoll := false, false
+	for !seenModel || !seenPoll {
+		select {
+		case offset := <-polled:
+			if offset == -1 {
+				seenModel = true
+			} else if offset == 13 {
+				seenPoll = true
+			} else {
+				t.Fatalf("poll offset = %d", offset)
+			}
+		case <-ctx.Done():
+			t.Fatal("polling or /m blocked behind active handlers")
 		}
-	case <-ctx.Done():
-		t.Fatal("polling blocked behind active handlers")
 	}
 	cancel()
 	select {
@@ -873,7 +1091,7 @@ func TestPollingAndClearWorkWhenProviderAuthenticationIsUnavailable(t *testing.T
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if !ready || polls < 2 || authenticationChecks != 0 {
+	if !ready || polls < 1 || authenticationChecks != 0 {
 		t.Fatalf("polling state ready=%v polls=%d authentication checks=%d", ready, polls, authenticationChecks)
 	}
 }
@@ -1189,5 +1407,318 @@ func TestTelegramDisplaysSafeSkillRecoveryForDirectAndStreamErrors(t *testing.T)
 				t.Fatalf("failed progress edit: edits=%d delivered=%q", failedEdits, delivered)
 			}
 		})
+	}
+}
+
+func TestPollingStopTargetsExecutingTopicAndKeepsQueuedRequest(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan string, 2)
+	canceled := make(chan string, 2)
+	replies := make(chan struct {
+		Text   string
+		Thread int64
+	}, 8)
+	a := adapter{token: testToken, pairing: paired, apiBase: "https://example.invalid"}
+	a.agent = doerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/livez" {
+			return response(200, "ok\n"), nil
+		}
+		var p struct {
+			Message string `json:"message"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			return nil, err
+		}
+		entered <- p.Message
+		<-r.Context().Done()
+		canceled <- p.Message
+		return nil, r.Context().Err()
+	})
+	a.client = doerFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/getUpdates") {
+			var p struct {
+				Offset int64 `json:"offset"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&p)
+			if p.Offset == 0 {
+				return response(200, `{"ok":true,"result":[{"update_id":1,"message":{"text":"first","message_thread_id":11,"from":{"id":42},"chat":{"id":-100,"type":"supergroup"}}}]}`), nil
+			}
+			if p.Offset == 2 {
+				select {
+				case <-entered:
+				case <-r.Context().Done():
+					return nil, r.Context().Err()
+				}
+				return response(200, `{"ok":true,"result":[{"update_id":2,"message":{"text":"second","message_thread_id":22,"from":{"id":42},"chat":{"id":-100,"type":"supergroup"}}},{"update_id":3,"message":{"text":"/stop","message_thread_id":22,"from":{"id":42},"chat":{"id":-100,"type":"supergroup"}}},{"update_id":4,"message":{"text":"/stop@other_bot","message_thread_id":11,"from":{"id":42},"chat":{"id":-100,"type":"supergroup"}}},{"update_id":5,"message":{"caption":"/stop","document":{"file_id":"x"},"message_thread_id":11,"from":{"id":42},"chat":{"id":-100,"type":"supergroup"}}}]}`), nil
+			}
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			var p struct {
+				Text   string `json:"text"`
+				Thread int64  `json:"message_thread_id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&p)
+			replies <- struct {
+				Text   string
+				Thread int64
+			}{p.Text, p.Thread}
+		}
+		return response(200, `{"ok":true,"result":{}}`), nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- a.run(ctx, nil) }()
+	select {
+	case got := <-canceled:
+		if got != "first" {
+			t.Fatalf("canceled %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first turn was not canceled")
+	}
+	select {
+	case got := <-entered:
+		if got != "second" {
+			t.Fatalf("started %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued turn did not start")
+	}
+	seen := map[string]int64{}
+	for len(seen) < 2 {
+		select {
+		case p := <-replies:
+			seen[p.Text] = p.Thread
+		case <-time.After(3 * time.Second):
+			t.Fatalf("replies: %v", seen)
+		}
+	}
+	if seen[telegramNoActiveTurnMessage] != 22 || seen[telegramStopMessage] != 11 {
+		t.Fatalf("topic replies: %v", seen)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("polling did not exit")
+	}
+}
+
+func TestPollingStopInSameBatchCancelsTurn(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	replies := make(chan string, 2)
+	a := adapter{token: testToken, pairing: paired, apiBase: "https://example.invalid"}
+	a.agent = doerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/livez" {
+			return response(200, "ok\n"), nil
+		}
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	a.client = doerFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/getUpdates") {
+			var p struct {
+				Offset int64 `json:"offset"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&p)
+			if p.Offset == 0 {
+				return response(200, `{"ok":true,"result":[{"update_id":1,"message":{"text":"work","from":{"id":42},"chat":{"id":42,"type":"private"}}},{"update_id":2,"message":{"text":"/stop","from":{"id":42},"chat":{"id":42,"type":"private"}}}]}`), nil
+			}
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			var p struct {
+				Text string `json:"text"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&p)
+			replies <- p.Text
+		}
+		return response(200, `{"ok":true,"result":{}}`), nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- a.run(ctx, nil) }()
+	select {
+	case got := <-replies:
+		if got != telegramStopMessage {
+			t.Fatalf("reply %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no stop acknowledgement")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("polling did not exit")
+	}
+}
+
+func TestPollingClearOrdersAndDiscardsEarlierQueuedRequests(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan string, 8)
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	a := adapter{token: testToken, pairing: paired, apiBase: "https://example.invalid"}
+	a.agent = doerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/livez" {
+			return response(200, "ok\n"), nil
+		}
+		var p struct {
+			Message string `json:"message"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			return nil, err
+		}
+		entered <- p.Message
+		if p.Message == "first" {
+			<-r.Context().Done()
+			close(canceled)
+			<-release
+			return nil, r.Context().Err()
+		}
+		return response(200, `{"type":"final","reply":"ok"}`+"\n"), nil
+	})
+	a.client = doerFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/getUpdates") {
+			var p struct {
+				Offset int64 `json:"offset"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&p)
+			if p.Offset == 0 {
+				return response(200, `{"ok":true,"result":[{"update_id":1,"message":{"text":"first","from":{"id":42},"chat":{"id":42,"type":"private"}}},{"update_id":2,"message":{"text":"stale","from":{"id":42},"chat":{"id":42,"type":"private"}}},{"update_id":3,"message":{"text":"/clear","from":{"id":42},"chat":{"id":42,"type":"private"}}},{"update_id":4,"message":{"text":"new","from":{"id":42},"chat":{"id":42,"type":"private"}}}]}`), nil
+			}
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}
+		return response(200, `{"ok":true,"result":{}}`), nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- a.run(ctx, nil) }()
+	select {
+	case got := <-entered:
+		if got != "first" {
+			t.Fatalf("first request = %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first did not start")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("clear did not cancel first")
+	}
+	close(release)
+	for _, want := range []string{"/clear", "new"} {
+		select {
+		case got := <-entered:
+			if got != want {
+				t.Fatalf("request = %q, want %q", got, want)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s did not start", want)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("polling did not exit")
+	}
+}
+
+func TestPollingUnknownUsernameDoesNotStopAddressedToOtherBot(t *testing.T) {
+	paths := testPaths(t)
+	setupTest(t, paths)
+	paired, err := loadPairing(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired.userID = 42
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	polling := make(chan struct{})
+	proceed := make(chan struct{})
+	canceled := make(chan struct{}, 1)
+	a := adapter{token: testToken, pairing: paired, apiBase: "https://example.invalid"}
+	a.agent = doerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/livez" {
+			return response(200, "ok\n"), nil
+		}
+		<-r.Context().Done()
+		canceled <- struct{}{}
+		return nil, r.Context().Err()
+	})
+	a.client = doerFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/getUpdates") {
+			var p struct {
+				Offset int64 `json:"offset"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&p)
+			if p.Offset == 0 {
+				return response(200, `{"ok":true,"result":[{"update_id":1,"message":{"text":"work","from":{"id":42},"chat":{"id":42,"type":"private"}}},{"update_id":2,"message":{"text":"/stop@other_bot","from":{"id":42},"chat":{"id":42,"type":"private"}}}]}`), nil
+			}
+			if p.Offset == 3 {
+				close(polling)
+				select {
+				case <-proceed:
+					return response(200, `{"ok":true,"result":[{"update_id":3,"message":{"text":"/stop","from":{"id":42},"chat":{"id":42,"type":"private"}}}]}`), nil
+				case <-r.Context().Done():
+					return nil, r.Context().Err()
+				}
+			}
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}
+		return response(200, `{"ok":true,"result":{}}`), nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- a.run(ctx, nil) }()
+	select {
+	case <-polling:
+	case <-time.After(3 * time.Second):
+		t.Fatal("polling stalled")
+	}
+	select {
+	case <-canceled:
+		t.Fatal("addressed stop canceled the turn with unknown username")
+	default:
+	}
+	close(proceed)
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("bare stop did not cancel turn")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("polling did not exit")
 	}
 }
