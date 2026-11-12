@@ -1,2 +1,2 @@
 name: goaster-share-contribution
-description: Share a GoAster skill or source feature by proposing a Markdown description in upstream contributions/ that points to its implementation on a contributor fork.
+description: Share skills or features created by this GoAster instance so other users can find and potentially integrate them into their own runtime.
