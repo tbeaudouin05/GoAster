@@ -720,6 +720,7 @@ func (p *CodexProvider) registerBuiltInTools() {
 	p.mustRegisterBuiltInTool(webFetchCodexTool, p.executeWebFetchTool)
 	p.mustRegisterBuiltInTool(shellExecuteCodexTool, executeShell)
 	p.mustRegisterBuiltInTool(loadSkillCodexTool, executeLoadSkill)
+	p.mustRegisterBuiltInTool(telegramCommandReferenceCodexTool, executeTelegramCommandReference)
 	p.mustRegisterBuiltInTool(readFileCodexTool, executeReadFile)
 	p.mustRegisterBuiltInTool(writeFileCodexTool, executeWriteFile)
 	p.mustRegisterBuiltInTool(editFileCodexTool, executeEditFile)

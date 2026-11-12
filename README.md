@@ -67,11 +67,15 @@ accounts are ignored. The adapter supports private chats and groups subject
 to Telegram's group privacy setting.
 
 To pair the first account, send `/pair CODE` in a private chat, where `CODE`
-is the one-time code provided by GoAsterWeb setup. Bare `/start` remains a welcome command,
-but `/start CODE` is not a pairing command: it is rejected without pairing
-and is never forwarded to the remote agent. Pairing binds the first valid
+is the one-time code provided by GoAsterWeb setup. Bare `/start` remains a welcome command;
+before pairing, `/start CODE` is ignored. After pairing, `/start CODE` gives
+readiness guidance without pairing or forwarding the code. Pairing binds the first valid
 numeric user ID and consumes the code once; messages from other accounts are
 ignored.
+
+After pairing, the paired account can send bare `/start` or `/pair` in a
+private chat, group, or supergroup to get readiness guidance; the pairing
+flow itself still requires a private chat.
 
 Send bare `/help` in a private chat before pairing, or as the paired account
 afterward, to see the available Telegram commands and their access limits.

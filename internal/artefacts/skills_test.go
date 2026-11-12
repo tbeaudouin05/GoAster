@@ -78,6 +78,9 @@ func TestInstallBundledStartersOnce(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("default memory permissions: %v, %v", info, err)
 	}
+	if _, err := os.Lstat(filepath.Join(root, "telegram-commands.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("starter installation created a persistent Telegram command reference: %v", err)
+	}
 	if err := os.WriteFile(memoryPath, []byte("user memory"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -329,6 +332,9 @@ func TestStarterInstallationLeavesExistingEmptyDirectoryUntouched(t *testing.T) 
 	entries, err := os.ReadDir(directory)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("existing directory was modified: %v, %v", entries, err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "telegram-commands.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("existing skills directory received a command-reference migration: %v", err)
 	}
 	checkInvalidExistingSkillText(t)
 

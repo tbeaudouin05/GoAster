@@ -40,16 +40,17 @@ func TestFullRuntimeSessionRequestIncludesToolsSkillsAndMemory(t *testing.T) {
 			return
 		}
 		wantTools := map[string]bool{
-			"web_search":         false,
-			"web_fetch":          false,
-			"shell_execute":      false,
-			"load_skill":         false,
-			"read_file":          false,
-			"write_file":         false,
-			"edit_file":          false,
-			"append_file":        false,
-			"list_dir":           false,
-			"background_command": false,
+			"web_search":                 false,
+			"web_fetch":                  false,
+			"shell_execute":              false,
+			"load_skill":                 false,
+			"telegram_command_reference": false,
+			"read_file":                  false,
+			"write_file":                 false,
+			"edit_file":                  false,
+			"append_file":                false,
+			"list_dir":                   false,
+			"background_command":         false,
 		}
 		for _, tool := range request.Tools {
 			if _, ok := wantTools[tool.Name]; !ok {

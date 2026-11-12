@@ -23,6 +23,7 @@ import (
 	"goaster/internal/controlsecret"
 	"goaster/internal/controltransport"
 	"goaster/internal/localenv"
+	"goaster/internal/telegramcommands"
 )
 
 type httpDoer interface {
@@ -50,10 +51,7 @@ type update struct {
 	Message *message `json:"message"`
 }
 
-type telegramBotCommand struct {
-	Command     string `json:"command"`
-	Description string `json:"description"`
-}
+type telegramBotCommand = telegramcommands.MenuCommand
 
 type message struct {
 	Text            string      `json:"text"`
@@ -132,13 +130,13 @@ const (
 	telegramTypingActionTimeout        = 2 * time.Second
 	telegramAgentRequestTimeout        = 20 * time.Minute
 	telegramControlAuthorizationHeader = "X-GoAster-GitHub-Auth-Control"
-	telegramPairCommand                = "/pair"
-	telegramStartCommand               = "/start"
-	telegramHelpCommand                = "/help"
-	telegramStopCommand                = "/stop"
-	telegramEnvironmentCommand         = "/env"
-	telegramGetEnvironmentCommand      = "/get_env"
-	telegramGetEnvironmentManualAlias  = "/get-env"
+	telegramPairCommand                = telegramcommands.PairCommand
+	telegramStartCommand               = telegramcommands.StartCommand
+	telegramHelpCommand                = telegramcommands.HelpCommand
+	telegramStopCommand                = telegramcommands.StopCommand
+	telegramEnvironmentCommand         = telegramcommands.EnvironmentCommand
+	telegramGetEnvironmentCommand      = telegramcommands.GetEnvironmentCommand
+	telegramGetEnvironmentManualAlias  = telegramcommands.GetEnvironmentManualAlias
 	telegramEnvironmentAcceptKeyword   = "ACCEPT"
 	telegramEnvironmentFilename        = "goaster.env"
 )
@@ -147,28 +145,8 @@ const telegramEnvironmentInstructions = "To update settings, attach a document n
 
 const telegramCommandRegistrationTimeout = 5 * time.Second
 
-var telegramBotCommands = []telegramBotCommand{
-	{Command: "help", Description: "Show available commands"},
-	{Command: "stop", Description: "Cancel the current agent turn"},
-	{Command: "start", Description: "Show pairing or readiness guidance"},
-	{Command: "pair", Description: "Pair this account with GoAster"},
-	{Command: "clear", Description: "Clear this chat's history"},
-	{Command: "m", Description: "Show or select this chat's model"},
-	{Command: "env", Description: "Preview an environment update"},
-	{Command: "get_env", Description: "Download the saved environment file"},
-}
-
-const telegramHelpText = "Available Telegram commands:\n" +
-	"/help — Show this list.\n" +
-	"/stop — Cancel the current agent turn in this chat/thread (paired account).\n" +
-	"/start — Show pairing or readiness guidance; /start CODE does not pair.\n" +
-	"/pair CODE — Pair the first account with the one-time code (private chat only).\n" +
-	"/clear — Clear this chat's history (paired account).\n" +
-	"/m [MODEL_OR_ALIAS] — Show or select this chat's model (paired account).\n" +
-	"/env (attach goaster.env) — Preview settings changes; reply ACCEPT to apply (paired account, private chat only).\n" +
-	"/get_env, /get-env — Send the saved goaster.env file (paired account, private chat only).\n" +
-	"Before pairing, /help and bare /start provide guidance. After pairing, only the paired account can use the bot. " +
-	"Telegram topics in the same chat share conversation history and model settings. /env, ACCEPT, and environment file retrieval require a private chat. /env, /get_env, and /get-env accept @bot_username suffixes; use bare /help and /stop."
+var telegramBotCommands = telegramcommands.Menu()
+var telegramHelpText = telegramcommands.HelpText()
 
 const telegramStopMessage = "Stopped the current agent turn."
 const telegramNoActiveTurnMessage = "No agent turn is running."
@@ -493,7 +471,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		if m.Chat.Type != "private" {
 			return
 		}
-		if text == telegramHelpCommand {
+		if isTelegramCatalogCommand(text, telegramHelpCommand) {
 			a.send(ctx, m.Chat.ID, telegramHelpText)
 			return
 		}
@@ -524,7 +502,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		}
 		a.turnMu.Unlock()
 	}
-	if text == telegramHelpCommand {
+	if isTelegramCatalogCommand(text, telegramHelpCommand) {
 		signalStarted()
 		a.send(ctx, m.Chat.ID, telegramHelpText)
 		return
@@ -532,7 +510,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if strings.HasPrefix(text, telegramStopCommand+"@") || strings.HasPrefix(text, telegramHelpCommand+"@") {
 		return
 	}
-	if text == telegramStopCommand {
+	if isTelegramCatalogCommand(text, telegramStopCommand) {
 		key := telegramTurnKeyForMessage(*m)
 		stopped := false
 		a.turnMu.Lock()
@@ -1130,8 +1108,26 @@ func isTelegramEnvironmentMessage(text string) bool {
 }
 
 func isTelegramGetEnvironmentCommand(text string) bool {
-	return isTelegramCommandOrMention(text, telegramGetEnvironmentCommand) ||
+	return isTelegramCatalogCommand(text, telegramGetEnvironmentCommand) ||
+		isTelegramCatalogCommand(text, telegramGetEnvironmentManualAlias) ||
+		isTelegramCommandOrMention(text, telegramGetEnvironmentCommand) ||
 		isTelegramCommandOrMention(text, telegramGetEnvironmentManualAlias)
+}
+
+func isTelegramCatalogCommand(text, spelling string) bool {
+	command, ok := telegramcommands.Dispatch(text)
+	if !ok || text != spelling {
+		return false
+	}
+	if "/"+command.Name == spelling {
+		return true
+	}
+	for _, alias := range command.Aliases {
+		if "/"+alias == spelling {
+			return true
+		}
+	}
+	return false
 }
 
 func isTelegramCommandOrMention(text, command string) bool {

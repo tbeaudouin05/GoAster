@@ -405,7 +405,7 @@ func TestPairCommandIsPrimaryAndRejectsInvalidPairingMessages(t *testing.T) {
 	}
 }
 
-func TestStartCodeIsRejectedBeforeAndAfterPairing(t *testing.T) {
+func TestStartCodeIsIgnoredBeforeAndGivesReadinessAfterPairing(t *testing.T) {
 	paths := testPaths(t)
 	setupTest(t, paths)
 	p, err := loadPairing(paths)
@@ -460,8 +460,8 @@ func TestStartCodeIsRejectedBeforeAndAfterPairing(t *testing.T) {
 		t.Fatalf("/pair CODE did not authorize without exposing the code: user=%d sent=%q forwarded=%q", p.userID, sent, forwarded)
 	}
 	a.handle(context.Background(), privateMessage(42, "/start "+testCode))
-	if p.userID != 42 || len(forwarded) != 0 || len(sent) != 3 || strings.Contains(sent[2], testCode) {
-		t.Fatalf("rejected /start CODE reached the model or exposed the code after pairing: user=%d sent=%q forwarded=%q", p.userID, sent, forwarded)
+	if p.userID != 42 || len(forwarded) != 0 || len(sent) != 3 || !strings.Contains(sent[2], "ready for text messages") || strings.Contains(sent[2], testCode) {
+		t.Fatalf("/start CODE did not give code-free readiness guidance after pairing: user=%d sent=%q forwarded=%q", p.userID, sent, forwarded)
 	}
 }
 
