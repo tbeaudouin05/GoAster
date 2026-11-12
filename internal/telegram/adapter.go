@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -112,6 +114,8 @@ const (
 	telegramPairCommand                = "/pair"
 	telegramStartCommand               = "/start"
 	telegramEnvironmentCommand         = "/env"
+	telegramGetEnvironmentCommand      = "/get_env"
+	telegramGetEnvironmentManualAlias  = "/get-env"
 	telegramEnvironmentAcceptKeyword   = "ACCEPT"
 	telegramEnvironmentFilename        = "goaster.env"
 )
@@ -313,6 +317,9 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if isTelegramEnvironmentCommandMention(text) {
 		text = telegramEnvironmentCommand
 	}
+	if isTelegramGetEnvironmentCommand(text) {
+		text = telegramGetEnvironmentCommand
+	}
 	a.pairingMu.Lock()
 	pairedUserID := a.pairing.userID
 	paired := false
@@ -357,6 +364,21 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 			a.send(ctx, m.Chat.ID, "GoAster is ready for text messages, images, and documents. Use /m to view the model, /m MODEL_OR_ALIAS to select one, and /clear to clear this chat's history.")
 		} else {
 			a.send(ctx, m.Chat.ID, "The remote agent is not ready; check its remote authentication. You can still use /m to view or select a model and /clear to clear this chat's history.")
+		}
+		return
+	}
+	if text == telegramGetEnvironmentCommand {
+		if m.Chat.Type != "private" {
+			a.send(ctx, m.Chat.ID, "Environment files are available only in a private chat.")
+			return
+		}
+		data, err := localenv.ReadSavedFile()
+		if err != nil {
+			a.send(ctx, m.Chat.ID, "The environment file is unavailable.")
+			return
+		}
+		if err := sendDocument(ctx, a.client, a.apiBase, a.token, m.Chat.ID, telegramEnvironmentFilename, data); err != nil {
+			a.send(ctx, m.Chat.ID, "The environment file could not be sent.")
 		}
 		return
 	}
@@ -625,6 +647,46 @@ func (a *adapter) sendMessage(ctx context.Context, chatID int64, text string) (i
 	return result.MessageID, err
 }
 
+func sendDocument(ctx context.Context, client httpDoer, apiBase, token string, chatID int64, filename string, data []byte) error {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return fmt.Errorf("Telegram request failed")
+	}
+	part, err := writer.CreateFormFile("document", filename)
+	if err != nil {
+		return fmt.Errorf("Telegram request failed")
+	}
+	if _, err := part.Write(data); err != nil {
+		return fmt.Errorf("Telegram request failed")
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("Telegram request failed")
+	}
+	return callMultipart(ctx, client, apiBase, token, "sendDocument", writer.FormDataContentType(), body.Bytes())
+}
+
+func callMultipart(ctx context.Context, client httpDoer, apiBase, token, method, contentType string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/bot"+token+"/"+method, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("Telegram request failed")
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("Telegram request failed")
+	}
+	defer resp.Body.Close()
+	var envelope struct {
+		OK bool `json:"ok"`
+	}
+	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&envelope)
+	if decodeErr != nil || !envelope.OK || resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Telegram request failed")
+	}
+	return nil
+}
+
 func (a *adapter) editMessage(ctx context.Context, chatID, messageID int64, text string) error {
 	payload := struct {
 		ChatID    int64  `json:"chat_id"`
@@ -777,6 +839,15 @@ func isTelegramEnvironmentMessage(text string) bool {
 	return isTelegramEnvironmentCommandVariant(text) || isTelegramEnvironmentAcceptanceVariant(text)
 }
 
+func isTelegramGetEnvironmentCommand(text string) bool {
+	return isTelegramCommandOrMention(text, telegramGetEnvironmentCommand) ||
+		isTelegramCommandOrMention(text, telegramGetEnvironmentManualAlias)
+}
+
+func isTelegramCommandOrMention(text, command string) bool {
+	return text == command || isTelegramCommandMention(command, text)
+}
+
 func isTelegramEnvironmentDocument(m message) bool {
 	return m.Document != nil && attachment.SanitizeFilename(m.Document.FileName) == telegramEnvironmentFilename
 }
@@ -819,7 +890,11 @@ func isTelegramEnvironmentCommandVariant(text string) bool {
 }
 
 func isTelegramEnvironmentCommandMention(text string) bool {
-	prefix := telegramEnvironmentCommand + "@"
+	return isTelegramCommandMention(telegramEnvironmentCommand, text)
+}
+
+func isTelegramCommandMention(command, text string) bool {
+	prefix := command + "@"
 	if !strings.HasPrefix(text, prefix) {
 		return false
 	}
@@ -856,7 +931,8 @@ func isTelegramEnvironmentUpdate(m message) bool {
 	if rawText == "" && m.hasAttachment() {
 		rawText = m.Caption
 	}
-	return isTelegramEnvironmentMessage(strings.TrimSpace(rawText))
+	text := strings.TrimSpace(rawText)
+	return isTelegramEnvironmentMessage(text) || isTelegramGetEnvironmentCommand(text)
 }
 func (m *message) hasAttachment() bool {
 	return m != nil && (len(m.Photo) > 0 || m.Document != nil)

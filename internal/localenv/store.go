@@ -62,6 +62,17 @@ func NewStoreAt(path string) *Store {
 	return &Store{path: path, values: make(map[string]string), state: state}
 }
 
+// ReadSavedFile returns the default saved environment file as bounded bytes.
+// It validates the private file and its settings without returning values in
+// an error. Callers must keep the returned bytes out of model and log paths.
+func ReadSavedFile() ([]byte, error) {
+	store, err := NewStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.readSavedFile()
+}
+
 // Values returns a copy of the values loaded or saved by this store.
 func (s *Store) Values() map[string]string {
 	return clone(s.values)
@@ -209,6 +220,63 @@ func (s *Store) Save(values map[string]string) error {
 	s.values = clone(values)
 	s.setState(Digest(values), true)
 	return nil
+}
+
+func (s Store) readSavedFile() ([]byte, error) {
+	if err := s.validatePath(); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(s.path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect environment settings: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("environment settings file must not be a symbolic link")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("environment settings file must be a regular file")
+	}
+	if info.Mode().Perm()&0077 != 0 {
+		return nil, fmt.Errorf("environment settings permissions are too broad")
+	}
+	if info.Size() > maxFileSize {
+		return nil, fmt.Errorf("environment settings exceed the 1 MiB limit")
+	}
+
+	file, err := os.Open(s.path)
+	if err != nil {
+		return nil, fmt.Errorf("read environment settings: %w", err)
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened environment settings: %w", err)
+	}
+	pathInfo, err := os.Lstat(s.path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect environment settings: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() || !os.SameFile(openedInfo, pathInfo) {
+		return nil, fmt.Errorf("environment settings file changed while it was opened")
+	}
+	if openedInfo.Mode().Perm()&0077 != 0 {
+		return nil, fmt.Errorf("environment settings permissions are too broad")
+	}
+	if openedInfo.Size() > maxFileSize {
+		return nil, fmt.Errorf("environment settings exceed the 1 MiB limit")
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read environment settings: %w", err)
+	}
+	if len(data) > maxFileSize {
+		return nil, fmt.Errorf("environment settings exceed the 1 MiB limit")
+	}
+	if _, err := Parse(string(data)); err != nil {
+		return nil, fmt.Errorf("parse environment settings: %w", err)
+	}
+	return data, nil
 }
 
 // UpsertIfUnchanged applies incoming settings only when the current on-disk

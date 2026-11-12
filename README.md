@@ -93,6 +93,12 @@ contain partial saved values. Long-lived processes that read environment values 
 startup may require a restart. GoAster does not restart services as part of
 this flow.
 
+The authorized paired user can retrieve the saved settings in the same private
+chat with Telegram's valid `/get_env` command. Manually typed `/get-env` is
+also accepted. Either form may include Telegram's `@bot_username` suffix.
+Telegram receives the file directly as `goaster.env`; its contents are not
+sent to the remote agent, model, command output, or logs.
+
 ## Models
 
 The shipped model template is `config/openai-models.json`. Runtime
