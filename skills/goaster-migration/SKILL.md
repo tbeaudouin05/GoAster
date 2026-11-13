@@ -1,378 +1,295 @@
-# GoAster manual server migration
+# GoAster migration
 
-This skill is owner-managed migration guidance. It does not implement a
-migration backend, provision a destination, transfer state, switch an agent,
-or delete the old server.
+Use this skill to guide the paired owner through a GoAsterWeb-backed move to a
+new Hetzner server. It is pure guidance: GoAster does not add a provisioning
+service, copy data automatically, cut over the agents, stop the old host, or
+delete a server. Use the existing shell, cron/background-command, environment,
+and Hetzner skills for the workflow.
 
-## Hard blocker: GoAsterWeb handoff is not available
+## Scope and current implementation status
 
-The GoAsterWeb migration/setup backend is incomplete and unverified in the
-current approved scope. Treat that as a hard blocker. Until the handoff is
-fully implemented, deployed by a separately approved process, and verified
-against the acceptance requirements below, the agent must stop at guidance
-and read-only preflight.
+The GoAsterWeb side is implemented locally at commit `ef8bf6e` in the sibling
+`GoAsterWeb/migration-handoff-20261112` checkout, but it is not deployed. The
+local implementation and [the GoAster-side contract notes](../../docs/goaster-migration.md)
+are the reference for a future live readiness check; a local checkout is not a
+reachable service. This task performs no live registration, monitoring,
+provisioning, SSH, deployment, or credential access.
 
-Do not instruct an agent to register, schedule, or create a server until the
-GoAsterWeb handoff is fully available and verified. It is not fully available
-or verified in this checkout.
+The handoff uses a trusted, normally operated database with an absolute
+seven-day expiry. Expiry is the only lifecycle mechanism: reads and retries do
+not extend it, and expiry never deletes infrastructure. Any detectable database
+outage, invalid response, lost record, or conflicting record fails closed.
+There is no cancellation route and no unsafe-status escape.
 
-The agent must not:
+## Authorization and privacy
 
-- register a migration handoff or create a callback, owner-access, Redis, or
-  setup session;
-- schedule or run an availability monitor, cron job, or recurring check for
-  this migration;
-- create, reserve, allocate, rebuild, or otherwise request a Hetzner server;
-- generate or deliver the migration SSH key, put a callback secret in
-  provider user-data, or send a migration link;
-- perform SSH, install GoAster, transfer files, start a second agent or
-  Telegram consumer, switch credentials, restart services, or delete either
-  server.
+The only supported operator is the already paired owner in a one-to-one
+private Telegram chat. A paired account in a group is not private. Never ask
+for or echo a key, owner URL, bot token, provider token, callback secret, or
+database credential in model output, ordinary chat, a group, a URL query, a
+log, a command argument, or project memory.
 
-An approved plan does not implement the missing capability, and this checkout
-has no authority to carry it out while the blocker remains. Do not remove this
-blocker because a user asks to proceed, because a server ID is known, or
-because a provider request appears simple. Do not invent an endpoint, tool,
-URL, cloud-init contract, Redis operation, installer command, service name,
-path, or recovery capability. This starter contains no GoAsterWeb migration
-API and no migration-specific private-key delivery capability through
-Telegram.
+Before an owner-approved live workflow, load the existing `goaster-env`,
+`hetzner-auth`, `read-write-temp-files`, and shell/cron or background-command
+guidance as applicable. Those skills authenticate or run local commands; they
+do not add approval for a billable server. Keep secret values in memory or in
+protected local files only.
 
-The blocker also applies to a request to “just monitor” or “just create one.”
-There is no safe partial handoff: an unknown, expired, conflicted, lost, or
-unverified handoff must fail closed. Expiry must not be treated as deletion of
-the billable server.
+## Default owner flow
 
-## Current capability boundary
+### 1. Inspect the old host, read-only
 
-This checkout contains no migration command or migration backend. In
-particular, it has no GoAsterWeb handoff endpoint, owner session, availability
-monitor, Hetzner provisioning client, migration installer or transfer service,
-or migration-specific private-key delivery path. The existing Telegram
-adapter's private-chat behavior does not turn ordinary messages or document
-attachments into a migration key channel.
+Start with the actual host. Do not infer paths from the GoAsterWeb installation
+notes. These commands collect names and state without printing file contents or
+process arguments that could contain credentials:
 
-Do not replace a missing capability with a shell command, a guessed URL, a
-manual API request, an ordinary Telegram message, or a link. A read-only host
-inspection can collect facts for the owner, but it cannot create the missing
-handoff or authorize a cloud operation.
+```sh
+hostnamectl --static
+uname -m
+. /etc/os-release && printf '%s %s\n' "$ID" "$VERSION_ID"
+df -hT
+sudo systemctl list-unit-files --type=service | grep -Ei 'goaster|telegram' || true
+sudo systemctl show goaster-agent.service goaster-telegram.service \
+  -p Id,LoadState,ActiveState,SubState,User,Group,FragmentPath,DropInPaths \
+  2>/dev/null || true
+ps -eo pid,user,comm,state --sort=pid | grep -Ei 'goaster|telegram' || true
+find "$HOME/.goaster" /etc/goaster /var/lib/goaster-telegram \
+  -xdev -maxdepth 4 -printf '%M %u:%g %s %p\n' 2>/dev/null | sort
+```
 
-## What this skill may do now
+Inventory configuration, memory, skills, schedules, workspaces, pairing and
+authentication *names, permissions, sizes, and classifications* only. Do not
+`cat` environment files, OAuth files, bot tokens, pairing state, private keys,
+or saved conversations. Record each item as required, optional,
+reauthenticated, excluded, or owner-owned external data. Keep the old server
+unchanged and available for recovery.
 
-With the owner's existing authorization, the agent may explain the workflow
-and perform read-only inspection of the current host. It may:
+### 2. Create the new bot before the new server
 
-1. Derive the current server, project, installation paths, service names,
-   running processes, agent version, and architecture from the actual host.
-   Never guess paths or treat the observed GoAsterWeb installation notes as a
-   universal contract.
-2. Inventory persistent state without displaying values: agent configuration,
-   project and durable memory, user-created skills, scheduled jobs,
-   environment and secret references, authentication and pairing state,
-   workspace data, and other user-owned files. Classify secrets, large data,
-   external data, symlinks, permissions, timestamps, filesystem space, and
-   compatibility. Do not copy provider credentials by default.
-3. Explain what is essential, what is excluded, what must be reauthenticated,
-   and how separate agents, Telegram bot credentials, active pollers, and
-   scheduled jobs behave during migration. The old and new agents operate
-   independently and may run concurrently; use distinct Telegram bot tokens
-   for them.
-4. Help the owner write down a target preference and the exact approval they
-   would eventually need. Do not present a current price, server offer,
-   location, or architecture as verified without checking an authoritative,
-   current source in an approved workflow.
+The owner creates a NEW BotFather bot first. The new token must be distinct
+from the old bot token. Do not copy the old Telegram token, pairing state, or
+OAuth state. The old and new agents have independent identities and may run
+at the same time; the owner decides when to stop the old consumer.
 
-Read-only inspection is not approval to create a server, incur cost, modify
-state, or deploy. If identity, paths, ownership, or scope are ambiguous,
-stop and ask the owner to resolve them.
+### 3. Choose and approve one current target
 
-## Approved availability monitor: future policy only
+Use a current, authenticated Hetzner read-only lookup. A CX or CAX target with
+4 GB RAM is a reasonable baseline; 8 GB gives more headroom. These are examples,
+not hardcoded product or architecture requirements. Verify the current offer's
+architecture, image, network, hourly price, and availability. Use all eligible
+locations by default unless the owner specifies a narrower preference.
 
-This policy applies only after the GoAsterWeb handoff is implemented, reviewed,
-deployed, and verified. It is not available in this checkout. The current
-agent must not schedule, run, emulate, or claim to have run one, or create a
-server.
+The owner approves the exact server type, architecture, image, network, all
+eligible locations, current hourly price, and expected overlap cost. Approval
+to start the monitor also approves exactly one create operation at those terms:
+there is no second create prompt and no separate price ceiling.
 
-In a future approved workflow, the owner's approval to start a 30-minute
-availability monitor also authorizes the creation of exactly one server that
-matches the approved terms. The monitor runs every 30 minutes, 24/7, with no
-fixed stop date, until that server is successfully created or creation returns
-a confirmed error. As soon as an available offer matches the approved terms,
-the workflow immediately submits the one authorized create operation; no
-separate create approval is required. There is no separate price ceiling. The
-owner approves the exact server type, architecture, eligible locations,
-image, network, and current hourly price in advance. If current offer terms
-differ from those approved, stop and report without creating a server.
+### 4. Generate a fresh key and register before creation
 
-The future implementation must prevent overlapping monitor runs and
-concurrent creation attempts, and must enforce the one-server limit across
-restarts and instances. Availability checks are read-only until the exact
-approved offer is found. Stop the monitor on an authentication failure,
-provider error, timeout, inconsistent data, or unknown result. Stop on any
-creation error; if creation may have succeeded but its result is uncertain,
-disable the monitor and require manual reconciliation. Do not automatically
-retry a failed availability request or create operation. After an error,
-require manual reconciliation and fresh owner approval before a new attempt.
-Never delete a server automatically. A successful creation ends the monitor
-and prevents another creation. The monitoring period has no fixed expiry; any
-handoff created for the server remains subject to its separate handoff expiry.
+Generate a dedicated Ed25519 login key in the protected temporary directory
+from `read-write-temp-files`; never print the private half:
 
-## Target guidance, not a provisioning instruction
+```sh
+umask 077
+ssh-keygen -q -t ed25519 -N '' -f "$MIGRATION_DIR/login" -C goaster-migration
+ssh-keygen -y -f "$MIGRATION_DIR/login" > "$MIGRATION_DIR/login.pub"
+chmod 600 "$MIGRATION_DIR/login" "$MIGRATION_DIR/login.pub"
+```
 
-For a future owner decision, the proposed direction is to consider a current
-Hetzner CX or CAX option only when its architecture and current availability
-are verified. Four GB RAM is the baseline suggestion for GoAster plus a few
-browser tabs; eight GB provides more headroom; a cheaper compatible target may
-fit light use without builds, tests, browsers, or other heavy work. Ask for a
-location preference and otherwise prefer all eligible locations for faster
-availability. These are preferences, not current product or price claims.
+Register the canonical `ssh-ed25519` public key with the deployed GoAsterWeb
+origin before creating a server. Capture the JSON into a mode-0600 file; do
+not let the response reach model output or stderr:
 
-Before approving a future monitor, the owner must see and approve the exact
-server type, architecture, eligible locations, image, network, current hourly
-price, and expected overlap cost while both servers exist. That approval
-includes the monitor and its one matching create operation; there is no
-separate price ceiling or fixed stop date. Stop if the current offer terms
-differ from what the owner approved. Creation would be billable immediately,
-including if migration fails or a handoff expires. None of these checks
-authorizes creation while the hard blocker remains.
+```sh
+jq -n --arg key "$(cat "$MIGRATION_DIR/login.pub")" \
+  '{login_public_key:$key}' > "$MIGRATION_DIR/register.json"
+status=$(curl --silent --output "$MIGRATION_DIR/grant.json" \
+  --write-out '%{http_code}' --header 'Content-Type: application/json' \
+  --data-binary @"$MIGRATION_DIR/register.json" \
+  "$GOASTERWEB_ORIGIN/migration/register")
+[ "$status" = 201 ] || exit 1
+chmod 600 "$MIGRATION_DIR/grant.json"
+```
 
-## Owner-managed migration checklist
+The successful response contains `attempt`, `callback_secret`, `owner_secret`,
+`server_label`, `owner_url`, and `expires`. Keep it private. The exact server
+name is `goaster-migration-<first 16 lowercase hex characters of attempt>`;
+use the returned `server_label` unchanged. The provider label must be exactly:
 
-This checklist describes actions for the owner after a destination matching
-the approved terms exists and its identity and access are verified. The
-agent may explain the checklist; it must not perform the actions or claim
-that this repository supplies the missing installer or transfer service.
+```text
+goaster-migration-attempt=<attempt>
+```
 
-### 1. Preflight the old host
+Do not substitute the normal setup label or an address-only identity.
 
-- Record the exact current server and project identity, installation layout,
-  service definitions, process state, version, architecture, disk space,
-  permissions, and available recovery access from the host itself.
-- Inventory agent settings, project memory, durable memory, user skills,
-  schedules, workspace files, authentication and pairing state, and
-  environment/secret references. Record names and classifications, never
-  secret values.
-- Mark each item as required, optional, reauthenticated, excluded, or
-  owner-owned external data. Do not assume that copying an environment file,
-  provider token, OAuth state, Telegram token, pairing state, or private key
-  is safe or necessary.
-- Keep the old server available for manual recovery. Do not change its SSH
-  keys or delete its data as part of preflight.
+### 5. Monitor and create exactly once
 
-### 2. Verify the destination before touching it
+After registration, use the existing cron/shell or background-command workflow
+for one non-overlapping availability check every 30 minutes, 24/7, with no
+fixed stop date. Do not build a GoAster provisioning daemon or start a monitor
+in this repository. The check is read-only until one offer matches every
+approved term; then it immediately submits the one authorized create request.
 
-The owner must independently verify the exact Hetzner project, server ID,
-address, image, operating system, architecture, disk space, dependencies,
-and login identity. Verify the server's SSH host key through the approved
-handoff and then use strict host-key verification. Never accept an unknown
-host key, an address-only match, a mismatched login key, a different project,
-or an ambiguous provider record.
+The create request must use the exact returned name, the exact migration label,
+the fresh public key, and the callback user-data below. The owner approval
+covers this one create at the approved terms. On any availability error,
+authentication error, timeout, inconsistent result, or creation error, stop
+the monitor and manually reconcile the exact attempt. An unknown create result
+is never a reason to retry. Do not retry automatically and never delete a
+server automatically. A confirmed successful create ends the monitor.
 
-The current repository has no supported GoAster installer, upgrade process,
-or restore process. Use only a separately reviewed procedure based on the
-actual target host. Do not infer service ownership, paths, restart order,
-commands, or permissions from `docs/goasterweb-installation.md`; that page
-records observations, not a universal contract.
+### 6. Use the current callback user-data contract
 
-### 3. Prepare the independent new agent
+The callback is a one-shot cloud-init final-stage script. It posts only the
+new server's Ed25519 host public key; it does not retry an ambiguous response.
+Provider user-data can be retained by the provider, so it may contain only the
+callback secret, attempt, and public HTTPS origin. It must never contain the
+owner secret, owner URL, login private key, Hetzner token, bot token, or
+database credential.
 
-Before migration, the owner must create a new Telegram bot with BotFather for
-the new agent. Use distinct bot tokens for the old and new agents; never share
-one token between them. Stage the destination only under the owner's manual
-control. Installation or file placement must not overwrite unrelated files.
-The old and new agents are independent and may be started and run concurrently.
-The owner chooses when to stop the old agent, and may keep it running for as
-long as they choose. Never automatically cut over, stop either agent, or
-require the old agent to stop before the new one starts. The owner should
-review scheduled work and other external integrations for duplicate effects.
+The current web contract is equivalent to this template. Substitute values
+locally without printing the rendered script:
 
-Pair the new bot independently. Do not copy the old bot token, pairing state,
-or Telegram adapter state as a shortcut. A bot identity and a pairing record
-are separate from the files selected for the manual move. The old bot remains
-the old agent's identity until the owner deliberately changes that setup.
+```sh
+#!/bin/sh
+set +x
+umask 077
+command -v curl >/dev/null 2>&1 || exit 1
+[ -r /etc/ssl/certs/ca-certificates.crt ] || exit 1
+[ -r /etc/ssh/ssh_host_ed25519_key.pub ] || exit 1
+keyfile=$(mktemp /run/goaster-hostkey.XXXXXX) || exit 1
+trap 'rm -f "$keyfile"' EXIT HUP INT TERM
+awk 'NR == 1 && $1 == "ssh-ed25519" && NF >= 2 {print $1 " " $2; ok=1} END {if (!ok) exit 1}' \
+  /etc/ssh/ssh_host_ed25519_key.pub > "$keyfile" || exit 1
+status=$(curl --silent --max-time 10 --connect-timeout 5 \
+  --output /dev/null --write-out "%{http_code}" --config - <<EOF
+url = "${GOASTERWEB_ORIGIN}/migration/host-key"
+request = "POST"
+header = "Authorization: Bearer ${CALLBACK_SECRET}"
+header = "X-Goaster-Attempt: ${ATTEMPT}"
+header = "Content-Type: text/plain"
+data-binary = "@$keyfile"
+EOF
+)
+[ "$status" = "204" ]
+exit $?
+```
 
-The approved move is manual and agent-guided, not direct server-to-server
-transfer. The owner chooses the files to move, checks permissions, symlinks,
-timestamps and checksums, and reauthenticates what should not be copied. A
-manual archive can be used only if the owner first verifies its exact scope
-and secure handling; no archive, backup, snapshot, or automated transfer is
-required by this workflow. Do not send a secret through an ordinary chat,
-URL, command line, log, project memory, or repository.
+The callback request is `POST /migration/host-key` with
+`Authorization: Bearer <callback_secret>`, `X-Goaster-Attempt: <attempt>`,
+`Content-Type: text/plain`, and the canonical first line of
+`/etc/ssh/ssh_host_ed25519_key.pub`. A non-204 or lost response stops the
+attempt; do not replay the callback blindly.
 
-### 4. Validate and retain recovery
+### 7. Complete the owner handoff in the browser
 
-The owner controls the sequence: move only the selected state and validate
-the new agent independently. Both agents may remain active concurrently,
-each using its own Telegram bot token. The owner decides whether and when to
-stop the old agent; no automatic cutover or stopping occurs. The agent may
-provide a checklist and help interpret non-secret results, but must not
-perform the cutover or delete the old server.
+Keep the returned owner URL as a fragment-only URL:
 
-Keep the old server until the owner has used the new agent long enough to be
-satisfied and has confirmed manual recovery. Both servers can accrue charges
-while retained. The owner, in Hetzner, decides whether to delete the old
-server; deletion permanently removes its data. Never delete automatically.
-No backup or snapshot is required for this manual-move workflow; `goaster-backup`
-is not an authorization to change the plan.
+```text
+https://<deployed-web-origin>/migration#attempt=<attempt>&owner=<owner_secret>
+```
 
-## Private owner channel and key handling
+Open it only in the owner's browser. Never put the fragment in a query string,
+Telegram group, model message, or log. GoAsterWeb exchanges the fragment for a
+short-lived secure session, verifies the exact token-scoped Hetzner project,
+server ID, name, migration label, and public IPv4, and then binds that server.
+The machine `/migration/bind` route is deliberately rejected; do not invent a
+bearer binding request.
 
-Use the current runtime behavior, not a guessed command or capability:
+The owner uploads the dedicated private key through the web page as the
+`private_key` multipart file. The page then performs the final provider and
+host-key checks and starts the fresh setup. It performs a fresh OpenAI device
+login and accepts the new BotFather token through the owner page. The new bot
+is paired in a private chat. GoAsterWeb sends neither the private key nor the
+owner secret through cloud-init.
 
-- Initial pairing requires a private Telegram chat and a one-time pairing
-  code. The adapter binds the first valid numeric Telegram user ID; messages
-  from other users are ignored, and a private-chat message must come from the
-  same user as the private chat.
-- After pairing, ordinary conversations and some commands can also be used in groups or supergroups. A paired account and a group are therefore not a private delivery channel.
-- Telegram's group-privacy setting can affect which group messages arrive; it
-  does not make a group a private delivery channel.
-- The current private-only document flows are the existing `goaster.env`
-  update and saved-environment retrieval. They do not establish a
-  migration-specific private-key delivery API.
+If using the GoAster Telegram adapter for delivery, stage the complete owner
+URL fragment and private key in the root-only mode-0600 file
+`/var/lib/goaster-telegram/migration-handoff` using an approved local step
+without printing its contents or passing them as arguments. The already paired
+owner can send `/get_migration`; GoAster sends the fixed document
+`goaster-migration-handoff.txt` directly, does not call the agent, and rejects
+groups, unauthorized users, and messages with attachments. A missing or failed
+delivery returns only a generic error. This helper does not generate keys or
+call GoAsterWeb.
 
-For any future migration key delivery, first verify that the chat is private,
-that it belongs to the already authorized owner, and that the delivery method
-is explicitly reviewed for this purpose. For this workflow, a private owner
-channel means a one-to-one private chat whose sender is the already paired
-owner. A paired account in a group is not a private owner channel; Telegram's
-group-privacy setting does not change that. The current `/env` and `/get_env`
-flows are limited to the saved `goaster.env` file and must not be used to
-carry a private key, owner-access secret, or migration link.
+### 8. Move data and retire the old host manually
 
-Never run this workflow in a group, send a private key or owner-access secret
-into a group, put a private key in a link or URL query, or assume that a server
-ID authorizes access. If a reviewed delivery capability is not present, stop
-and ask the owner to use an approved private method outside this skill; do not
-improvise one.
+GoAsterWeb installs a fresh independent target and authorizes fresh OpenAI and
+Telegram identities. It does not copy GoAster data. The owner chooses the
+selected files, checks permissions, symlinks, timestamps and checksums, and
+reauthenticates secrets that should not be copied. Do not copy the old bot
+token, pairing state, OAuth credentials, private keys, or saved environment by
+default. Review schedules and integrations for duplicate effects.
 
-The approved future direction is a fresh, dedicated SSH login key for the
-newly created server. A later reviewed handoff would define how the owner
-receives and uploads the private half; this checkout cannot generate, carry,
-verify, or deliver it. The private key must never be placed in provider
-user-data, a link, logs, project memory, a command line, or a group.
+Validate the new agent while the old one remains available. Only the owner
+decides when to stop the old agent and when to delete the old server. Deletion
+is permanent and manual; no migration error, handoff expiry, or callback
+failure deletes either server. No backup or snapshot is required for this
+manual move, though the owner may choose an independent recovery plan.
 
-## Errors and manual reconciliation
+## Exact web contract used by this skill
 
-Every migration error is a stop condition, not permission to retry, fall back
-to an unreviewed path, or clean up automatically. The following policy is for
-owner guidance and any future reviewed implementation; it is not an API for
-the current agent:
+Machine routes are public-HTTPS-only `POST` requests. Registration is JSON:
 
-| Condition | Required behavior | Owner action |
-| --- | --- | --- |
-| Handoff is missing, expired, lost, conflicted, or unverified | Fail closed; do not SSH, create, transfer, or start setup. | Reconcile the approved system manually and obtain a new approved handoff if needed. Expiry never deletes infrastructure. |
-| Monitor or provider returns an error, timeout, inconsistent record, or unknown result | Stop the monitor and any create workflow; do not retry automatically or create a duplicate. | Inspect the exact attempt and provider project manually. Treat an unknown result as unknown until reconciled. |
-| Host key is missing, changed, or conflicts with the recorded key | Do not connect over SSH. | Identify the exact affected server; if the reviewed procedure requires starting over, the owner deletes that server in Hetzner after seeing the permanent-data-loss warning, then retries manually. |
-| Key, project, server ID, address, login identity, or owner channel does not match | Do not deliver a key, upload state, or continue setup. | Correct the identity or stop; never substitute an address-only or server-ID-only match. |
-| Manual copy, permissions, checksum, install, or validation fails | Do not cut over or stop the old agent. | Keep the old server for recovery and repair or repeat the selected move manually. |
-| A server may have been created but the result is uncertain | Do not repeat creation and do not delete it automatically. | Reconcile by the exact approved attempt label and decide in Hetzner what to retain or delete. |
+```json
+{"login_public_key":"ssh-ed25519 AAAA... comment"}
+```
 
-No automatic deletion applies to the old server, a partially prepared new
-server, a server with a missing or conflicting host key, or infrastructure
-whose handoff expired. The owner must explicitly decide deletion in the
-provider after identifying the exact server and understanding that deletion
-is permanent.
+The callback uses the headers and text body above. Owner status uses
+`POST /migration/status` with the owner bearer secret and `{}`; it never
+returns the host key. `/migration/bind` is rejected for machine callers.
+The owner page owns `/migration/session`, `/migration/owner/status`,
+`/migration/owner/bind`, `/migration/owner/upload`, `/migration/owner/start`,
+and `/migration/owner/telegram`. There is no cancel, finalize, delete,
+unsafe-state, or retry endpoint. Database errors and malformed/expired state
+are service failures, not permission to continue.
 
-## Requirements before the blocker can be lifted
+## Stop and reconcile
 
-The GoAsterWeb implementation and deployment must be inspected separately and
-must demonstrate, with offline tests and security review before any billable
-end-to-end test, all of the following. This list is a release gate, not a list
-of APIs for the agent to invent:
+Stop immediately and keep the old host unchanged when any of these occur:
 
-- public registration has bounded request size, attempts per IP, active
-  records, concurrent attempts, and request rates; the handoff has an
-  absolute seven-day (7-day) expiry that retries and reads cannot extend;
-- callback and owner-access credentials are independent, high-entropy,
-  scoped, secret-bearing material is not logged or put in URLs, and only
-  hashes plus minimal metadata are persisted; Redis credentials stay
-  server-side;
-- the proposed Upstash Redis Europe store's actual supported operations,
-  transaction/compare-and-set semantics, TTL behavior, durability,
-  replication, eviction, access control, regional location, pricing, and
-  outage behavior are verified before use; Redis loss or ambiguity fails
-  closed;
-- the cloud-init handoff contains only the callback secret and required
-  non-secret data, never the private login key, Hetzner token, Redis
-  credential, or owner-access secret; provider user-data visibility is
-  documented;
-- the first authenticated host-key callback is recorded atomically, identical
-  retry callbacks after a lost response are accepted until finalization or
-  expiry, a different key records a conflict, and conflicted state blocks
-  SSH; binding and finalization are race-safe;
-- callbacks before the provider server ID is returned, provider-ID binding,
-  exact-attempt labels, cross-attempt replay, inconsistent provider records,
-  IP changes, and ambiguous create results are handled without trusting an
-  unknown host or blindly creating a duplicate;
-- owner access verifies the exact project, server ID, IP, host key, login key
-  correspondence, expiry, conflict state, Redis availability, and setup
-  session. No SSH occurs on any failed trust check. Missing host key,
-  temporary Redis failure, and conflict are distinct outcomes;
-- a missing host key identifies the exact affected server and tells the owner
-  to delete it in Hetzner and try again, with a permanent-data-loss warning.
-  Deletion is never automatic, and handoff expiry does not delete billable
-  infrastructure;
-- a migration link or session has no secret in a URL query, uses a reviewed
-  short-lived owner session, and has restrictive referrer policy, no
-  third-party scripts, CSRF protection, upload bounds, cleanup, and rate
-  limits. A seven-day handoff is not a seven-day browser session;
-- restart, multi-instance retrieval, concurrent callbacks, finalization,
-  Redis outage/eviction/lost state, response-loss retries, and uncertain
-  destructive or billable operations require manual reconciliation. No
-  automatic repeat is allowed.
+- GoAsterWeb is not confirmed deployed at a public HTTPS origin, or the
+  database is unavailable, expired, conflicted, or returns an invalid state.
+- The offer differs from the approved type, architecture, location, image,
+  network, or price.
+- Registration, callback, provider creation, or any response times out or
+  returns an error. Do not retry a billable or ambiguous mutation.
+- The exact server name, migration label, token-scoped project, server ID,
+  public IPv4, host key, or login key does not match.
+- Manual transfer, fresh authorization, pairing, or validation fails.
 
-Until every applicable item is verified against the actual GoAsterWeb code and
-deployment, keep the hard blocker. The agent must not register, schedule, or
-create a server merely because this checklist exists.
+For a possibly created server, reconcile in the exact Hetzner project by the
+exact `goaster-migration-attempt` label and returned name. Do not create a
+second server and do not delete the first automatically. The owner decides
+what to retain or delete after identifying it and understanding the permanent
+data-loss warning.
 
-## Future approved orchestration, still owner-controlled
+## Future live-readiness preflight
 
-If a later reviewed release explicitly clears the handoff gate, it must add
-an implementation-specific workflow and tests before enabling any of these
-operations. The intended policy is:
+Before any live workflow, confirm all of the following in the owning systems:
 
-- the owner's approval to start the 30-minute availability monitor includes
-  permission to create exactly one server immediately when available under
-  the approved terms; it runs 24/7 with no fixed stop date until successful
-  creation or a confirmed creation error, and no separate price ceiling or
-  create approval applies;
-- the monitor stops if current offer terms differ from those approved, and
-  the implementation prevents overlapping monitor runs and concurrent create
-  attempts;
-- the workflow registers one immutable attempt before creation, uses a fresh
-  dedicated SSH key, and submits one provider create operation. On a timeout
-  or unknown result it stops, disables the monitor, reconciles by the exact
-  attempt label, and never automatically retries or creates a duplicate. Any
-  availability or creation error stops the workflow; an uncertain create
-  result requires manual reconciliation;
-- on a confirmed creation error, it reports the issue and stops. The owner
-  inspects the provider project manually if needed. It never retries
-  automatically or deletes automatically. On confirmed success it marks the
-  task done and prevents another creation;
-- the owner receives status and cost information privately. The owner uploads
-  the private key to the verified GoAsterWeb handoff, and the web side pins
-  and strictly verifies the captured host key before SSH;
-- the state move and agent setup remain manual; old and new agents operate
-  independently and may run concurrently with distinct Telegram bot tokens.
-  The owner chooses when to stop the old agent, if at all, and the old server
-  remains available until the owner is satisfied. No automatic cutover or
-  stopping occurs. Any restart during setup reports uncertain state and
-  requires manual reconciliation.
+1. The public HTTPS GoAsterWeb deployment is the reviewed handoff build
+   corresponding to local `ef8bf6e` (and its deployment documentation names the
+   actual deployed revision and origin); local code alone is insufficient.
+2. The configured database is available as trusted normal infrastructure,
+   isolated to this namespace, with the seven-day expiry and fail-closed error
+   behavior exercised. Do not reopen the expiry-only design or add cancellation.
+3. GoAsterWeb's offline migration tests and security review pass, including
+   exact provider binding, first host-key callback, private-key/public-key
+   matching, strict SSH pinning, the permanent marker, and no automatic
+   cleanup/retry path.
+4. The GoAster binary revision and destination preflight used by the deployed
+   web worker are explicitly identified. This GoAster repository does not
+   deploy or claim a universal installer/service layout.
+5. The paired-owner Telegram adapter contains the direct `/get_migration`
+   document path, its staging file is mode 0600, and unauthorized/group/
+   attachment/send-error tests pass. No handoff secret is forwarded to the
+   agent or model.
+6. The owner has created the distinct new BotFather bot, selected the exact
+   current target terms, approved one create, and prepared a private manual
+   reconciliation plan for every timeout or error.
 
-These are policy constraints for a future implementation, not executable
-instructions for the current agent. Do not name or call a provider API,
-GoAsterWeb route, Redis command, cron mechanism, installer, or Telegram
-delivery method unless that capability is later implemented, documented, and
-verified in the actual owning system.
-
-## Validation and reporting
-
-For this starter, report exactly what was inspected and what was not. State
-that no handoff was registered, no monitor was scheduled, no server was
-created, no secret was generated or transferred, no deployment or SSH was
-performed, no agent was switched, and no server was deleted.
-
-Report the remaining gaps plainly: the GoAsterWeb handoff backend, its
-restart-safe persistence and security controls, the reviewed private-key
-delivery path, the target-host installer/transfer procedure, and any live
-Hetzner offering or cost. Do not call host-key handoff a complete migration.
+This preflight is a live-readiness gate, not a permanent architecture blocker:
+current target availability and architecture are checked from authoritative
+provider data at the time of approval.

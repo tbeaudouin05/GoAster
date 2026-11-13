@@ -1,16 +1,16 @@
 # Authentication and authorization
 
-This is a pure guidance skill. It grants no access to Hetzner, GoAsterWeb,
-Upstash, Telegram, a server, or a secret, and it does not authorize a cloud
-operation, schedule, deployment, transfer, restart, cutover, or deletion.
+This skill does not grant access to Hetzner, GoAsterWeb, Telegram, a server,
+the migration database, or any secret. It does not by itself approve a
+monitor, a billable create, SSH, setup, data transfer, cutover, restart, or
+deletion.
 
-If an owner later requests a read-only identity check, use the existing
-`goaster-env` skill for secret lookup and the existing `hetzner-auth` skill for
-Hetzner project and server verification. Keep credentials in memory and never
-print, save, copy, or put them in logs, commands, archives, links, or chat.
-Authentication and target verification do not authorize a server change or
-cost.
+For owner-approved read-only identity checks, load `goaster-env` for local
+secret lookup and `hetzner-auth` for the token-scoped project/server check.
+Use the existing shell/cron or background-command and temporary-file guidance
+for local workflow. Keep credentials in protected memory or files; never print
+or put them in arguments, logs, URLs, model output, groups, or ordinary chat.
 
-For current Telegram command behavior, use the existing `telegram-commands`
-skill and its runtime reference. Do not infer a migration command or a
-private-key delivery capability from a command name.
+The migration-specific `/get_migration` command is not a secret input channel:
+it sends an already staged handoff document directly to the paired owner's
+private chat and never forwards it to the agent.

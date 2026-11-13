@@ -67,112 +67,63 @@ for phrase in (
 migration = (root / "skills" / "goaster-migration" / "SKILL.md").read_text(encoding="utf-8")
 migration_text = " ".join(migration.split())
 for phrase in (
-    "Hard blocker: GoAsterWeb handoff is not available",
-    "Current capability boundary",
-    "no GoAsterWeb handoff endpoint",
-    "must not:",
-    "register a migration handoff",
-    "schedule or run an availability monitor",
-    "create, reserve, allocate",
-    "Approved availability monitor: future policy only",
-    "availability monitor",
-    "Private owner channel and key handling",
-    "one-to-one private chat",
-    "distinct bot tokens",
-    "Pair the new bot independently",
-    "manual and agent-guided",
-    "private-key delivery capability",
-    "Initial pairing requires a private Telegram chat",
-    "ordinary conversations and some commands can also be used in groups",
-    "must not be used to carry a private key",
-    "absolute seven-day (7-day) expiry",
-    "Errors and manual reconciliation",
-    "unknown result",
-    "No automatic deletion applies",
-    "runs every 30 minutes, 24/7",
-    "No backup or snapshot is required for this manual-move",
-    "manual",
-    "Never delete automatically",
+    "Scope and current implementation status",
+    "implemented locally at commit `ef8bf6e`",
+    "but it is not deployed",
+    "trusted, normally operated database",
+    "seven-day expiry",
+    "There is no cancellation route",
+    "one-to-one private Telegram chat",
+    "NEW BotFather bot first",
+    "CX or CAX target",
+    "4 GB RAM",
+    "8 GB gives more headroom",
+    "all eligible locations",
+    "exactly one create operation",
+    "no second create prompt",
+    "every 30 minutes, 24/7",
+    "goaster-migration-<first 16 lowercase hex characters of attempt>",
+    "goaster-migration-attempt=<attempt>",
+    "/migration/host-key",
+    "does not retry an ambiguous response",
+    "owner secret, owner URL, login private key, Hetzner token",
+    "fragment-only URL",
+    "`private_key` multipart file",
+    "/get_migration",
+    "does not call the agent",
+    "Do not retry automatically",
+    "never delete a server automatically",
+    "Future live-readiness preflight",
+    "not a permanent architecture blocker",
+    "No backup or snapshot is required",
 ):
     if phrase not in migration_text:
         raise SystemExit(f"goaster-migration workflow missing required guidance: {phrase!r}")
 
-hard_blocker = migration.index("## Hard blocker:")
-future_policy = migration.index("## Future approved orchestration")
-if hard_blocker > future_policy:
-    raise SystemExit("migration hard blocker appears after future orchestration policy")
-
-current_policy = migration[hard_blocker:future_policy]
-current_policy_text = " ".join(current_policy.split())
-for phrase in (
-    "must not schedule, run, emulate, or claim to have run one, or create a server",
-    "has no authority to carry it out while the blocker remains",
-    "not available in this checkout",
-    "cannot generate, carry, verify, or deliver it",
-    "No automatic deletion applies",
-    "do not retry automatically or create a duplicate",
-):
-    if phrase not in current_policy_text:
-        raise SystemExit(f"migration current policy lost blocked safeguard: {phrase!r}")
-
-future_policy_text = migration[future_policy:]
-future_policy_text = " ".join(future_policy_text.split())
-for phrase in (
-    "disables the monitor",
-    "never automatically retries or creates a duplicate",
-    "never retries automatically or deletes automatically",
-    "distinct Telegram bot tokens",
-    "owner chooses when to stop the old agent",
-):
-    if phrase not in future_policy_text:
-        raise SystemExit(f"migration future policy missing safeguard: {phrase!r}")
-
-monitor_start = migration.index("## Approved availability monitor: future policy only")
-target_guidance = migration.index("## Target guidance, not a provisioning instruction")
-monitor_policy = " ".join(migration[monitor_start:target_guidance].split())
-future_orchestration = " ".join(future_policy_text.split())
-for phrase in (
-    "approval to start a 30-minute availability monitor also authorizes the creation of exactly one server",
-    "runs every 30 minutes, 24/7, with no fixed stop date",
-    "immediately submits the one authorized create operation",
-    "no separate create approval is required",
-    "There is no separate price ceiling",
-    "current hourly price in advance",
-    "stop and report without creating a server",
-    "prevent overlapping monitor runs",
-    "concurrent creation attempts",
-    "enforce the one-server limit",
-    "Stop the monitor on an authentication failure",
-    "provider error, timeout, inconsistent data, or unknown result",
-    "creation may have succeeded but its result is uncertain",
-    "Do not automatically retry a failed availability request or create operation",
-    "Never delete a server automatically",
-    "manual reconciliation and fresh owner approval before a new attempt",
-    "A successful creation ends the monitor",
-):
-    if phrase not in monitor_policy:
-        raise SystemExit(f"migration monitor policy missing approved behavior: {phrase!r}")
-
-for phrase in (
-    "includes permission to create exactly one server immediately when available",
-    "runs 24/7 with no fixed stop date",
-    "no separate price ceiling or create approval applies",
-    "stops if current offer terms differ",
-    "prevents overlapping monitor runs and concurrent create attempts",
-    "Any availability or creation error stops the workflow",
-    "an uncertain create result requires manual reconciliation",
-):
-    if phrase not in future_orchestration:
-        raise SystemExit(f"migration future orchestration missing approved behavior: {phrase!r}")
-
-for obsolete_rule in (
-    "read-only availability check",
-    "bounded, explicitly approved cadence and duration",
+for obsolete_phrase in (
+    "Hard blocker:",
+    "no GoAsterWeb handoff endpoint",
+    "Approved availability monitor: future policy only",
     "Finding a matching offer is not approval to create it",
     "stop before any separately approved create operation",
 ):
-    if obsolete_rule in monitor_policy or obsolete_rule in future_orchestration:
-        raise SystemExit(f"migration future policy contradicts approved monitor plan: {obsolete_rule!r}")
+    if obsolete_phrase in migration_text:
+        raise SystemExit(f"goaster-migration workflow retained obsolete blocker/policy: {obsolete_phrase!r}")
+
+notes = (root / "docs" / "goaster-migration.md").read_text(encoding="utf-8")
+notes_text = " ".join(notes.split())
+for phrase in (
+    "GoAster-side scope",
+    "local commit `ef8bf6e`",
+    "POST /migration/register",
+    "POST /migration/host-key",
+    "goaster-migration-attempt=<attempt>",
+    "The expiry-only decision is closed",
+    "Remaining live readiness",
+    "No live provider, Redis, Telegram, OpenAI, or production check",
+):
+    if phrase not in notes_text:
+        raise SystemExit(f"migration task notes missing required scope/contract: {phrase!r}")
 
 # Check local Markdown links so renamed skills and stale skill paths fail in
 # the same offline test as the package allowlist.

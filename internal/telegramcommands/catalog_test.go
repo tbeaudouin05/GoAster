@@ -14,6 +14,7 @@ func TestDispatchResolvesPrimaryCommandsAndAliases(t *testing.T) {
 		{text: "/m terra", name: "m"},
 		{text: "/get_env", name: "get_env"},
 		{text: "/get-env", name: "get_env"},
+		{text: "/get_migration", name: "get_migration"},
 	} {
 		command, ok := Dispatch(test.text)
 		if !ok || command.Name != test.name {

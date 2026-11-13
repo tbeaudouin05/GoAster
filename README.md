@@ -46,6 +46,7 @@ administration](skills/background-command-administration/SKILL.md),
 [model administration](skills/model-administration/SKILL.md),
 [read/write temporary files](skills/read-write-temp-files/SKILL.md),
 [project memory](skills/project-memory/SKILL.md),
+[GoAster migration](skills/goaster-migration/SKILL.md),
 [backup and rollback](skills/goaster-backup/SKILL.md),
 [Hetzner automatic server backups](skills/hetzner-auto-backup/SKILL.md),
 [deployment](skills/goaster-deploy/SKILL.md), and
@@ -154,6 +155,8 @@ artifacts with checksums, and Linux temporary-directory requirements. It does
 not deploy or swap the retained binaries.
 
 GoAsterWeb is the initial installer for a new server setup. After installation, GoAster owns subsequent deployments. The repository does not provide service units or a GoAster installer; verify the target host’s actual configuration before deploying. The observed GoAsterWeb layout is documented in [the installation integration notes](docs/goasterweb-installation.md), not as a universal contract.
+
+The GoAster-side migration scope and the remaining live-readiness checks are documented in [the migration handoff notes](docs/goaster-migration.md). The paired GoAsterWeb handoff is implemented locally in a sibling checkout but is not deployed by this repository.
 
 ### Artefact file tools
 

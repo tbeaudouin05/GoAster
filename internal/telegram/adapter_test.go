@@ -770,7 +770,7 @@ func TestPollingReadinessOffsetAndRedactedErrors(t *testing.T) {
 }
 
 func TestTelegramCommandMenuUsesSupportedHelpCommands(t *testing.T) {
-	want := []string{"help", "stop", "start", "pair", "clear", "m", "env", "get_env"}
+	want := []string{"help", "stop", "start", "pair", "clear", "m", "env", "get_env", "get_migration"}
 	if len(telegramBotCommands) != len(want) {
 		t.Fatalf("Telegram command count = %d, want %d", len(telegramBotCommands), len(want))
 	}

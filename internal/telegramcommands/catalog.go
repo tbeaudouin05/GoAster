@@ -8,16 +8,17 @@ import (
 )
 
 const (
-	HelpCommand               = "/help"
-	StopCommand               = "/stop"
-	StartCommand              = "/start"
-	PairCommand               = "/pair"
-	ClearCommand              = "/clear"
-	ModelCommand              = "/m"
-	EnvironmentCommand        = "/env"
-	GetEnvironmentCommand     = "/get_env"
-	GetEnvironmentManualAlias = "/get-env"
-	CommandReferenceToolName  = "telegram_command_reference"
+	HelpCommand                = "/help"
+	StopCommand                = "/stop"
+	StartCommand               = "/start"
+	PairCommand                = "/pair"
+	ClearCommand               = "/clear"
+	ModelCommand               = "/m"
+	EnvironmentCommand         = "/env"
+	GetEnvironmentCommand      = "/get_env"
+	GetEnvironmentManualAlias  = "/get-env"
+	GetMigrationHandoffCommand = "/get_migration"
+	CommandReferenceToolName   = "telegram_command_reference"
 )
 
 // Command describes one supported Telegram slash command. Name is the
@@ -96,10 +97,17 @@ var catalog = []Command{
 		MenuDescription: "Download the saved environment file",
 		Access:          "Paired account only, private chat only. The native menu uses /get_env; the manually typed alias /get-env is also accepted. Either spelling accepts a valid @bot_username suffix.",
 	},
+	{
+		Name:            "get_migration",
+		Usage:           "/get_migration",
+		HelpDescription: "Send the staged migration handoff as a document (paired account, private chat only).",
+		MenuDescription: "Send the staged migration handoff",
+		Access:          "Paired account only, private chat only. The handoff is sent directly as a document, never through the agent; attachments are not accepted.",
+	},
 }
 
 const helpFooter = "Before pairing, /help and bare /start provide guidance in private chats; pairing requires a private chat. After pairing, only the paired account can use the bot, and bare /start or /pair provide readiness guidance in private chats, groups, and supergroups. " +
-	"Telegram topics in the same chat share conversation history and model settings. /env, ACCEPT, and environment file retrieval require a private chat. /env, /get_env, and /get-env accept @bot_username suffixes; use bare /help and /stop."
+	"Telegram topics in the same chat share conversation history and model settings. /env, ACCEPT, environment file retrieval, and migration handoff retrieval require a private chat. /env, /get_env, and /get-env accept @bot_username suffixes; use bare /help and /stop."
 
 // Catalog returns the supported commands in their stable display order.
 func Catalog() []Command {

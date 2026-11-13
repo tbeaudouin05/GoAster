@@ -51,6 +51,12 @@ var DefaultPaths = Paths{
 	UserID:      "/var/lib/goaster-telegram/user-id",
 }
 
+const (
+	defaultMigrationHandoffPath = "/var/lib/goaster-telegram/migration-handoff"
+	migrationHandoffFilename    = "goaster-migration-handoff.txt"
+	migrationHandoffMaxBytes    = 32 * 1024
+)
+
 // SetupInput is the complete SSH stdin payload; no other local settings cross
 // the connection. The hash is useless for guessing the random pairing code.
 type SetupInput struct {
@@ -151,8 +157,15 @@ func writePrivate(path string, data []byte) error {
 }
 
 func readPrivate(path string) ([]byte, error) {
+	return readPrivateBounded(path, 1024)
+}
+
+func readPrivateBounded(path string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("invalid private file limit")
+	}
 	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() > 1024 {
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() < 0 || info.Size() > maxBytes {
 		return nil, fmt.Errorf("invalid private file")
 	}
 	f, err := os.Open(path)
@@ -164,8 +177,8 @@ func readPrivate(path string) ([]byte, error) {
 	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() || opened.Mode().Perm() != 0600 {
 		return nil, fmt.Errorf("private file changed")
 	}
-	data, err := io.ReadAll(io.LimitReader(f, 1025))
-	if err != nil || len(data) > 1024 {
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil || int64(len(data)) > maxBytes {
 		return nil, fmt.Errorf("could not read private file")
 	}
 	return data, nil

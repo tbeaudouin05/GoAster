@@ -1,2 +1,2 @@
 name: goaster-migration
-description: Guide an owner through a manual GoAster move to a preferred Hetzner server without provisioning, automated cutover, or old-server deletion.
+description: Guide a paired owner through a GoAsterWeb-backed Hetzner move using existing shell, cron, environment, and Hetzner skills; data transfer, cutover, and deletion remain manual.
