@@ -35,17 +35,24 @@ type migrationFixture struct {
 	statusCount      atomic.Int32
 	providerKeyCount atomic.Int32
 	createCount      atomic.Int32
+	remoteCount      atomic.Int32
+	registerStatus   int
+	imageOSFlavor    string
+	imageOSVersion   string
 	publicKey        string
+	registeredKey    string
 }
 
 func newMigrationFixture(t *testing.T) *migrationFixture {
 	t.Helper()
 	fixture := &migrationFixture{
-		now:           time.Now().UTC().Truncate(time.Second),
-		available:     true,
-		price:         "0.0100",
-		createStarted: make(chan struct{}),
-		releaseCreate: make(chan struct{}),
+		now:            time.Now().UTC().Truncate(time.Second),
+		available:      true,
+		price:          "0.0100",
+		imageOSFlavor:  "ubuntu",
+		imageOSVersion: "24.04",
+		createStarted:  make(chan struct{}),
+		releaseCreate:  make(chan struct{}),
 	}
 	fixture.server = httptest.NewServer(http.HandlerFunc(fixture.handle))
 	t.Cleanup(fixture.server.Close)
@@ -80,6 +87,7 @@ func newMigrationFixture(t *testing.T) *migrationFixture {
 }
 
 func (fixture *migrationFixture) handle(w http.ResponseWriter, r *http.Request) {
+	fixture.remoteCount.Add(1)
 	w.Header().Set("Content-Type", "application/json")
 	switch r.URL.Path {
 	case "/v1/server_types/22":
@@ -99,7 +107,7 @@ func (fixture *migrationFixture) handle(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		writeFixtureJSON(w, map[string]any{"image": map[string]any{
-			"id": 123, "name": "ubuntu-24.04", "status": "available", "type": "system", "architecture": "x86", "deprecated": nil, "deleted": nil,
+			"id": 123, "name": "ubuntu-24.04", "os_flavor": fixture.imageOSFlavor, "os_version": fixture.imageOSVersion, "status": "available", "type": "system", "architecture": "x86", "deprecated": nil, "deleted": nil,
 		}})
 	case "/migration/register":
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
@@ -113,7 +121,12 @@ func (fixture *migrationFixture) handle(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		fixture.publicKey = input.LoginPublicKey
+		if fixture.registerStatus != 0 {
+			http.Error(w, "registration unavailable", fixture.registerStatus)
+			return
+		}
+		fixture.registeredKey = input.LoginPublicKey
+		fixture.publicKey = strings.TrimSuffix(input.LoginPublicKey, "\n")
 		fixture.registerCount.Add(1)
 		attempt := strings.Repeat("a", 64)
 		callback := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("c", 32)))
@@ -228,6 +241,9 @@ func TestMigrationCreatesOnceAcrossRestart(t *testing.T) {
 	if fixture.registerCount.Load() != 1 || fixture.providerKeyCount.Load() != 1 || fixture.createCount.Load() != 1 {
 		t.Fatalf("mutation counts register=%d key=%d create=%d", fixture.registerCount.Load(), fixture.providerKeyCount.Load(), fixture.createCount.Load())
 	}
+	if fixture.registeredKey == "" || strings.HasSuffix(fixture.registeredKey, "\n") || fixture.publicKey != strings.TrimSuffix(fixture.registeredKey, "\n") {
+		t.Fatalf("web key contract was not canonical and newline-free: submitted=%q stored=%q", fixture.registeredKey, fixture.publicKey)
+	}
 	second, err := Execute(t.Context(), fixture.request, fixture.options)
 	if err != nil || second.Status != statusCreated || second.ServerID != first.ServerID {
 		t.Fatalf("restart Execute() = %#v, %v", second, err)
@@ -242,6 +258,97 @@ func TestMigrationCreatesOnceAcrossRestart(t *testing.T) {
 	stateInfo, err := os.Stat(fixture.options.Paths.State)
 	if err != nil || stateInfo.Mode().Perm() != 0600 {
 		t.Fatalf("state file mode = %v, %v", stateInfo, err)
+	}
+}
+
+func TestMigrationStateStageOrphanIsCleanedOnStartupAndExpiry(t *testing.T) {
+	fixture := newMigrationFixture(t)
+	if err := ensureRuntimeParents(fixture.options.Paths); err != nil {
+		t.Fatal(err)
+	}
+	stagePath := stateStagingPath(fixture.options.Paths.State)
+	if _, err := protectedfile.WriteExclusive(stagePath, []byte("interrupted private state")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.releaseCreate = make(chan struct{})
+	close(fixture.releaseCreate)
+	if result, err := Execute(t.Context(), fixture.request, fixture.options); err != nil || result.Status != statusCreated {
+		t.Fatalf("startup cleanup Execute() = %#v, %v", result, err)
+	}
+	if _, err := os.Stat(stagePath); !os.IsNotExist(err) {
+		t.Fatalf("startup left state staging orphan: %v", err)
+	}
+	state, exists, err := loadState(fixture.options.Paths.State)
+	if err != nil || !exists {
+		t.Fatalf("load state = %#v, %v, exists=%v", state, err, exists)
+	}
+	state.Expires = fixture.now.Add(-time.Second).Unix()
+	if err := saveState(fixture.options.Paths.State, state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := protectedfile.WriteExclusive(stagePath, []byte("expired interrupted private state")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CleanupExpired(fixture.options.Paths, func() time.Time { return fixture.now }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stagePath); !os.IsNotExist(err) {
+		t.Fatalf("expiry left state staging orphan: %v", err)
+	}
+}
+
+func TestMigrationNoGrantTerminalStateClearsUnusedPrivateKey(t *testing.T) {
+	fixture := newMigrationFixture(t)
+	fixture.registerStatus = http.StatusServiceUnavailable
+	result, err := Execute(t.Context(), fixture.request, fixture.options)
+	if err != nil || result.Status != statusTerminal || !result.StopCron {
+		t.Fatalf("registration failure result = %#v, %v", result, err)
+	}
+	if fixture.providerKeyCount.Load() != 0 || fixture.createCount.Load() != 0 {
+		t.Fatalf("registration failure performed later mutations: key=%d create=%d", fixture.providerKeyCount.Load(), fixture.createCount.Load())
+	}
+	state, exists, err := loadState(fixture.options.Paths.State)
+	if err != nil || !exists || state.Status != statusTerminal || state.Expires != 0 || state.Attempt != "" || state.PrivateKey != "" {
+		t.Fatalf("no-grant terminal state retained private material: %#v, %v, exists=%v", state, err, exists)
+	}
+	data, err := os.ReadFile(fixture.options.Paths.State)
+	if err != nil || bytes.Contains(data, []byte("BEGIN PRIVATE KEY")) {
+		t.Fatalf("no-grant terminal state file retained private key: %q, %v", data, err)
+	}
+}
+
+func TestMigrationRejectsIncompatibleTargetBeforeRemoteMutation(t *testing.T) {
+	cases := map[string]func(*Target){
+		"non Ubuntu image":         func(target *Target) { target.ImageName = "debian-12" },
+		"unsupported architecture": func(target *Target) { target.Architecture = "riscv64" },
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newMigrationFixture(t)
+			change(&fixture.request.Target)
+			if _, err := Execute(t.Context(), fixture.request, fixture.options); err == nil {
+				t.Fatal("incompatible target was accepted")
+			}
+			if fixture.remoteCount.Load() != 0 || fixture.registerCount.Load() != 0 || fixture.providerKeyCount.Load() != 0 || fixture.createCount.Load() != 0 {
+				t.Fatalf("incompatible target caused remote activity: requests=%d register=%d key=%d create=%d", fixture.remoteCount.Load(), fixture.registerCount.Load(), fixture.providerKeyCount.Load(), fixture.createCount.Load())
+			}
+			if _, err := os.Stat(fixture.options.Paths.State); !os.IsNotExist(err) {
+				t.Fatalf("incompatible target mutated local state: %v", err)
+			}
+		})
+	}
+}
+
+func TestMigrationRejectsProviderImageIncompatibleBeforeMutations(t *testing.T) {
+	fixture := newMigrationFixture(t)
+	fixture.imageOSFlavor = "debian"
+	fixture.imageOSVersion = "12"
+	result, err := Execute(t.Context(), fixture.request, fixture.options)
+	if err != nil || result.Status != statusTerminal {
+		t.Fatalf("provider image compatibility result = %#v, %v", result, err)
+	}
+	if fixture.registerCount.Load() != 0 || fixture.providerKeyCount.Load() != 0 || fixture.createCount.Load() != 0 {
+		t.Fatalf("provider image mismatch caused mutation: register=%d key=%d create=%d", fixture.registerCount.Load(), fixture.providerKeyCount.Load(), fixture.createCount.Load())
 	}
 }
 

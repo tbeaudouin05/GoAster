@@ -42,8 +42,12 @@ const (
 	webResponseMaxBytes       = 32 * 1024
 	providerMutationTimeout   = 15 * time.Second
 	migrationGrantLifetime    = 7 * 24 * time.Hour
+	stateStagingSuffix        = ".staging"
 	handoffStagingSuffix      = ".staging"
 	providerTokenEnvMax       = 128
+	migrationImageName        = "ubuntu-24.04"
+	migrationArchitectureX86  = "x86"
+	migrationArchitectureArm  = "arm"
 	statusMonitoring          = "monitoring"
 	statusWebRegistering      = "web_registering"
 	statusRegistered          = "registered"
@@ -259,6 +263,9 @@ func Execute(ctx context.Context, request Request, options Options) (Result, err
 		return Result{}, errStateUnavailable
 	}
 	defer lock.Close()
+	if err := cleanupStateStaging(options.Paths.State); err != nil {
+		return Result{}, errStateUnavailable
+	}
 
 	now := options.Now().UTC()
 	state, exists, err := loadState(options.Paths.State)
@@ -287,6 +294,13 @@ func Execute(ctx context.Context, request Request, options Options) (Result, err
 		return expireState(options.Paths.State, options.Paths.Handoff, state, base)
 	}
 	if state.Status == statusTerminal {
+		var changed bool
+		state, changed = clearNoGrantPrivateKey(state)
+		if changed {
+			if err := saveState(options.Paths.State, state); err != nil {
+				return Result{}, errStateUnavailable
+			}
+		}
 		base.Status, base.StopCron = statusTerminal, true
 		return base, nil
 	}
@@ -538,6 +552,8 @@ type providerImage struct {
 	Status       string          `json:"status"`
 	Type         string          `json:"type"`
 	Name         string          `json:"name"`
+	OSFlavor     string          `json:"os_flavor"`
+	OSVersion    string          `json:"os_version"`
 	Architecture string          `json:"architecture"`
 	Deprecated   json.RawMessage `json:"deprecated"`
 	Deleted      json.RawMessage `json:"deleted"`
@@ -633,6 +649,9 @@ func executeCleanup(options Options, jobID string) (Result, error) {
 		return Result{}, errStateUnavailable
 	}
 	defer lock.Close()
+	if err := cleanupStateStaging(options.Paths.State); err != nil {
+		return Result{}, errStateUnavailable
+	}
 	state, exists, err := loadState(options.Paths.State)
 	if err != nil {
 		return Result{}, errStateUnavailable
@@ -642,6 +661,13 @@ func executeCleanup(options Options, jobID string) (Result, error) {
 	}
 	if state.JobID != jobID {
 		return Result{}, errInvalidInput
+	}
+	var changed bool
+	state, changed = clearNoGrantPrivateKey(state)
+	if changed {
+		if err := saveState(options.Paths.State, state); err != nil {
+			return Result{}, errStateUnavailable
+		}
 	}
 	base := Result{JobID: state.JobID, Status: state.Status, Attempt: state.Attempt, ServerID: state.ServerID}
 	if state.Expires > 0 && options.Now().UTC().Unix() >= state.Expires {
@@ -654,7 +680,7 @@ func executeCleanup(options Options, jobID string) (Result, error) {
 }
 
 func validateTarget(target Target) error {
-	if target.ServerTypeID <= 0 || !safeIdentifier(target.ServerTypeName, 128) || !safeIdentifier(target.Architecture, 32) || target.ImageID <= 0 || !safeIdentifier(target.ImageName, 256) || len(target.Locations) == 0 || !target.EnableIPv4 {
+	if target.ServerTypeID <= 0 || !safeIdentifier(target.ServerTypeName, 128) || !supportedMigrationArchitecture(target.Architecture) || target.ImageID <= 0 || target.ImageName != migrationImageName || len(target.Locations) == 0 || !target.EnableIPv4 {
 		return errInvalidInput
 	}
 	seenLocations := make(map[int64]bool, len(target.Locations))
@@ -672,6 +698,10 @@ func validateTarget(target Target) error {
 		seenNetworks[networkID] = true
 	}
 	return nil
+}
+
+func supportedMigrationArchitecture(value string) bool {
+	return value == migrationArchitectureX86 || value == migrationArchitectureArm
 }
 
 func safeIdentifier(value string, max int) bool {
@@ -864,35 +894,72 @@ func saveState(path string, state migrationState) error {
 		return errStateUnavailable
 	}
 	defer clear(data)
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".goaster-migration-state-*")
+	if err := cleanupStateStaging(path); err != nil {
+		return errStateUnavailable
+	}
+	stagePath := stateStagingPath(path)
+	identity, err := protectedfile.WriteExclusive(stagePath, data)
 	if err != nil {
 		return errStateUnavailable
 	}
-	temporaryPath := temporary.Name()
-	ok := false
+	staged := true
 	defer func() {
-		temporary.Close()
-		if !ok {
-			os.Remove(temporaryPath)
+		if staged {
+			_ = protectedfile.RemoveIfSame(stagePath, identity)
 		}
 	}()
-	if err := temporary.Chmod(0600); err != nil {
+	content, err := protectedfile.Read(stagePath, stateMaxBytes)
+	if err != nil || content.Identity != identity {
+		clear(content.Data)
 		return errStateUnavailable
 	}
-	if _, err := temporary.Write(data); err != nil || temporary.Sync() != nil || temporary.Close() != nil {
+	clear(content.Data)
+	if err := validStateDestination(path); err != nil {
 		return errStateUnavailable
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := os.Rename(stagePath, path); err != nil {
 		return errStateUnavailable
 	}
+	staged = false
 	if err := syncDirectoryPath(filepath.Dir(path)); err != nil {
 		return errStateUnavailable
 	}
-	ok = true
 	return nil
 }
 
 var syncDirectoryPath = filesync.DirectoryPath
+
+func stateStagingPath(path string) string { return path + stateStagingSuffix }
+
+func cleanupStateStaging(path string) error {
+	stagePath := stateStagingPath(path)
+	content, err := protectedfile.Read(stagePath, stateMaxBytes)
+	if err != nil {
+		if _, statErr := os.Lstat(stagePath); errors.Is(statErr, os.ErrNotExist) {
+			return nil
+		}
+		return errStateUnavailable
+	}
+	clear(content.Data)
+	if err := protectedfile.RemoveIfSame(stagePath, content.Identity); err != nil {
+		return errStateUnavailable
+	}
+	return nil
+}
+
+func validStateDestination(path string) error {
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return errStateUnavailable
+	}
+	content, err := protectedfile.Read(path, stateMaxBytes)
+	if err != nil {
+		return errStateUnavailable
+	}
+	clear(content.Data)
+	return nil
+}
 
 func handoffStagePath(path string) string { return path + handoffStagingSuffix }
 
@@ -964,9 +1031,24 @@ func publishStagedFile(stagePath, handoffPath string) error {
 	return nil
 }
 
+func clearSecret(value string) string {
+	data := []byte(value)
+	clear(data)
+	return ""
+}
+
+func clearNoGrantPrivateKey(state migrationState) (migrationState, bool) {
+	if state.PrivateKey == "" || state.Attempt != "" && state.Expires > 0 {
+		return state, false
+	}
+	state.PrivateKey = clearSecret(state.PrivateKey)
+	return state, true
+}
+
 func markTerminal(path string, state migrationState, reason string) error {
 	state.Status = statusTerminal
 	state.TerminalReason = "operation_failed"
+	state, _ = clearNoGrantPrivateKey(state)
 	return saveState(path, state)
 }
 
@@ -986,6 +1068,7 @@ func safeReason(errorValue error) string {
 }
 
 func (m monitorMachine) terminalResult(state migrationState, base Result, reason error) Result {
+	state, _ = clearNoGrantPrivateKey(state)
 	state.Status = statusTerminal
 	state.TerminalReason = safeReason(reason)
 	_ = saveState(m.options.Paths.State, state)
@@ -999,6 +1082,7 @@ func (m monitorMachine) currentUnix() int64 {
 }
 
 func machineTerminal(options Options, state migrationState, base Result, reason error) Result {
+	state, _ = clearNoGrantPrivateKey(state)
 	state.Status = statusTerminal
 	state.TerminalReason = safeReason(reason)
 	_ = saveState(options.Paths.State, state)
@@ -1008,25 +1092,25 @@ func machineTerminal(options Options, state migrationState, base Result, reason 
 }
 
 func expireState(statePath, handoffPath string, state migrationState, base Result) (Result, error) {
-	cleanupErr := error(nil)
+	cleanupErr := cleanupStateStaging(statePath)
 	if state.HandoffIdentity != (protectedfile.Identity{}) {
 		if state.HandoffReady {
-			cleanupErr = protectedfile.RemoveIfSame(handoffPath, state.HandoffIdentity)
+			cleanupErr = errors.Join(cleanupErr, protectedfile.RemoveIfSame(handoffPath, state.HandoffIdentity))
 		} else {
 			stageErr := protectedfile.RemoveIfSame(handoffStagePath(handoffPath), state.HandoffIdentity)
 			finalErr := protectedfile.RemoveIfSame(handoffPath, state.HandoffIdentity)
-			cleanupErr = errors.Join(stageErr, finalErr)
+			cleanupErr = errors.Join(cleanupErr, stageErr, finalErr)
 		}
 		if cleanupErr == nil {
 			state.HandoffReady = false
 			state.HandoffIdentity = protectedfile.Identity{}
 		}
 	} else {
-		cleanupErr = protectedfile.RemoveUnpublished(handoffStagePath(handoffPath))
+		cleanupErr = errors.Join(cleanupErr, protectedfile.RemoveUnpublished(handoffStagePath(handoffPath)))
 	}
-	state.CallbackSecret = ""
-	state.OwnerSecret = ""
-	state.PrivateKey = ""
+	state.CallbackSecret = clearSecret(state.CallbackSecret)
+	state.OwnerSecret = clearSecret(state.OwnerSecret)
+	state.PrivateKey = clearSecret(state.PrivateKey)
 	state.Status = statusTerminal
 	if cleanupErr != nil {
 		state.TerminalReason = "cleanup_failed"
@@ -1044,10 +1128,16 @@ func expireState(statePath, handoffPath string, state migrationState, base Resul
 // no migration state exists, so Telegram startup does not depend on migration
 // setup. A busy lock is a normal tick miss; callers may try on the next tick.
 func CleanupExpired(paths Paths, now func() time.Time) error {
-	if _, err := os.Lstat(paths.State); errors.Is(err, os.ErrNotExist) {
+	found := false
+	for _, path := range []string{paths.State, stateStagingPath(paths.State)} {
+		if _, err := os.Lstat(path); err == nil {
+			found = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return errStateUnavailable
+		}
+	}
+	if !found {
 		return nil
-	} else if err != nil {
-		return errStateUnavailable
 	}
 	lock, err := acquireLock(paths.Lock)
 	if err != nil {
@@ -1057,11 +1147,24 @@ func CleanupExpired(paths Paths, now func() time.Time) error {
 		return errStateUnavailable
 	}
 	defer lock.Close()
+	if err := cleanupStateStaging(paths.State); err != nil {
+		return errStateUnavailable
+	}
 	state, exists, err := loadState(paths.State)
 	if err != nil {
 		return errStateUnavailable
 	}
-	if !exists || state.Expires <= 0 || currentTime(now).Unix() < state.Expires {
+	if !exists {
+		return nil
+	}
+	var changed bool
+	state, changed = clearNoGrantPrivateKey(state)
+	if changed {
+		if err := saveState(paths.State, state); err != nil {
+			return errStateUnavailable
+		}
+	}
+	if state.Expires <= 0 || currentTime(now).Unix() < state.Expires {
 		return nil
 	}
 	_, err = expireState(paths.State, paths.Handoff, state, Result{JobID: state.JobID, Status: state.Status})
@@ -1084,6 +1187,9 @@ func DeliverHandoff(ctx context.Context, paths Paths, now func() time.Time, send
 		return errors.New("migration handoff unavailable")
 	}
 	defer lock.Close()
+	if err := cleanupStateStaging(paths.State); err != nil {
+		return errors.New("migration handoff unavailable")
+	}
 	state, exists, err := loadState(paths.State)
 	if err != nil || !exists || state.Expires <= 0 {
 		return errors.New("migration handoff unavailable")
@@ -1175,7 +1281,7 @@ func generateLoginKey() (string, string, error) {
 	position := 4 + len("ssh-ed25519")
 	binary.BigEndian.PutUint32(wire[position:position+4], uint32(len(public)))
 	copy(wire[position+4:], public)
-	publicKey := "ssh-ed25519 " + base64.StdEncoding.EncodeToString(wire) + "\n"
+	publicKey := "ssh-ed25519 " + base64.StdEncoding.EncodeToString(wire)
 	return publicKey, string(privatePEM), nil
 }
 
@@ -1288,7 +1394,7 @@ func (m monitorMachine) checkAvailability(ctx context.Context, target Target) (p
 				return providerAvailability{}, false, errRemoteMalformed
 			}
 			image := imageResponse.Image
-			if image.ID != target.ImageID || image.Name != target.ImageName || image.Status != "available" || image.Type != "system" || image.Architecture != target.Architecture || present(image.Deprecated) || present(image.Deleted) {
+			if image.ID != target.ImageID || image.Name != target.ImageName || image.OSFlavor != "ubuntu" || image.OSVersion != "24.04" || image.Status != "available" || image.Type != "system" || image.Architecture != target.Architecture || !supportedMigrationArchitecture(image.Architecture) || present(image.Deprecated) || present(image.Deleted) {
 				return providerAvailability{}, false, errTargetChanged
 			}
 			return providerAvailability{LocationID: approved.ID, LocationName: approved.Name}, true, nil

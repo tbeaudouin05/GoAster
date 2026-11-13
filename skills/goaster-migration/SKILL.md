@@ -76,16 +76,23 @@ at the same time; the owner decides when to stop the old consumer.
 
 ### 3. Choose and approve one current target
 
-Use a current, authenticated Hetzner read-only lookup. A CX or CAX target with
-4 GB RAM is a reasonable baseline; 8 GB gives more headroom. These are examples,
-not hardcoded product or architecture requirements. Verify the current offer's
-architecture, image, network, hourly price, and availability. Use all eligible
-locations by default unless the owner specifies a narrower preference.
+Use a current, authenticated Hetzner read-only lookup. Before asking the owner
+to approve a target, require the paired installer's destination constraints:
+the image must be official Ubuntu 24.04 (`image_name` `ubuntu-24.04`) and the
+provider architecture must be `x86` (destination `x86_64`) or `arm`
+(destination `aarch64`). Reject every other OS, version, or architecture before
+any remote mutation. A CX or CAX target with 4 GB RAM is a reasonable baseline;
+8 GB gives more headroom, but size/type is flexible rather than a fixed
+allowlist. Verify the current offer's network, hourly price, and availability.
+Use all eligible locations by default unless the owner specifies a narrower
+preference; price and location remain approval-time terms, not hardcoded
+constraints.
 
-The owner approves the exact server type, architecture, image, network, all
-eligible locations, current hourly price, and expected overlap cost. Approval
-to start the monitor also approves exactly one create operation at those terms:
-there is no second create prompt and no separate price ceiling.
+The owner approves the exact currently available server type, supported
+architecture, Ubuntu 24.04 image, network, eligible locations, current hourly
+price, and expected overlap cost. Approval to start the monitor also approves
+exactly one create operation at those terms: there is no second create prompt
+and no separate price ceiling.
 
 ### 4. Run the narrow durable migration helper
 
@@ -311,9 +318,12 @@ primary schema evidence for the create request is the upstream
 source: `location` is the approved location name string, not a numeric ID
 encoded as a string. `GET /server_types/{id}` returns server-type locations
 with separate `id`, `name`, `available`, and `deprecation` fields plus
-per-location `price_hourly.gross` entries. `GET /images/{id}` must
-return the approved available, non-deprecated system image and architecture;
-and configured `GET /networks/{id}` reads must succeed before mutation. After
+per-location `price_hourly.gross` entries. `GET /images/{id}` must return the
+approved available, non-deprecated system image, `os_flavor: "ubuntu"`,
+`os_version: "24.04"`, and one of the supported architectures; the helper
+rejects incompatible target terms before remote calls and rechecks provider
+metadata before mutation. Configured `GET /networks/{id}` reads must succeed
+before mutation. After
 the match, it makes one `POST /ssh_keys` with the canonical public key and
 `goaster-migration-attempt=<attempt>` label, then one `POST /servers` with the
 numeric server type/image IDs, the selected approved location name, the SSH-key
@@ -336,6 +346,8 @@ Stop immediately and keep the old host unchanged when any of these occur:
   database is unavailable, expired, conflicted, or returns an invalid state.
 - The offer differs from the approved type, architecture, location, image,
   network, or price.
+- The target is not Ubuntu 24.04 on provider `x86`/`arm` (destination
+  `x86_64`/`aarch64`); this is rejected before provider mutation.
 - Registration, callback, provider creation, or any response times out or
   returns an error. Do not retry a billable or ambiguous mutation.
 - The exact server name, migration label, token-scoped project, server ID,
@@ -374,6 +386,7 @@ Before any live workflow, confirm all of the following in the owning systems:
    current target terms, approved one create, and prepared a private manual
    reconciliation plan for every timeout or error.
 
-This preflight is a live-readiness gate, not a permanent architecture blocker:
-current target availability and architecture are checked from authoritative
-provider data at the time of approval.
+This preflight is a live-readiness gate, not a permanent architecture blocker
+for the supported provider choices. The Ubuntu/architecture compatibility
+constraints above are enforced locally and against authoritative provider data;
+they do not fix the server size, price, or location choice.

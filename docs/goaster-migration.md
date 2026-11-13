@@ -13,9 +13,10 @@ not as evidence that a production origin exists.
 
 - `skills/goaster-migration` gives the owner-approved flow and invokes the
   root-only `goaster-telegram migration` secret-aware launcher: read-only old-host inventory,
-  a new BotFather bot, a verified current CX/CAX target such as 4 GB or 8 GB,
-  all eligible locations by default, one approved 30-minute monitor, exactly
-  one create, and manual reconciliation on every error or timeout.
+  a new BotFather bot, a verified current Ubuntu 24.04 target on provider `x86`
+  or `arm` (destination `x86_64` or `aarch64`), a flexible current server size
+  and location choice, one approved 30-minute monitor, exactly one create, and
+  manual reconciliation on every error or timeout.
 - The helper remains read-only until the exact approved target matches. It then
   generates a fresh Ed25519 login key, registers the web grant and provider
   SSH key, and persists the exact returned server name and migration label.
@@ -140,9 +141,11 @@ Before an owner approves a live run, the operator still needs to verify:
 3. The deployed web worker's immutable GoAster revision and destination
    preflight are identified. This repository does not provide a universal
    installer or service layout.
-4. Current Hetzner availability, architecture, image, network, locations, and
-   price are checked at approval time. The owner has approved one create at
-   those exact terms, with no second prompt or separate price ceiling.
+4. Current Hetzner availability, supported provider architecture (`x86` or
+   `arm`), official Ubuntu 24.04 image, network, locations, and price are
+   checked at approval time. The owner has approved one create at those exact
+   terms; server size, price, and location are flexible guidance choices, with
+   no second prompt or separate price ceiling.
 5. The new BotFather bot exists and is distinct from the old bot. The owner has
    a private browser/Telegram channel and a manual plan for any uncertain
    provider result; no automatic retry or deletion is allowed.
