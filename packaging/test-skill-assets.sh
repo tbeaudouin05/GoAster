@@ -73,68 +73,49 @@ for phrase in (
 migration = (root / "skills" / "goaster-migration" / "SKILL.md").read_text(encoding="utf-8")
 migration_text = " ".join(migration.split())
 for phrase in (
-    "pure skill workflow",
-    "existing `shell_execute`, `cron`, and authenticated Hetzner/provider tools",
-    "no migration executable",
+    "registered `goaster_migration` tool",
+    "`quote`",
+    "`start`",
+    "`status`",
+    "`stop`",
+    "`repair_delivery`",
     "callback-only cloud-init",
-    "securely record the private SSH key (login key) and provider server ID",
-    "does not install, build, configure, start, deploy, or transfer GoAster",
-    "destination SSH",
-    "informed approval",
-    "exactly one create",
     "no second create prompt",
-    "every 30 minutes, 24/7",
-    "goaster-migration-<first 16 lowercase hex characters of attempt>",
-    "goaster-migration-attempt=<attempt>",
-    "/migration/register",
-    "callback authorization only",
-    "not host handoff recording",
-    "/migration/host-key",
-    "records this host-key handoff in Redis",
-    "absolute maximum of seven days",
-    "There is no cancellation route",
-    "unsafe-status escape",
-    "automatic recovery",
+    "30-minute monitor",
+    "private user",
+    "manual repair",
+    "HCLOUD_TOKEN",
+    "no Telegram command",
+    "no callback polling",
+    "Never retry a",
+    "GoAsterWeb setup",
+    "fixed GoAsterWeb origin",
+    "correct provider token and project",
+    "Hetzner project",
+    "one-create",
+    "protected bounded handoff",
     "distinct new BotFather bot",
-    "Never copy or reuse the old bot token",
-    "old and new agents may coexist",
-    "fragment-only URL",
-    "exact local envelope",
-    "at most 32 KiB",
-    "owner manually removes the file after delivery or abandonment",
-    "inline Python",
-    "without following symlinks",
-    "duplicate or extra JSON fields",
-    "locally paired user ID",
-    "does not wait for or claim to observe the later guest callback",
-    "no new callback polling",
-    "Do not add a command, tool, script, or runtime helper",
-    "Never blindly repeat a create",
-    "manually identify the unwanted new server",
-    "manually delete it if appropriate",
-    "start over with a new attempt",
-    "Do not invent a helper",
 ):
     if phrase not in migration_text:
         raise SystemExit(f"goaster-migration workflow missing required guidance: {phrase!r}")
 
 for obsolete_phrase in (
-    "goaster-telegram migration",
+    "pure skill workflow",
+    "shell_execute",
     "RunLauncher",
     "RunCommand",
-    "migration helper",
-    "migration monitor implementation",
+    "inline Python",
     "/get_migration",
 ):
     if obsolete_phrase in migration_text:
         raise SystemExit(f"goaster-migration workflow retained obsolete blocker/policy: {obsolete_phrase!r}")
 
-if (root / "internal" / "migration").exists():
-    raise SystemExit("removed internal/migration provisioning package is still present")
+if not (root / "internal" / "migration").is_dir():
+    raise SystemExit("dedicated internal/migration package is missing")
 main_source = (root / "cmd" / "goaster-telegram" / "main.go").read_text(encoding="utf-8")
-for forbidden in ("goaster-telegram migration", "RunLauncher", "internal/migration"):
+for forbidden in ("goaster-telegram migration", "RunLauncher", "RunCommand", "/get_migration", "internal/migration"):
     if forbidden in main_source:
-        raise SystemExit(f"goaster-telegram retained removed migration CLI reference: {forbidden!r}")
+        raise SystemExit(f"goaster-telegram retained migration command/CLI reference: {forbidden!r}")
 
 installed_migration = (installed_root / "skills" / "goaster-migration" / "SKILL.md").read_text(encoding="utf-8")
 for forbidden in ("GoAsterWeb/", "../../docs/", "../docs/", "migration-handoff-20261112"):
@@ -144,31 +125,25 @@ for forbidden in ("GoAsterWeb/", "../../docs/", "../docs/", "migration-handoff-2
 notes = (root / "docs" / "goaster-migration.md").read_text(encoding="utf-8")
 notes_text = " ".join(notes.split())
 for phrase in (
-    "pure skill",
-    "GoAster-side responsibility",
-    "exactly one explicitly approved Hetzner server",
+    "in-process migration tool",
+    "`goaster_migration`",
+    "every 1800 seconds",
     "POST /migration/register",
-    "callback authorization, not host handoff recording",
     "POST /migration/host-key",
-    "goaster-migration-attempt=<attempt>",
-    "records this host-key handoff in Redis",
-    "expiry-only with a maximum of seven days",
+    "110%",
+    "primary-IP",
+    "delivery_pending",
+    "repair_delivery",
+    "manual-reconciliation terminal",
+    "no automatic expiry-cleanup job",
+    "no second create prompt",
+    "Do not ask for or verify the Hetzner project",
+    "no Telegram command",
     "distinct new BotFather bot",
-    "Do not copy or reuse the old bot token",
-    "old and new agents may coexist",
-    "exactly this JSON envelope shape",
-    "bounded to 32 KiB",
-    "owner manually removes it after delivery",
-    "inline Python",
-    "locally paired user",
-    "The GoAster runtime does not read or send this file",
-    "without weakening permissions",
-    "no new callback polling",
-    "There is no cancellation route",
-    "30-minute, 24/7 monitor",
-    "Never blindly repeat a create",
-    "manually deletes the unwanted server",
-    "No live provider request",
+    "locally paired",
+    "No automatic resend",
+    "automatic recovery",
+    "synthetic/local test seams",
 ):
     if phrase not in notes_text:
         raise SystemExit(f"migration task notes missing required scope/contract: {phrase!r}")
@@ -176,15 +151,10 @@ for phrase in (
 canonical_origin = "https://goasterweb-thomas.fly.dev"
 canonical_service_url = canonical_origin + "/"
 public_service_policy = (
-    f"canonical origin is `{canonical_origin}` with no trailing slash",
-    f"service URL is `{canonical_service_url}` with a trailing slash",
-    "Resolve every GoAsterWeb `/migration/...` endpoint against this canonical service",
-    "Never ask whether GoAsterWeb has been deployed or request its public HTTPS address.",
-    "Do not add a readiness question or reachability preflight.",
-    "Assume the public service is available on the normal path",
-    "if an actual HTTPS request fails, stop and report a safe failure.",
-    "Preserve TLS verification",
-    "never blindly retry a request whose outcome is uncertain.",
+    f"`{canonical_origin}`",
+    "Do not ask for another origin",
+    "Do not ask for or verify the Hetzner project",
+    "Never retry a possibly completed create",
 )
 for label, content in (("skill", migration), ("notes", notes)):
     normalized = " ".join(content.split())
@@ -194,20 +164,14 @@ for label, content in (("skill", migration), ("notes", notes)):
     for forbidden in (
         "${GOASTERWEB_ORIGIN}",
         "https://<origin>/migration",
-        "Do you have a deployed GoAsterWeb service?",
         "What is the public HTTPS address of your deployed GoAsterWeb service?",
     ):
         if forbidden in content:
             raise SystemExit(f"migration {label} retained an origin question/placeholder: {forbidden!r}")
 
 callback_url = "https://goasterweb-thomas.fly.dev/migration/host-key"
-if f'url = "{callback_url}"' not in migration:
-    raise SystemExit("goaster-migration callback does not use the canonical HTTPS service")
 if callback_url not in notes:
     raise SystemExit("migration notes callback does not use the canonical HTTPS service")
-owner_url_prefix = "https://goasterweb-thomas.fly.dev/migration#attempt="
-if owner_url_prefix not in migration or owner_url_prefix not in notes:
-    raise SystemExit("migration owner URL does not use the canonical HTTPS service")
 
 # Check local Markdown links so renamed skills and stale skill paths fail in
 # the same offline test as the package allowlist.

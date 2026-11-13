@@ -1,220 +1,167 @@
-# GoAster migration provisioning notes
+# GoAster migration tool
 
-This repository now provides migration guidance as a pure skill. It has no
-special provisioning CLI, migration monitor implementation, provisioning
-service, replacement script, or runtime helper. No live provider request,
-GoAsterWeb request, Redis access, deployment, SSH connection, or credential
-access was performed for this change.
+This repository contains a small, in-process migration tool for the installed
+root `goaster-agent`. It prepares one new Hetzner Cloud server for the
+existing GoAsterWeb handoff. It does not install GoAster, use SSH, copy data,
+change the old host, deploy GoAsterWeb, or add a Telegram command.
 
-## GoAster-side responsibility
+The model-facing tool is `goaster_migration`. Its actions are `quote`,
+`start`, `status`, `stop`, and the explicit/manual `repair_delivery` action.
+The tool accepts only plain target terms and a stable job ID. It never accepts
+a provider token, bot token, private key, owner URL, callback secret, or chat
+ID. `HCLOUD_TOKEN` is loaded internally from the existing localenv store or
+the process environment.
 
-The `goaster-migration` skill is a pure workflow using existing shell, cron,
-environment, and authenticated Hetzner/provider tools. Before mutation it
-verifies protected delivery prerequisites, and after explicit approval it can:
+## Runtime shape
 
-1. Inspect the current project and exact target terms read-only.
-2. Obtain pre-create callback authorization, register one fresh provider SSH
-   key, and create exactly one explicitly approved Hetzner server.
-3. Submit callback-only cloud-init and securely record the private login key
-   and returned provider server ID in protected mode-0600 paths.
-4. End the exact 30-minute, 24/7 create monitor on a confirmed server create or
-   a create failure/uncertain create result. The monitor does not wait for or
-   claim to observe the later guest callback.
+The agent registers the tool during `goaster-agent serve` and starts a
+migration-owned persisted scheduler at:
 
-It does not install, build, configure, start, or deploy GoAster; use
-destination SSH; transfer data; cut over identities; stop the old host; or
-delete either server. GoAsterWeb owns destination installation, setup, exact
-provider binding, and the later GoAster start. GoAsterWeb was not modified.
+```text
+<GoAster artefacts root>/state/migration-monitor/jobs.json
+```
 
-## Fixed public GoAsterWeb service
+Each approved monitor is one exact `every 1800 seconds` job. Its saved
+message contains only the safe migration job ID. The normal generic cron tool
+does not own this monitor. Start, status, stop, and delivery repair require
+the installed root runtime; a non-root agent returns an explicit unavailable
+result without attempting `sudo` or deployment changes. If the scheduler,
+protected Telegram delivery, or provider credential capability is unavailable,
+`start` fails before any cloud mutation. Unrelated agent startup continues if
+the optional migration scheduler cannot initialize.
 
-GoAsterWeb is an existing public website available to everyone. Its canonical
-origin is `https://goasterweb-thomas.fly.dev` with no trailing slash; its
-service URL is `https://goasterweb-thomas.fly.dev/` with a trailing slash.
-Resolve every GoAsterWeb `/migration/...` endpoint against this canonical
-service, including registration, host-key callback, status, and owner-page
-routes. Do not use an origin placeholder or substitute another address. The
-owner is not expected to deploy, run, or own GoAsterWeb or configure Redis.
-Never ask whether GoAsterWeb has been deployed or request its public HTTPS
-address. Do not add a readiness question or reachability preflight. Assume the
-public service is available on the normal path; if an actual HTTPS request
-fails, stop and report a safe failure. Preserve TLS verification and never
-blindly retry a request whose outcome is uncertain.
+The Web origin is fixed and never supplied by the model. Do not ask for
+another origin:
+`https://goasterweb-thomas.fly.dev`. The production HTTP client verifies TLS,
+does not use a proxy, and does not follow redirects. Tests use local synthetic
+HTTP servers only. Do not ask for or verify the Hetzner project; the owner is
+responsible for using the correct token and project.
 
-Before provisioning, the owner must create a distinct new BotFather bot. Do
-not copy or reuse the old bot token or Telegram pairing state. The old and new
-agents may coexist while the new server is validated; the owner stops the old
-agent only after deciding the cutover is complete.
+## Quote and approval
 
-The protected operator paths are the existing root-owned directory and files
-`/var/lib/goaster-telegram/migration-state` and
-`/var/lib/goaster-telegram/migration-handoff`. The latter is an optional owner
-bundle containing the exact owner URL fragment, private SSH key, and provider
-server ID. If a safe protected write or redacted response path is unavailable,
-the skill stops rather than inventing a helper. Secrets never appear in
-model-visible output, logs, command arguments, cron messages, temporary files,
-or project memory.
+`quote` performs bounded read-only provider lookups. It checks the official
+server type collection, Ubuntu 24.04 system image, compatible architecture,
+currently available locations, and pricing. An empty location allowlist means
+all compatible locations; a non-empty allowlist restricts the comparison.
 
-The fixed root-owned mode-0600 handoff file at
-`/var/lib/goaster-telegram/migration-handoff` contains exactly this JSON
-envelope shape, with no extra fields, and is bounded to 32 KiB:
+The quote adds the server hourly gross price to every approved primary-IP
+hourly gross fee. It compares decimal strings exactly, keeps the provider
+currency, and returns the cheapest current baseline. On `start`, an eligible
+offer must be no more than exactly 110% of that approved baseline in the same
+currency. Missing, duplicate, ambiguous, malformed, or mismatched pricing is
+rejected safely.
+
+The skill must present the complete returned baseline, currency, selected
+target terms, location policy, and the fact that there will be one billable
+server create before asking for approval. There is one approval gate and no
+second create prompt. The target keeps the approved server type, image,
+architecture, networks, IPv4/IPv6 public settings, and primary-IP setting.
+
+A maintainer-level request shape is:
 
 ```json
-{"expires": 1735689600, "document": "owner URL and private-key text"}
+{
+  "action": "quote",
+  "job_id": "migration-20261113-01",
+  "target": {
+    "server_type_id": 22,
+    "server_type_name": "cx22",
+    "architecture": "x86",
+    "image_id": 123,
+    "image_name": "ubuntu-24.04",
+    "location_allowlist": [],
+    "network_ids": [],
+    "enable_ipv4": true,
+    "enable_ipv6": false
+  }
+}
 ```
 
-`expires` is an absolute Unix-second expiry no more than seven days in the
-future, and `document` contains the owner URL fragment, private login key, and
-provider server ID. The expiry does not extend on reads. The GoAster runtime
-does not read or send this file. The owner manually removes it after delivery
-or abandonment; there is no automatic local cleanup. GoAsterWeb remains the
-migration authority.
+After the owner approves that exact quote, the only create-start request adds
+`"action":"start"`, the same target and job ID, the returned
+`approved_baseline_gross`, the returned `approved_currency`, and
+`"approved":true`. A non-approved start is a safe no-op.
 
-## Approval and monitor
+## Durable one-create state machine
 
-Use the fixed public GoAsterWeb service above for every migration endpoint.
-Its Redis store is service-managed and is not an owner setup or readiness
-gate. Do not ask for deployment or address confirmation and do not add a
-reachability preflight. Before any mutation, load `goaster-env` and
-`hetzner-auth`, verify the token-scoped Hetzner project, and use current
-read-only provider data. Confirm the exact server type and ID/name, official
-Ubuntu 24.04 image, provider architecture (`x86`/`x86_64` or `arm`/`aarch64`),
-location, network, public-net flags, current gross hourly price, and expected
-overlap cost.
+The first approved start durably records the request before scheduling. Every
+mutation boundary is then protected by the root-owned state file and lock:
 
-The owner must knowingly approve those exact terms and one billable
-`POST /servers`. Approval to start the existing 30-minute, 24/7 monitor
-through `cron` includes exactly one create at those terms. There is no second
-create prompt or separate price ceiling. The exact cron job ID is recorded
-without secrets. Scheduled availability checks are read-only. Once available,
-create and fsync an exclusive protected claim for the one attempt, then disable
-and verify that exact cron job before any callback registration, provider-key
-registration, or create. If it cannot be disabled, stop without mutation and
-require owner manual resolution. Stop the monitor on success, error, or
-uncertainty; it never polls for callbacks.
+1. An available eligible offer causes the exact migration scheduler job to be
+   disabled and verified before any Web or provider mutation.
+2. The state is saved as `web_registering` before `/migration/register`.
+3. The state is saved as `provider_key_registering` before `POST /ssh_keys`.
+4. The state is saved as `creating` before `POST /servers`.
+5. A confirmed server ID is saved before the handoff is delivered.
 
-If terms change, the target is ambiguous, or informed billing approval is
-missing, stop before callback registration or provider mutation.
+After restart, `web_registering`, `registered`, `provider_key_registering`,
+`key_registered`, and `creating` are manual-reconciliation terminal paths;
+they are never replayed. A lost, malformed, timed-out, or otherwise
+ambiguous create response is terminal and cannot trigger another create. A
+read-only unavailable check keeps the exact 30-minute monitor enabled. Every
+terminal, error, or uncertain path disables and verifies that exact monitor.
+Never retry a possibly completed create.
+There is no automatic expiry-cleanup job wired.
 
-## Existing GoAsterWeb wire contract
+Provider requests use the current API shapes: server type responses contain
+`server_types[].locations[]` and `prices[]`; pricing contains
+`pricing.currency` and `pricing.primary_ips[].prices[]`; create uses numeric
+server/image IDs, a location name, SSH-key IDs, network IDs, public-net flags,
+labels, callback-only `user_data`, and `start_after_create:true`. Collection
+paging is handled and incomplete or ambiguous offers fail closed.
 
-The pre-create request is:
+## Callback-only handoff
+
+The only Web calls are the established migration registration/status routes:
+`POST /migration/register` and `POST /migration/status`.
+The new server receives callback-only cloud-init that reads the existing
+Ed25519 host public key and makes one HTTPS `POST` to:
 
 ```text
-POST /migration/register
-Content-Type: application/json
-
-{"login_public_key":"ssh-ed25519 AAAA... comment"}
+https://goasterweb-thomas.fly.dev/migration/host-key
 ```
 
-`/migration/register` is callback authorization, not host handoff recording.
-Its successful response contains an `attempt`, `callback_secret`,
-`owner_secret`, `server_label`, fragment-only `owner_url`, and absolute
-`expires`. The grant has an absolute maximum of seven days; reads and retries
-do not extend it. Keep the secret fields protected and expose only safe
-identity/status values.
+The callback route is `POST /migration/host-key`.
 
-The identity contract remains:
+It contains no install, SSH, old-host, start, data-transfer, owner-URL,
+private-key, provider-token, or bot-token operation. The owner URL and private
+login key are never put in cloud-init. No callback polling is added.
 
-```text
-server name:   goaster-migration-<first 16 lowercase hex characters of attempt>
-server label:  goaster-migration-attempt=<attempt>
-owner URL:     https://goasterweb-thomas.fly.dev/migration#attempt=<attempt>&owner=<owner_secret>
-```
+## Private delivery and recovery
 
-Before any callback registration, provider-key registration, or create, the
-first available-target turn must exclusively create a protected durable claim
-(`O_EXCL` or equivalent shell noclobber), write it, and fsync it. Never replace
-or clear the claim. No later turn may replay it, including after interruption
-or an invisible provider create. Provider inventory is reconciliation only;
-an absent server does not authorize replay. On claim uncertainty, stop for
-owner manual resolution. After the claim and verified monitor disablement, the
-provider operation is one `POST /ssh_keys` followed by one `POST /servers`. The server request uses the
-approved numeric IDs, location name, provider SSH-key ID, networks,
-public-network flags, exact name and label, `start_after_create: true`, and
-callback-only user-data. Never retry a request with a lost or malformed
-response.
+After a confirmed create, the migration executor sends one bounded document
+containing the owner link, private login key, and provider server ID through
+the existing Telegram adapter. The destination is the locally paired,
+positive private user ID read from protected root-owned state; it is never a
+message-supplied group or chat ID and never comes from the model. The token is
+read internally during GoAsterWeb/Telegram setup and is not a tool parameter.
 
-The one-shot cloud-init callback is:
+If delivery fails or its outcome is ambiguous, the protected bounded handoff
+remains and the migration becomes `delivery_pending`. The monitor is stopped.
+No automatic resend or create replay is performed. `repair_delivery` is an
+explicit manual action that attempts delivery once and removes only the exact
+protected handoff after a confirmed success.
 
-```text
-POST /migration/host-key
-Authorization: Bearer <callback_secret>
-X-Goaster-Attempt: <attempt>
-Content-Type: text/plain
-body: canonical first ssh-ed25519 host public-key line
-success: HTTP 204
-```
+The required distinct new BotFather bot remains a GoAsterWeb setup prerequisite. The
+bot token is requested only by that setup flow; this tool does not ask for it
+and does not expose it.
 
-Cloud-init uses the fixed HTTPS URL
-`https://goasterweb-thomas.fly.dev/migration/host-key`; it contains only the
-canonical public service origin, attempt, and callback secret.
-It reads `/etc/ssh/ssh_host_ed25519_key.pub`, sends the canonical host key
-once, and does not retry a lost or non-204 response. A non-204 or lost response
-fails closed on the guest. The create monitor has already ended at the
-provider-create result; it does not observe callback delivery. GoAsterWeb and
-the owner detect a missing callback through the existing Web handoff/status
-path. There is no SSH to the guest and no new callback polling. Cloud-init
-contains no owner secret, owner URL, private login key, provider token, bot
-token, or database credential. GoAsterWeb records this host-key handoff in
-Redis. Web then owns the handoff, provider binding, installation,
-configuration, fresh authentication, and setup; this repository does not
-perform those actions or SSH to the destination.
+## Out of scope and validation
 
-The Redis lifecycle is expiry-only with a maximum of seven days. A read,
-retry, outage, missing record, malformed response, conflict, or expiry never
-extends the grant. Expiry never deletes infrastructure. There is no
-cancellation route, unsafe-status escape, or automatic recovery.
+This feature does not add `/get_migration` or any other Telegram command. There
+is no Telegram command for migration, nor does it add a
+helper CLI, a subprocess boundary, sudo, service deployment, project
+discovery, automatic resend, automatic recovery, delete, rollback, SSH, or
+old-host changes.
 
-The existing machine status route remains `POST /migration/status` with `{}`
-and the owner bearer secret; it never returns the host key. Machine
-`/migration/bind` remains rejected. The owner page owns `/migration/session`,
-`/migration/owner/status`, `/migration/owner/bind`, `/migration/owner/upload`,
-`/migration/owner/start`, and `/migration/owner/telegram`. No cancel,
-finalize, delete, unsafe-state, or retry route is added.
-
-## Protected owner handoff delivery
-
-The skill can use inline Python through `shell_execute` to send the document
-by Telegram HTTPS directly to the locally paired user's private chat. It reads
-the token, paired user ID, and handoff locally without putting secrets in
-arguments or captured output. It validates protected file ownership, mode,
-type, bounded content, envelope and expiry before sending, verifies TLS, and
-suppresses response bodies and errors. The detailed procedure is in the skill.
-The shell runs as the agent identity, so installations without access to the
-protected files must stop without weakening permissions. The owner manually
-removes the bundle after delivery or abandonment.
-
-## Stop and reconcile
-
-Stop and disable the exact create-monitor cron job on any target or price
-change, unsafe protected path, unavailable secret-safe tool, provider
-authentication failure, registration error (including before provider-key
-registration), provider-key error, create error, timeout, lost response,
-malformed response, conflict, or uncertainty; stop it on success too. Verify
-disablement before any mutation. If disablement cannot be verified, make no
-mutation and require owner manual resolution. After the monitor ends, a callback failure or missing callback is a
-Web/owner terminal condition; it is not a monitor observation and must not
-trigger SSH or new callback polling. The monitor does not wait for or claim to
-observe the later guest callback. An actual HTTPS connection or TLS failure
-to the canonical service is a stop-and-report condition; keep the report free
-of secrets and do not retry a request whose outcome is uncertain.
-
-Never blindly repeat a create. If a response may have created a server, the
-user manually identifies the new server in the verified Hetzner project using
-the exact attempt label/name, manually deletes the unwanted server if
-appropriate, and starts over with a new attempt and fresh one-create approval.
-There is no automatic retry, deletion, rollback, recovery, cancellation, or
-second server.
-
-## Local validation
-
-These checks are offline and do not contact GoAsterWeb, Redis, Telegram,
-OpenAI, or Hetzner:
+Offline validation from the repository root:
 
 ```sh
-go test ./...
-go vet ./...
-sh packaging/test-skill-assets.sh
+PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test ./...
+PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go vet ./...
+PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off sh packaging/test-skill-assets.sh
 git diff --check
 ```
+
+These checks use synthetic/local test seams and do not contact Hetzner,
+GoAsterWeb, Telegram, or production services.

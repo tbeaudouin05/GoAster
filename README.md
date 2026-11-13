@@ -145,8 +145,8 @@ Run the core Go tests from the repository root:
 go test ./cmd/goaster-agent ./cmd/goaster-telegram ./config \
   ./internal/artefacts ./internal/attachment ./internal/chat \
   ./internal/command ./internal/controlsecret ./internal/controltransport \
-  ./internal/filesync ./internal/localenv ./internal/scheduler \
-  ./internal/telegram
+  ./internal/filesync ./internal/localenv ./internal/migration \
+  ./internal/scheduler ./internal/telegram
 ```
 
 The [build/test workflow](skills/goaster-build-test/SKILL.md) also describes
@@ -156,10 +156,14 @@ not deploy or swap the retained binaries.
 
 GoAsterWeb is the initial installer for a new server setup. After installation, GoAster owns subsequent deployments. The repository does not provide service units or a GoAster installer; verify the target host’s actual configuration before deploying. The observed GoAsterWeb layout is documented in [the installation integration notes](docs/goasterweb-installation.md), not as a universal contract.
 
-The GoAster-side migration provisioning scope and remaining live-readiness
-checks are documented in [the migration provisioning notes](docs/goaster-migration.md).
-GoAsterWeb owns the handoff and destination setup; this repository does not
-deploy or modify it.
+The remote root agent exposes the dedicated in-process `goaster_migration`
+tool for the quoted, explicitly approved one-create workflow. It owns the
+persisted 30-minute migration monitor and sends a confirmed handoff only to
+the locally paired private Telegram user; it does not add a Telegram command,
+use SSH, or deploy the destination. The maintainer contract and request
+examples are in [the migration tool notes](docs/goaster-migration.md).
+GoAsterWeb owns the callback handoff and destination setup; this repository
+does not deploy or modify it.
 
 ### Artefact file tools
 

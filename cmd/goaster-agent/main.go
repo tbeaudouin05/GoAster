@@ -28,6 +28,9 @@ import (
 	"goaster/internal/controltransport"
 	"goaster/internal/diagnostics"
 	"goaster/internal/localenv"
+	"goaster/internal/migration"
+	"goaster/internal/scheduler"
+	"goaster/internal/telegram"
 )
 
 const maxChatEnvelopeBytes int64 = 1 << 20
@@ -231,6 +234,62 @@ func probeAgent(ctx context.Context, probe string, output io.Writer) error {
 	return err
 }
 
+func migrationOperations(options migration.Options, jobs *scheduler.Scheduler, ready bool) chat.MigrationToolOperations {
+	return chat.MigrationToolOperations{
+		Quote: func(ctx context.Context, request migration.QuoteRequest) (migration.QuoteResult, error) {
+			return migration.Quote(ctx, request, options)
+		},
+		Start: func(_ context.Context, request migration.Request) (migration.Result, error) {
+			if !ready || jobs == nil {
+				return migration.Result{}, errors.New("migration scheduler capability is unavailable")
+			}
+			if os.Geteuid() != 0 {
+				return migration.Result{}, errors.New("migration requires the root agent runtime")
+			}
+			if options.DeliverHandoff == nil {
+				return migration.Result{}, errors.New("migration Telegram delivery capability is unavailable")
+			}
+			if err := telegram.CheckMigrationDelivery(); err != nil {
+				return migration.Result{}, err
+			}
+			return migration.StartMonitor(request, options, jobs)
+		},
+		Status: func(_ context.Context, jobID string) (migration.StatusResult, error) {
+			if !ready || jobs == nil {
+				return migration.StatusResult{}, errors.New("migration scheduler capability is unavailable")
+			}
+			if os.Geteuid() != 0 {
+				return migration.StatusResult{}, errors.New("migration requires the root agent runtime")
+			}
+			return migration.MigrationStatus(jobID, options, jobs)
+		},
+		Stop: func(_ context.Context, jobID string) (migration.Result, error) {
+			if !ready || jobs == nil {
+				return migration.Result{}, errors.New("migration scheduler capability is unavailable")
+			}
+			if os.Geteuid() != 0 {
+				return migration.Result{}, errors.New("migration requires the root agent runtime")
+			}
+			return migration.StopMonitor(jobID, options, jobs)
+		},
+		RepairDelivery: func(ctx context.Context, jobID string) (migration.Result, error) {
+			if !ready || jobs == nil {
+				return migration.Result{}, errors.New("migration scheduler capability is unavailable")
+			}
+			if os.Geteuid() != 0 {
+				return migration.Result{}, errors.New("migration requires the root agent runtime")
+			}
+			if options.DeliverHandoff == nil {
+				return migration.Result{}, errors.New("migration Telegram delivery capability is unavailable")
+			}
+			if err := telegram.CheckMigrationDelivery(); err != nil {
+				return migration.Result{}, err
+			}
+			return migration.RepairHandoff(ctx, jobID, options)
+		},
+	}
+}
+
 func serve(store chat.CredentialStore) (serveErr error) {
 	controlSecret, err := controlsecret.Load()
 	if err != nil {
@@ -247,6 +306,38 @@ func serve(store chat.CredentialStore) (serveErr error) {
 		return err
 	}
 	defer func() { serveErr = errors.Join(serveErr, backgroundManager.Close()) }()
+	migrationOptions := migration.DefaultOptions()
+	migrationOptions.DeliverHandoff = telegram.SendMigrationHandoff
+	var migrationJobs *scheduler.Scheduler
+	migrationReady := false
+	schedulerPath, schedulerErr := migration.SchedulerPath()
+	if schedulerErr == nil {
+		migrationJobs, schedulerErr = scheduler.New(scheduler.Options{
+			Path: schedulerPath,
+			Executor: func(executionContext context.Context, message string) error {
+				if migrationJobs == nil {
+					return scheduler.ReviewRequiredError{Message: "migration monitor requires manual review", Cause: errors.New("migration scheduler is unavailable")}
+				}
+				executionErr := migration.ScheduledExecutor(executionContext, message, migrationJobs, migrationOptions)
+				if executionErr != nil {
+					diagnostics.Error("agent.migration.monitor", executionErr)
+				}
+				return executionErr
+			},
+		})
+	}
+	if schedulerErr == nil {
+		schedulerErr = migrationJobs.Start(ctx)
+	}
+	if schedulerErr != nil {
+		diagnostics.Error("agent.migration.scheduler", schedulerErr)
+	} else {
+		migrationReady = true
+		defer migrationJobs.Stop()
+	}
+	if err := chat.RegisterMigrationTool(provider, migrationOperations(migrationOptions, migrationJobs, migrationReady)); err != nil {
+		return fmt.Errorf("register migration tool: %w", err)
+	}
 	listener, err := controltransport.Listen()
 	if err != nil {
 		return fmt.Errorf("could not start local agent listener: %w", err)
