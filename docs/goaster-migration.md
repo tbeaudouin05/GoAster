@@ -11,22 +11,38 @@ not as evidence that a production origin exists.
 
 ## GoAster-side scope
 
-- `skills/goaster-migration` gives the owner-approved pure-guidance flow:
-  read-only old-host inventory, a new BotFather bot, a verified current CX/CAX
-  target such as 4 GB or 8 GB, all eligible locations by default, one approved
-  30-minute monitor, exactly one create, and manual reconciliation on every
-  error or timeout.
-- The skill requires registration before creation, a fresh Ed25519 login key,
-  the exact returned server name and migration label, and the current one-shot
-  host-key callback user-data. It keeps the owner URL fragment and private key
-  out of model output, ordinary messages, groups, logs, and provider user-data.
+- `skills/goaster-migration` gives the owner-approved flow and invokes the
+  root-only `goaster-telegram migration` helper: read-only old-host inventory,
+  a new BotFather bot, a verified current CX/CAX target such as 4 GB or 8 GB,
+  all eligible locations by default, one approved 30-minute monitor, exactly
+  one create, and manual reconciliation on every error or timeout.
+- The helper remains read-only until the exact approved target matches. It then
+  generates a fresh Ed25519 login key, registers the web grant and provider
+  SSH key, and persists the exact returned server name and migration label.
+  The durable state and grant/key material are protected at
+  `/var/lib/goaster-telegram/migration-state`; the owner URL fragment and
+  private key are staged exclusively at
+  `/var/lib/goaster-telegram/migration-handoff`, never in a temporary
+  directory, argument, log, or model output.
 - The paired Telegram adapter accepts `/get_migration` only from the paired
   owner in a private chat. It sends the mode-0600 staged handoff file directly
   as `goaster-migration-handoff.txt`; it does not call the agent or model and
-  rejects unauthorized users, groups, and messages with attachments.
+  rejects unauthorized users, groups, and messages with attachments. A
+  successful send removes the exact file identity read; failure retains it and
+  expiry cleanup never removes a replacement file.
 - Data selection, fresh OpenAI and Telegram setup, manual copying, cutover,
   old-agent stop, and server deletion remain owner-controlled. No GoAster-owned
   provisioning or transfer service was added.
+
+The helper persists a fingerprint of the exact approved job and serializes
+invocations with a protected lock. Its `creating` state is written before the
+single provider `POST /servers`; a restart in any mutation state is terminal
+and manual rather than a replay. It returns only safe IDs/status and instructs
+the existing cron tool to stop the exact job after `terminal` or confirmed
+creation. Development tests use mocked HTTP only and cover matching-only
+monitoring, parallel calls, restart, timeout, stale handoff, expiry cleanup,
+and replacement protection. After expiry, its job-identity-only cleanup action
+can remove the exact saved handoff without receiving a provider token.
 
 ## GoAsterWeb contract
 

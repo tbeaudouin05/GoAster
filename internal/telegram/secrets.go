@@ -17,6 +17,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"goaster/internal/migration"
+	"goaster/internal/protectedfile"
 )
 
 var tokenFormat = regexp.MustCompile(`^[1-9][0-9]{0,19}:[A-Za-z0-9_-]{20,128}$`)
@@ -52,7 +55,7 @@ var DefaultPaths = Paths{
 }
 
 const (
-	defaultMigrationHandoffPath = "/var/lib/goaster-telegram/migration-handoff"
+	defaultMigrationHandoffPath = migration.DefaultHandoffPath
 	migrationHandoffFilename    = "goaster-migration-handoff.txt"
 	migrationHandoffMaxBytes    = 32 * 1024
 )
@@ -161,27 +164,14 @@ func readPrivate(path string) ([]byte, error) {
 }
 
 func readPrivateBounded(path string, maxBytes int64) ([]byte, error) {
-	if maxBytes <= 0 {
-		return nil, fmt.Errorf("invalid private file limit")
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() < 0 || info.Size() > maxBytes {
-		return nil, fmt.Errorf("invalid private file")
-	}
-	f, err := os.Open(path)
+	content, err := protectedfile.Read(path, maxBytes)
 	if err != nil {
+		if _, statErr := os.Lstat(path); statErr != nil {
+			return nil, statErr
+		}
 		return nil, err
 	}
-	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() || opened.Mode().Perm() != 0600 {
-		return nil, fmt.Errorf("private file changed")
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
-	if err != nil || int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("could not read private file")
-	}
-	return data, nil
+	return content.Data, nil
 }
 
 type pairing struct {

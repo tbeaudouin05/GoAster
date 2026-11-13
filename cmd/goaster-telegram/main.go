@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"goaster/internal/migration"
 	"goaster/internal/telegram"
 )
 
@@ -21,6 +22,17 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "setup" {
 		if err := telegram.Setup(os.Stdin, telegram.DefaultPaths); err != nil {
 			fmt.Fprintln(os.Stderr, "telegram: setup failed")
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "migration" {
+		if os.Geteuid() != 0 {
+			fmt.Fprintln(os.Stderr, "telegram: migration helper requires root")
+			os.Exit(1)
+		}
+		if err := migration.RunCommand(context.Background(), os.Stdin, os.Stdout, migration.DefaultOptions()); err != nil {
+			fmt.Fprintln(os.Stderr, "telegram: migration helper failed")
 			os.Exit(1)
 		}
 		return

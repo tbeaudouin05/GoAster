@@ -23,6 +23,7 @@ import (
 	"goaster/internal/controlsecret"
 	"goaster/internal/controltransport"
 	"goaster/internal/localenv"
+	"goaster/internal/protectedfile"
 	"goaster/internal/telegramcommands"
 )
 
@@ -916,12 +917,18 @@ func (a *adapter) sendMigrationHandoff(ctx context.Context, chatID int64) error 
 	if pathName == "" {
 		pathName = defaultMigrationHandoffPath
 	}
-	data, err := readPrivateBounded(pathName, migrationHandoffMaxBytes)
-	if err != nil || len(data) == 0 {
+	content, err := protectedfile.Read(pathName, migrationHandoffMaxBytes)
+	if err != nil || len(content.Data) == 0 {
 		return fmt.Errorf("migration handoff is unavailable")
 	}
-	defer clear(data)
-	return sendDocument(ctx, a.client, a.apiBase, a.token, chatID, migrationHandoffFilename, data)
+	defer clear(content.Data)
+	if err := sendDocument(ctx, a.client, a.apiBase, a.token, chatID, migrationHandoffFilename, content.Data); err != nil {
+		return err
+	}
+	if err := protectedfile.RemoveIfSame(pathName, content.Identity); err != nil {
+		return fmt.Errorf("migration handoff changed during delivery")
+	}
+	return nil
 }
 
 func (a *adapter) sendMessage(ctx context.Context, chatID int64, text string) (int64, error) {

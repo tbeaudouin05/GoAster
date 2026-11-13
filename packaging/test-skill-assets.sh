@@ -15,7 +15,12 @@ fi
 check_starter_tree "$repo_root/skills"
 check_tracked_starters
 
-python3 - "$repo_root" "$expected_starter_skills" <<'PY'
+package_root=$(mktemp -d)
+trap 'rm -rf "$package_root"' EXIT HUP INT TERM
+mkdir "$package_root/share"
+install_starters_to_prefix "$package_root/share"
+
+python3 - "$repo_root" "$expected_starter_skills" "$package_root/share" <<'PY'
 import pathlib
 import re
 import sys
@@ -23,6 +28,7 @@ from urllib.parse import unquote, urlsplit
 
 root = pathlib.Path(sys.argv[1]).resolve()
 expected = sys.argv[2].split()
+installed_root = pathlib.Path(sys.argv[3]).resolve()
 actual = sorted(
     path.name
     for path in (root / "skills").iterdir()
@@ -110,6 +116,11 @@ for obsolete_phrase in (
     if obsolete_phrase in migration_text:
         raise SystemExit(f"goaster-migration workflow retained obsolete blocker/policy: {obsolete_phrase!r}")
 
+installed_migration = (installed_root / "skills" / "goaster-migration" / "SKILL.md").read_text(encoding="utf-8")
+for forbidden in ("GoAsterWeb/", "../../docs/", "../docs/", "migration-handoff-20261112"):
+    if forbidden in installed_migration:
+        raise SystemExit(f"installed migration skill retained a local checkout/document dependency: {forbidden!r}")
+
 notes = (root / "docs" / "goaster-migration.md").read_text(encoding="utf-8")
 notes_text = " ".join(notes.split())
 for phrase in (
@@ -141,5 +152,16 @@ for markdown in root.rglob("*.md"):
         if not candidate.exists():
             raise SystemExit(f"stale local Markdown link in {markdown}: {target}")
 
-print("Skill allowlist and local Markdown reference checks passed offline.")
+for markdown in installed_root.rglob("*.md"):
+    text = markdown.read_text(encoding="utf-8")
+    for match in link_pattern.finditer(text):
+        target = unquote(match.group(1) or match.group(2))
+        parsed = urlsplit(target)
+        if parsed.scheme or parsed.netloc or not parsed.path or parsed.path == "URL":
+            continue
+        candidate = (markdown.parent / parsed.path).resolve()
+        if not candidate.exists():
+            raise SystemExit(f"stale installed Markdown link in {markdown}: {target}")
+
+print("Skill allowlist, installed package, and local Markdown reference checks passed offline.")
 PY

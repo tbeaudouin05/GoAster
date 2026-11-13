@@ -67,6 +67,9 @@ func TestTelegramMigrationHandoffIsSentDirectlyToAuthorizedPrivateOwner(t *testi
 	if !bytes.Contains(documentBody, []byte(`filename="`+migrationHandoffFilename+`"`)) || !bytes.Contains(documentBody, []byte(testMigrationHandoff)) {
 		t.Fatal("migration handoff document did not contain the staged owner handoff")
 	}
+	if _, err := os.Stat(pathName); !os.IsNotExist(err) {
+		t.Fatalf("successful handoff delivery left the staged file: %v", err)
+	}
 }
 
 func TestTelegramMigrationHandoffRejectsUnauthorizedGroupsAndAttachments(t *testing.T) {
@@ -145,6 +148,9 @@ func TestTelegramMigrationHandoffFailureDoesNotEchoData(t *testing.T) {
 	if strings.Contains(messages[0], "sensitive") || strings.Contains(messages[0], "owner-secret") {
 		t.Fatal("delivery failure exposed secret data")
 	}
+	if _, err := os.Stat(pathName); err != nil {
+		t.Fatalf("failed delivery removed the handoff: %v", err)
+	}
 
 	missing := adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid", migrationHandoffPath: filepath.Join(t.TempDir(), "missing"), client: client}
 	messages = nil
@@ -161,5 +167,39 @@ func TestTelegramMigrationHandoffFailureDoesNotEchoData(t *testing.T) {
 	unsafe.handle(context.Background(), privateMessage(42, telegramGetMigrationCommand))
 	if len(messages) != 1 || messages[0] != "The migration handoff could not be sent." {
 		t.Fatalf("unsafe handoff response = %#v", messages)
+	}
+}
+
+func TestTelegramMigrationHandoffDoesNotRemoveReplacedFile(t *testing.T) {
+	pathName := migrationHandoffFile(t, testMigrationHandoff, 0600)
+	var messages []string
+	client := doerFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/sendDocument") {
+			oldPath := pathName + ".old"
+			if err := os.Rename(pathName, oldPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(pathName, []byte("replacement handoff"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			return response(http.StatusOK, `{"ok":true,"result":true}`), nil
+		}
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, payload.Text)
+		return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
+	})
+	a := adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid", migrationHandoffPath: pathName, client: client}
+	a.handle(context.Background(), privateMessage(42, telegramGetMigrationCommand))
+	if len(messages) != 1 || messages[0] != "The migration handoff could not be sent." {
+		t.Fatalf("replacement handoff response = %#v", messages)
+	}
+	data, err := os.ReadFile(pathName)
+	if err != nil || string(data) != "replacement handoff" {
+		t.Fatalf("replacement handoff was removed or changed: %q, %v", data, err)
 	}
 }
