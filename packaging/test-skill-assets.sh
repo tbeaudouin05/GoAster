@@ -173,6 +173,42 @@ for phrase in (
     if phrase not in notes_text:
         raise SystemExit(f"migration task notes missing required scope/contract: {phrase!r}")
 
+canonical_origin = "https://goasterweb-thomas.fly.dev"
+canonical_service_url = canonical_origin + "/"
+public_service_policy = (
+    f"canonical origin is `{canonical_origin}` with no trailing slash",
+    f"service URL is `{canonical_service_url}` with a trailing slash",
+    "Resolve every GoAsterWeb `/migration/...` endpoint against this canonical service",
+    "Never ask whether GoAsterWeb has been deployed or request its public HTTPS address.",
+    "Do not add a readiness question or reachability preflight.",
+    "Assume the public service is available on the normal path",
+    "if an actual HTTPS request fails, stop and report a safe failure.",
+    "Preserve TLS verification",
+    "never blindly retry a request whose outcome is uncertain.",
+)
+for label, content in (("skill", migration), ("notes", notes)):
+    normalized = " ".join(content.split())
+    for phrase in public_service_policy:
+        if phrase not in normalized:
+            raise SystemExit(f"migration {label} missing public-service policy: {phrase!r}")
+    for forbidden in (
+        "${GOASTERWEB_ORIGIN}",
+        "https://<origin>/migration",
+        "Do you have a deployed GoAsterWeb service?",
+        "What is the public HTTPS address of your deployed GoAsterWeb service?",
+    ):
+        if forbidden in content:
+            raise SystemExit(f"migration {label} retained an origin question/placeholder: {forbidden!r}")
+
+callback_url = "https://goasterweb-thomas.fly.dev/migration/host-key"
+if f'url = "{callback_url}"' not in migration:
+    raise SystemExit("goaster-migration callback does not use the canonical HTTPS service")
+if callback_url not in notes:
+    raise SystemExit("migration notes callback does not use the canonical HTTPS service")
+owner_url_prefix = "https://goasterweb-thomas.fly.dev/migration#attempt="
+if owner_url_prefix not in migration or owner_url_prefix not in notes:
+    raise SystemExit("migration owner URL does not use the canonical HTTPS service")
+
 # Check local Markdown links so renamed skills and stale skill paths fail in
 # the same offline test as the package allowlist.
 link_pattern = re.compile(r"\]\((?:<([^>]+)>|([^\s)]+))")

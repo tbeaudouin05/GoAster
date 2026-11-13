@@ -26,6 +26,21 @@ destination SSH; transfer data; cut over identities; stop the old host; or
 delete either server. GoAsterWeb owns destination installation, setup, exact
 provider binding, and the later GoAster start. GoAsterWeb was not modified.
 
+## Fixed public GoAsterWeb service
+
+GoAsterWeb is an existing public website available to everyone. Its canonical
+origin is `https://goasterweb-thomas.fly.dev` with no trailing slash; its
+service URL is `https://goasterweb-thomas.fly.dev/` with a trailing slash.
+Resolve every GoAsterWeb `/migration/...` endpoint against this canonical
+service, including registration, host-key callback, status, and owner-page
+routes. Do not use an origin placeholder or substitute another address. The
+owner is not expected to deploy, run, or own GoAsterWeb or configure Redis.
+Never ask whether GoAsterWeb has been deployed or request its public HTTPS
+address. Do not add a readiness question or reachability preflight. Assume the
+public service is available on the normal path; if an actual HTTPS request
+fails, stop and report a safe failure. Preserve TLS verification and never
+blindly retry a request whose outcome is uncertain.
+
 Before provisioning, the owner must create a distinct new BotFather bot. Do
 not copy or reuse the old bot token or Telegram pairing state. The old and new
 agents may coexist while the new server is validated; the owner stops the old
@@ -57,11 +72,15 @@ migration authority.
 
 ## Approval and monitor
 
-Before any mutation, load `goaster-env` and `hetzner-auth`, verify the
-token-scoped Hetzner project, and use current read-only provider data. Confirm
-the exact server type and ID/name, official Ubuntu 24.04 image, provider
-architecture (`x86`/`x86_64` or `arm`/`aarch64`), location, network, public-net
-flags, current gross hourly price, and expected overlap cost.
+Use the fixed public GoAsterWeb service above for every migration endpoint.
+Its Redis store is service-managed and is not an owner setup or readiness
+gate. Do not ask for deployment or address confirmation and do not add a
+reachability preflight. Before any mutation, load `goaster-env` and
+`hetzner-auth`, verify the token-scoped Hetzner project, and use current
+read-only provider data. Confirm the exact server type and ID/name, official
+Ubuntu 24.04 image, provider architecture (`x86`/`x86_64` or `arm`/`aarch64`),
+location, network, public-net flags, current gross hourly price, and expected
+overlap cost.
 
 The owner must knowingly approve those exact terms and one billable
 `POST /servers`. Approval to start the existing 30-minute, 24/7 monitor
@@ -100,7 +119,7 @@ The identity contract remains:
 ```text
 server name:   goaster-migration-<first 16 lowercase hex characters of attempt>
 server label:  goaster-migration-attempt=<attempt>
-owner URL:     https://<origin>/migration#attempt=<attempt>&owner=<owner_secret>
+owner URL:     https://goasterweb-thomas.fly.dev/migration#attempt=<attempt>&owner=<owner_secret>
 ```
 
 Before any callback registration, provider-key registration, or create, the
@@ -127,7 +146,9 @@ body: canonical first ssh-ed25519 host public-key line
 success: HTTP 204
 ```
 
-Cloud-init contains only the public HTTPS origin, attempt, and callback secret.
+Cloud-init uses the fixed HTTPS URL
+`https://goasterweb-thomas.fly.dev/migration/host-key`; it contains only the
+canonical public service origin, attempt, and callback secret.
 It reads `/etc/ssh/ssh_host_ed25519_key.pub`, sends the canonical host key
 once, and does not retry a lost or non-204 response. A non-204 or lost response
 fails closed on the guest. The create monitor has already ended at the
@@ -175,7 +196,9 @@ disablement before any mutation. If disablement cannot be verified, make no
 mutation and require owner manual resolution. After the monitor ends, a callback failure or missing callback is a
 Web/owner terminal condition; it is not a monitor observation and must not
 trigger SSH or new callback polling. The monitor does not wait for or claim to
-observe the later guest callback.
+observe the later guest callback. An actual HTTPS connection or TLS failure
+to the canonical service is a stop-and-report condition; keep the report free
+of secrets and do not retry a request whose outcome is uncertain.
 
 Never blindly repeat a create. If a response may have created a server, the
 user manually identifies the new server in the verified Hetzner project using

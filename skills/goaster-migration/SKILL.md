@@ -18,6 +18,21 @@ GoAster; open destination SSH; copy data; stop the old agent; or delete either
 server. Do not use `background_command` for this workflow: its arguments and
 output are not secret-safe.
 
+## Fixed public GoAsterWeb service
+
+GoAsterWeb is an existing public website available to everyone. Its canonical
+origin is `https://goasterweb-thomas.fly.dev` with no trailing slash; its
+service URL is `https://goasterweb-thomas.fly.dev/` with a trailing slash.
+Resolve every GoAsterWeb `/migration/...` endpoint against this canonical
+service, including registration, host-key callback, status, and owner-page
+routes. Do not use an origin placeholder or substitute another address. The
+owner is not expected to deploy, run, or own GoAsterWeb or configure Redis.
+Never ask whether GoAsterWeb has been deployed or request its public HTTPS
+address. Do not add a readiness question or reachability preflight. Assume the
+public service is available on the normal path; if an actual HTTPS request
+fails, stop and report a safe failure. Preserve TLS verification and never
+blindly retry a request whose outcome is uncertain.
+
 ## Protected owner handoff delivery
 
 The protected handoff remains a root-owned mode-0600 regular file at
@@ -109,10 +124,9 @@ protected paths or a safe write/record operation are unavailable, stop.
 
 ## Approval gate and monitor
 
-1. Confirm that the deployed GoAsterWeb origin is a public HTTPS service using
-   the reviewed migration contract and that its Redis store is available as
-   trusted normal infrastructure. Local source or an undeployed checkout is
-   not evidence of a reachable service.
+1. Use the fixed public GoAsterWeb service defined above for the reviewed
+   migration contract. Its Redis store is service-managed and is not an owner
+   setup or readiness gate.
 2. Use read-only provider operations to confirm the token-scoped project,
    current server type and ID/name, official Ubuntu 24.04 image, supported
    provider architecture (`x86` for `x86_64` or `arm` for `aarch64`), exact
@@ -192,7 +206,7 @@ The returned identity must remain exact:
 ```text
 server name:   goaster-migration-<first 16 lowercase hex characters of attempt>
 server label:  goaster-migration-attempt=<attempt>
-owner URL:     https://<origin>/migration#attempt=<attempt>&owner=<owner_secret>
+owner URL:     https://goasterweb-thomas.fly.dev/migration#attempt=<attempt>&owner=<owner_secret>
 ```
 
 Do not put the owner secret or owner URL in provider user-data, a command
@@ -246,7 +260,7 @@ awk 'NR == 1 && $1 == "ssh-ed25519" && NF >= 2 {print $1 " " $2; ok=1} END {if (
   /etc/ssh/ssh_host_ed25519_key.pub >"$keyfile" || exit 1
 status=$(curl --silent --max-time 10 --connect-timeout 5 \
   --output /dev/null --write-out "%{http_code}" --config - <<EOF
-url = "${GOASTERWEB_ORIGIN}/migration/host-key"
+url = "https://goasterweb-thomas.fly.dev/migration/host-key"
 request = "POST"
 header = "Authorization: Bearer ${CALLBACK_SECRET}"
 header = "X-Goaster-Attempt: ${ATTEMPT}"
@@ -298,9 +312,11 @@ recovery. Do not invent one.
 
 ## Stop and reconcile
 
-Stop immediately and keep the old host unchanged when the Web origin, Redis
-state, project, offer, price, identity, protected path, or secret handling is
-uncertain. Also stop on any registration, provider-key, create, callback,
+Stop immediately and keep the old host unchanged when an actual HTTPS request
+to the canonical GoAsterWeb service fails, or when the project, offer, price,
+identity, protected path, or secret handling is uncertain. Report only safe
+failure context. Redis is managed by GoAsterWeb and is not a separate owner
+readiness check. Also stop on any registration, provider-key, create, callback,
 timeout, malformed response, authentication error, or monitor error. On every
 error or uncertainty, including pre-create registration/key failures, disable
 the exact monitor; success also stops it. If disablement cannot be verified,
