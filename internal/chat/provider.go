@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"goaster/internal/attachment"
+	"goaster/internal/diagnostics"
 )
 
 // Providers wrap ErrModelUnavailable when the selected model is unavailable.
@@ -459,9 +460,17 @@ type ToolCallObserver func(name, arguments string)
 
 type toolCallObserverKey struct{}
 type toolActionStartedKey struct{}
+type runtimeFailureOperationKey struct{}
+type providerFailureBoundaryKey struct{}
 
 func WithToolCallObserver(ctx context.Context, observer ToolCallObserver) context.Context {
 	return context.WithValue(ctx, toolCallObserverKey{}, observer)
+}
+
+// WithRuntimeFailureOperation identifies the outer runtime boundary that owns
+// one diagnostic record for a request. It carries no user or provider content.
+func WithRuntimeFailureOperation(ctx context.Context, operation string) context.Context {
+	return context.WithValue(ctx, runtimeFailureOperationKey{}, operation)
 }
 
 func toolCallObserver(ctx context.Context) ToolCallObserver {
@@ -517,20 +526,31 @@ func (s *Session) ReplyScheduled(ctx context.Context, message string) (string, e
 // temporary paths.
 func (s *Session) ReplyWithAttachments(ctx context.Context, message string, attachments []attachment.Metadata) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", fatalRequestError(err)
+		failure := fatalRequestError(err)
+		s.logSessionFailure(ctx, failure)
+		return "", failure
 	}
 	if len(attachments) > attachment.MaxAttachments {
-		return "", recoverableRequestError(fmt.Errorf("too many attachments"))
+		err := recoverableRequestError(fmt.Errorf("too many attachments"))
+		s.logSessionFailure(ctx, err)
+		return "", err
 	}
 	for _, item := range attachments {
 		if err := item.ValidateMetadata(); err != nil {
-			return "", recoverableRequestError(fmt.Errorf("invalid attachment metadata"))
+			failure := recoverableRequestError(fmt.Errorf("invalid attachment metadata: %w", err))
+			s.logSessionFailure(ctx, failure)
+			return "", failure
 		}
 	}
 	return s.replyWithAttachments(ctx, message, attachments, false)
 }
 
-func (s *Session) replyWithAttachments(ctx context.Context, message string, attachments []attachment.Metadata, scheduled bool) (string, error) {
+func (s *Session) replyWithAttachments(ctx context.Context, message string, attachments []attachment.Metadata, scheduled bool) (reply string, replyErr error) {
+	defer func() {
+		if replyErr != nil {
+			s.logSessionFailure(ctx, replyErr)
+		}
+	}()
 	// A session is a single ordered conversation. Serializing its turns also
 	// ensures that only one caller summarizes a given history.
 	s.mu.Lock()
@@ -678,7 +698,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 		_, canUseHistory := s.provider.(HistoryProvider)
 		var compact string
 		if canSummarize && canUseHistory {
-			compact, err = provider.SummarizeConversation(ctx, s.active, summary, cloneChatMessages(candidate[:keepFrom]))
+			compact, err = provider.SummarizeConversation(context.WithValue(ctx, providerFailureBoundaryKey{}, true), s.active, summary, cloneChatMessages(candidate[:keepFrom]))
 		} else {
 			err = errors.New("provider cannot summarize conversation history")
 		}
@@ -695,12 +715,16 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 			if scheduled {
 				return "", errors.Join(ErrSessionBusy, err, ctxErr)
 			}
-			return "", fatalRequestError(ctxErr)
+			return "", fatalRequestError(errors.Join(err, ctxErr))
 		}
 		if scheduled && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			// Summarization does not execute tools; a child interruption must
 			// leave the scheduled turn available to retry before any action.
 			return "", errors.Join(ErrSessionBusy, err)
+		}
+		if err != nil {
+			summaryContext := WithRuntimeFailureOperation(ctx, "chat.session.summarize")
+			s.logSessionFailure(summaryContext, ModelRequestError{Model: s.active, Err: err})
 		}
 		compact = strings.TrimSpace(compact)
 		if err == nil && compact != "" && utf8.ValidString(compact) && len(compact) <= maxSummaryBytes {
@@ -805,7 +829,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 	if scheduled && tracksTools {
 		replyContext = context.WithValue(replyContext, toolActionStartedKey{}, func() { actionStarted = true })
 	}
-	reply, err := s.replyWithHistory(replyContext, requestMessage, requestHistory)
+	reply, err = s.replyWithHistory(replyContext, requestMessage, requestHistory)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			if PostToolAuthenticationReviewMessage(err) != "" {
@@ -823,7 +847,7 @@ func (s *Session) replyWithAttachments(ctx context.Context, message string, atta
 				}
 				return "", errors.Join(ErrSessionBusy, err, ctxErr)
 			}
-			return "", fatalRequestError(ctxErr)
+			return "", fatalRequestError(errors.Join(err, ctxErr))
 		}
 		if scheduled && ScheduledActionReviewMessage(err) == "" && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			// A child request or tool can be interrupted while ctx is still live.
@@ -903,11 +927,34 @@ func (s *Session) reply(ctx context.Context, message string) (string, error) {
 }
 
 func (s *Session) replyWithHistory(ctx context.Context, message string, history []ChatMessage) (string, error) {
-	reply, err := s.providerReply(ctx, s.active, message, history)
+	providerContext := context.WithValue(ctx, providerFailureBoundaryKey{}, true)
+	reply, err := s.providerReply(providerContext, s.active, message, history)
 	if err == nil {
 		return reply, nil
 	}
 	return "", ModelRequestError{Model: s.active, Err: err}
+}
+
+func (s *Session) logSessionFailure(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+	operation := "chat.session.reply"
+	if value, ok := ctx.Value(runtimeFailureOperationKey{}).(string); ok && strings.TrimSpace(value) != "" {
+		operation = value
+	}
+	fields := make([]diagnostics.Field, 0, 3)
+	var modelErr ModelRequestError
+	if errors.As(err, &modelErr) {
+		fields = append(fields, configuredModelDiagnostic(s.registry, modelErr.Model)...)
+	}
+	if phase, status, ok := providerFailureInfo(err); ok {
+		fields = append(fields, diagnostics.Field{Key: "phase", Value: phase})
+		if status != 0 {
+			fields = append(fields, diagnostics.Field{Key: "status", Value: fmt.Sprintf("%d", status)})
+		}
+	}
+	diagnostics.Error(operation, err, fields...)
 }
 
 func (s *Session) providerReply(ctx context.Context, model, message string, history []ChatMessage) (string, error) {

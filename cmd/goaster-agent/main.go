@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,6 +26,7 @@ import (
 	"goaster/internal/command"
 	"goaster/internal/controlsecret"
 	"goaster/internal/controltransport"
+	"goaster/internal/diagnostics"
 	"goaster/internal/localenv"
 )
 
@@ -75,11 +77,13 @@ func (r *countingReader) Read(p []byte) (int, error) {
 func main() {
 	store, err := agentCredentialStore(os.UserHomeDir)
 	if err != nil {
+		diagnostics.Error("agent.startup", err)
 		fmt.Fprintln(os.Stderr, "agent: cannot initialize credential store")
 		os.Exit(1)
 	}
 	if err := run(context.Background(), os.Args[1:], os.Stdout, chat.NewOpenAIAuthenticator(store), serve); err != nil {
-		fmt.Fprintln(os.Stderr, "agent:", chat.SanitizeTerminalText(err.Error()))
+		diagnostics.Error("agent.main", err)
+		fmt.Fprintln(os.Stderr, "agent: operation failed")
 		os.Exit(1)
 	}
 }
@@ -205,17 +209,23 @@ func probeAgent(ctx context.Context, probe string, output io.Writer) error {
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+controltransport.Address+endpoint, nil)
 	if err != nil {
-		return fmt.Errorf("agent probe failed")
+		return fmt.Errorf("build agent probe request: %w", err)
 	}
 	client := http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("agent probe failed")
+		return fmt.Errorf("agent probe transport: %w", err)
+	}
+	if response == nil || response.Body == nil {
+		return fmt.Errorf("agent probe returned no response body")
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 33))
-	if err != nil || response.StatusCode != http.StatusOK || string(body) != "ok\n" {
-		return fmt.Errorf("agent probe failed")
+	if err != nil {
+		return fmt.Errorf("read agent probe response: %w", err)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != "ok\n" {
+		return fmt.Errorf("agent probe returned status %s or an invalid response", response.Status)
 	}
 	_, err = io.WriteString(output, "ok\n")
 	return err
@@ -241,21 +251,49 @@ func serve(store chat.CredentialStore) (serveErr error) {
 	if err != nil {
 		return fmt.Errorf("could not start local agent listener: %w", err)
 	}
-	defer listener.Close()
+	defer func() {
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			serveErr = errors.Join(serveErr, err)
+		}
+	}()
 	server := http.Server{Handler: handlerWithMemoryAndRegistryWithSecret(provider, setup.memory, provider.CheckAuth, setup.registry, controlSecret), ReadHeaderTimeout: 10 * time.Second}
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
 		<-ctx.Done()
-		_ = server.Close()
+		if err := server.Close(); err != nil && !normalServerStop(err) {
+			diagnostics.Error("agent.server.close", err)
+		}
 	}()
 	err = server.Serve(listener)
 	stop()
 	<-stopped // Wait for Close to finish unlinking the Unix socket.
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("server stopped")
+	if err != nil && !(ctx.Err() != nil && normalServerStop(err)) {
+		return fmt.Errorf("server stopped: %w", err)
 	}
 	return nil
+}
+
+func normalServerStop(err error) bool {
+	if err == nil {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !normalServerStop(cause) {
+				return false
+			}
+		}
+		return true
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return normalServerStop(cause)
+	}
+	return errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled)
 }
 
 func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error, registry chat.ModelRegistry, controlSecret string) http.Handler {
@@ -279,18 +317,29 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		_, _ = w.Write([]byte("ok\n"))
+		if _, err := w.Write([]byte("ok\n")); err != nil {
+			diagnostics.Error("agent.livez.write", err)
+		}
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if checkAuth == nil || checkAuth(r.Context()) != nil {
+		var authErr error
+		if checkAuth == nil {
+			authErr = errors.New("authentication checker is unavailable")
+		} else {
+			authErr = checkAuth(r.Context())
+		}
+		if authErr != nil {
+			diagnostics.Error("agent.healthz.authentication", authErr)
 			http.Error(w, "remote agent authentication unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		_, _ = w.Write([]byte("ok\n"))
+		if _, err := w.Write([]byte("ok\n")); err != nil {
+			diagnostics.Error("agent.healthz.write", err)
+		}
 	})
 	mux.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -316,6 +365,7 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 		dec := json.NewDecoder(body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&request); err != nil {
+			diagnostics.Error("agent.chat.decode", err)
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -349,7 +399,12 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		if dec.Decode(&struct{}{}) != io.EOF {
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			if err != nil {
+				diagnostics.Error("agent.chat.trailing_data", err)
+			} else {
+				diagnostics.Error("agent.chat.trailing_data", errors.New("request contains multiple JSON values"))
+			}
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -389,23 +444,39 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			http.Error(w, "invalid environment request", http.StatusBadRequest)
 			return
 		}
-		if !chat.IsClearCommand(request.Message) && !chat.IsModelCommand(request.Message) && !isEnvironment && (checkAuth == nil || checkAuth(r.Context()) != nil) {
-			http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
-			return
+		if !chat.IsClearCommand(request.Message) && !chat.IsModelCommand(request.Message) && !isEnvironment {
+			var authErr error
+			if checkAuth == nil {
+				authErr = errors.New("authentication checker is unavailable")
+			} else {
+				authErr = checkAuth(r.Context())
+			}
+			if authErr != nil {
+				diagnostics.Error("agent.chat.authentication", authErr)
+				http.Error(w, "agent request failed; check remote authentication", http.StatusServiceUnavailable)
+				return
+			}
 		}
 		if len(metadata) > 0 {
 			root, err := filepath.Abs(os.TempDir())
 			if err != nil {
+				diagnostics.Error("agent.chat.attachment_setup", err)
 				http.Error(w, "agent request failed", http.StatusServiceUnavailable)
 				return
 			}
 			directory, err := os.MkdirTemp(root, attachment.AgentTemporaryDirectoryPrefix)
 			if err != nil {
+				diagnostics.Error("agent.chat.attachment_setup", err)
 				http.Error(w, "agent request failed", http.StatusServiceUnavailable)
 				return
 			}
-			defer func() { _ = os.RemoveAll(directory) }()
+			defer func() {
+				if err := os.RemoveAll(directory); err != nil {
+					diagnostics.Error("agent.chat.attachment_cleanup", err)
+				}
+			}()
 			if err := os.Chmod(directory, 0700); err != nil {
+				diagnostics.Error("agent.chat.attachment_setup", err)
 				http.Error(w, "agent request failed", http.StatusServiceUnavailable)
 				return
 			}
@@ -413,6 +484,7 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 				metadata[index].Path = filepath.Join(directory, metadata[index].Filename)
 				file, err := os.OpenFile(metadata[index].Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 				if err != nil {
+					diagnostics.Error("agent.chat.attachment_write", err)
 					http.Error(w, "agent request failed", http.StatusServiceUnavailable)
 					return
 				}
@@ -421,6 +493,7 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 				}
 				closeErr := file.Close()
 				if err != nil || closeErr != nil {
+					diagnostics.Error("agent.chat.attachment_write", errors.Join(err, closeErr))
 					http.Error(w, "agent request failed", http.StatusServiceUnavailable)
 					return
 				}
@@ -447,11 +520,17 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 					return "Send /env with a document named goaster.env attached in the same message."
 				}
 				store, err := localenv.NewStore()
-				if err != nil || store.Load() != nil {
+				if err != nil {
+					diagnostics.Error("agent.environment.store", err)
+					return "Environment settings are unavailable; no changes were saved."
+				}
+				if err := store.Load(); err != nil {
+					diagnostics.Error("agent.environment.load", err)
 					return "Environment settings are unavailable; no changes were saved."
 				}
 				values, err := localenv.LoadFile(metadata[0].Path)
 				if err != nil {
+					diagnostics.Error("agent.environment.input", err)
 					return "The goaster.env file was rejected: use unique KEY=VALUE names, one setting per line, with no blank lines. No changes were saved."
 				}
 				changes := localenv.Changes(store.Values(), values)
@@ -475,14 +554,21 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			delete(environmentProposals, key)
 
 			store, err := localenv.NewStore()
-			if err != nil || store.Load() != nil {
+			if err != nil {
+				diagnostics.Error("agent.environment.store", err)
+				return "Environment settings are unavailable; no changes were saved."
+			}
+			if err := store.Load(); err != nil {
+				diagnostics.Error("agent.environment.load", err)
 				return "Environment settings are unavailable; no changes were saved."
 			}
 			changes, err := store.UpsertIfUnchanged(proposal.baseDigest, proposal.values)
 			if errors.Is(err, localenv.ErrChanged) {
+				diagnostics.Error("agent.environment.save", err)
 				return "Environment settings changed since this preview; send /env with goaster.env attached in the same message to review a fresh proposal."
 			}
 			if err != nil {
+				diagnostics.Error("agent.environment.save", err)
 				return "Environment settings could not be saved; no changes were applied."
 			}
 			if len(changes.Added) == 0 && len(changes.Modified) == 0 {
@@ -494,22 +580,35 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			reply := environmentReply(request.UserID, request.ChatID, request.Message, request.Attachments, metadata)
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.Header().Set("Cache-Control", "no-cache")
-			_ = json.NewEncoder(w).Encode(struct {
+			if err := json.NewEncoder(w).Encode(struct {
 				Type  string `json:"type"`
 				Reply string `json:"reply"`
-			}{"final", reply})
+			}{"final", reply}); err != nil {
+				diagnostics.Error("agent.environment.stream_encode", err)
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.Header().Set("Cache-Control", "no-cache")
 		encoder := json.NewEncoder(w)
-		flusher, canFlush := w.(http.Flusher)
+		_, canFlush := w.(http.Flusher)
 		streamEmitted := false
+		var streamErr error
 		emit := func(event any) {
+			if streamErr != nil {
+				return
+			}
 			streamEmitted = true
-			_ = encoder.Encode(event)
+			if err := encoder.Encode(event); err != nil {
+				streamErr = err
+				diagnostics.Error("agent.chat.stream_encode", err)
+				return
+			}
 			if canFlush {
-				flusher.Flush()
+				if err := http.NewResponseController(w).Flush(); err != nil {
+					streamErr = err
+					diagnostics.Error("agent.chat.stream_flush", err)
+				}
 			}
 		}
 		if chat.IsModelCommand(request.Message) {
@@ -540,8 +639,10 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			}
 		}
 		requestContext := chat.WithToolCallObserver(r.Context(), observer)
+		requestContext = chat.WithRuntimeFailureOperation(requestContext, "agent.chat")
 		values, environmentErr := runtimeEnvironment()
 		if environmentErr != nil {
+			diagnostics.Error("agent.chat.runtime_environment", environmentErr)
 			requestContext = chat.WithShellEnvironmentUnavailable(requestContext)
 		} else if len(values) > 0 {
 			requestContext = chat.WithShellEnvironment(requestContext, values)
@@ -723,7 +824,11 @@ func modelCommandReply(registry chat.ModelRegistry, chatID int64, message string
 		return "Usage: /m [MODEL_OR_ALIAS]"
 	}
 	if strings.TrimSpace(reference) == "" {
-		state, _ := registry.Current(chatID)
+		state, err := registry.Current(chatID)
+		if err != nil {
+			diagnostics.Error("agent.model.current", err)
+			return "Model selection could not be read."
+		}
 		return formatModelSelection("Current model", state.Selection)
 	}
 	if strings.ContainsAny(reference, " \t\r\n") {
@@ -731,6 +836,7 @@ func modelCommandReply(registry chat.ModelRegistry, chatID int64, message string
 	}
 	selection, err := registry.Select(chatID, reference)
 	if err != nil {
+		diagnostics.Error("agent.model.select", err, diagnostics.Field{Key: "model", Value: reference})
 		if errors.Is(err, chat.ErrModelConfigBroken) {
 			return "Model configuration is recovering; using emergency model " + chat.EmergencyModel + "."
 		}

@@ -559,7 +559,7 @@ func TestCodexProviderUsesSubscriptionBackendAndStreamsText(t *testing.T) {
 	}
 }
 
-func TestCodexProviderIncludesNonSuccessResponseBody(t *testing.T) {
+func TestCodexProviderIncludesSafeNonSuccessDetails(t *testing.T) {
 	store := CredentialStore{Path: filepath.Join(t.TempDir(), "auth.json")}
 	if err := store.Save(Credential{
 		AccessToken: "access-token",
@@ -567,8 +567,9 @@ func TestCodexProviderIncludesNonSuccessResponseBody(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	const body = `{"error":{"message":"provider rejected this request"}}`
+	const body = `{"error":{"type":"provider_error","code":"gateway_rejected","message":"private provider response"}}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-ID", "req-safe-123")
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprint(w, body)
 	}))
@@ -578,11 +579,12 @@ func TestCodexProviderIncludesNonSuccessResponseBody(t *testing.T) {
 	provider.backendURL = server.URL
 	provider.httpClient = server.Client()
 	_, err := provider.Reply(context.Background(), "gpt-test", "hello")
-	if err == nil || !strings.Contains(err.Error(), "Codex backend request failed with status 502 Bad Gateway") || !strings.Contains(err.Error(), body) {
-		t.Fatalf("provider error = %v, want status and unredacted response body", err)
+	if err == nil || !strings.Contains(err.Error(), "Codex backend request failed with status 502 Bad Gateway") ||
+		strings.Contains(err.Error(), "private provider response") {
+		t.Fatalf("provider error = %v, want safe status/type/code/request ID without body", err)
 	}
-	if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, body) {
-		t.Fatalf("request diagnostic = %q, want response body", diagnostic)
+	if diagnostic := requestFailureDiagnostic(err); strings.Contains(diagnostic, body) || strings.Contains(diagnostic, "private provider response") {
+		t.Fatalf("request diagnostic = %q, must not contain provider body", diagnostic)
 	}
 }
 
@@ -606,8 +608,8 @@ func TestCodexProviderPreservesInterruptedNonSuccessResponse(t *testing.T) {
 	provider.backendURL = server.URL
 	provider.httpClient = server.Client()
 	_, err := provider.Reply(context.Background(), "gpt-test", "hello")
-	if err == nil || !strings.Contains(err.Error(), "Codex backend request failed with status 502 Bad Gateway") || !strings.Contains(err.Error(), body) {
-		t.Fatalf("interrupted response error = %v, want status and partial response body", err)
+	if err == nil || !strings.Contains(err.Error(), "Codex backend request failed with status 502 Bad Gateway") || !strings.Contains(err.Error(), "unexpected EOF") || strings.Contains(err.Error(), body) {
+		t.Fatalf("interrupted response error = %v, want status and transport cause without partial body", err)
 	}
 }
 
@@ -615,8 +617,8 @@ func TestParseCodexSSEFailureDetailsAndCompletion(t *testing.T) {
 	t.Run("nested failure details", func(t *testing.T) {
 		body := []byte("data: " + `{"type":"response.failed","response":{"error":{"code":"server_error","message":"nested backend detail"}}}` + "\n\n")
 		_, err := parseCodexResponseResult(body)
-		if err == nil || !strings.Contains(err.Error(), "server_error") || !strings.Contains(err.Error(), "nested backend detail") {
-			t.Fatalf("nested failure error = %v, want nested error details", err)
+		if err == nil || !strings.Contains(err.Error(), "backend returned an error") || strings.Contains(err.Error(), "nested backend detail") {
+			t.Fatalf("nested failure error = %v, want backend code without backend message", err)
 		}
 	})
 
@@ -673,8 +675,8 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		const firstBody = `{"error":{"message":"access token expired"}}`
-		const retryBody = `{"error":{"message":"refreshed token rejected"}}`
+		const firstBody = `{"error":{"type":"auth_error","code":"access_expired","message":"private access detail"}}`
+		const retryBody = `{"error":{"type":"auth_error","code":"retry_rejected","message":"private retry detail"}}`
 		var backendRequests, refreshRequests atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/oauth/token" {
@@ -700,10 +702,13 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 		if !errors.Is(err, ErrLoginRequired) || !errors.Is(err, errRequestAuthentication) {
 			t.Fatalf("401 retry classifications = %v", err)
 		}
-		if !strings.Contains(err.Error(), firstBody) || !strings.Contains(err.Error(), retryBody) {
-			t.Fatalf("401 retry error = %v, want both backend response bodies", err)
+		if strings.Count(err.Error(), "status 401") != 2 ||
+			strings.Contains(err.Error(), "private access detail") || strings.Contains(err.Error(), "private retry detail") {
+			t.Fatalf("401 retry error = %v, want both safe backend codes without response bodies", err)
 		}
-		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, requestFailureAuthentication) || !strings.Contains(diagnostic, firstBody) || !strings.Contains(diagnostic, retryBody) {
+		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, requestFailureAuthentication) ||
+			strings.Count(diagnostic, "status 401") != 2 ||
+			strings.Contains(diagnostic, "private access detail") || strings.Contains(diagnostic, "private retry detail") {
 			t.Fatalf("401 retry diagnostic = %q", diagnostic)
 		}
 		if backendRequests.Load() != 2 || refreshRequests.Load() != 1 {
@@ -720,8 +725,8 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		const firstBody = `{"error":{"message":"access token expired before refresh"}}`
-		const refreshBody = `{"error":{"message":"refresh service unavailable"}}`
+		const firstBody = `{"error":{"type":"auth_error","code":"access_expired_before_refresh","message":"private access detail"}}`
+		const refreshBody = `{"error":{"type":"auth_error","code":"refresh_unavailable","message":"private refresh detail"}}`
 		var backendRequests, refreshRequests atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/oauth/token" {
@@ -742,10 +747,11 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 		provider.auth.AuthBaseURL = server.URL
 		provider.auth.HTTPClient = server.Client()
 		_, err := NewSession(Config{Model: "gpt-test"}, provider).Reply(context.Background(), "hello")
-		if err == nil || !errors.Is(err, errRequestAuthentication) || !strings.Contains(err.Error(), firstBody) || !strings.Contains(err.Error(), refreshBody) {
-			t.Fatalf("refresh failure error = %v, want initial and refresh errors", err)
+		if err == nil || !errors.Is(err, errRequestAuthentication) || !strings.Contains(err.Error(), "status 401") ||
+			!strings.Contains(err.Error(), "status 502 Bad Gateway") || strings.Contains(err.Error(), "private access detail") || strings.Contains(err.Error(), "private refresh detail") {
+			t.Fatalf("refresh failure error = %v, want safe initial and refresh errors", err)
 		}
-		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, firstBody) || !strings.Contains(diagnostic, refreshBody) {
+		if diagnostic := requestFailureDiagnostic(err); strings.Contains(diagnostic, "private access detail") || strings.Contains(diagnostic, "private refresh detail") {
 			t.Fatalf("refresh failure diagnostic = %q", diagnostic)
 		}
 		if backendRequests.Load() != 1 || refreshRequests.Load() != 1 {
@@ -762,8 +768,8 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		const firstBody = `{"error":{"message":"access token expired before retry"}}`
-		const retryBody = `{"error":{"message":"retry backend failed"}}`
+		const firstBody = `{"error":{"type":"auth_error","code":"access_expired_before_retry","message":"private access detail"}}`
+		const retryBody = `{"error":{"type":"backend_error","code":"retry_failed","message":"private retry detail"}}`
 		var backendRequests, refreshRequests atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/oauth/token" {
@@ -787,13 +793,14 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 		provider.auth.AuthBaseURL = server.URL
 		provider.auth.HTTPClient = server.Client()
 		_, err := NewSession(Config{Model: "gpt-test"}, provider).Reply(context.Background(), "hello")
-		if err == nil || !strings.Contains(err.Error(), firstBody) || !strings.Contains(err.Error(), retryBody) {
-			t.Fatalf("retry failure error = %v, want initial and retry errors", err)
+		if err == nil || !strings.Contains(err.Error(), "status 401") || !strings.Contains(err.Error(), "status 502") ||
+			strings.Contains(err.Error(), "private access detail") || strings.Contains(err.Error(), "private retry detail") {
+			t.Fatalf("retry failure error = %v, want safe initial and retry errors", err)
 		}
 		if errors.Is(err, ErrLoginRequired) || errors.Is(err, errRequestAuthentication) {
 			t.Fatalf("retry failure was classified as authentication: %v", err)
 		}
-		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, firstBody) || !strings.Contains(diagnostic, retryBody) {
+		if diagnostic := requestFailureDiagnostic(err); strings.Contains(diagnostic, "private access detail") || strings.Contains(diagnostic, "private retry detail") {
 			t.Fatalf("retry failure diagnostic = %q", diagnostic)
 		}
 		if backendRequests.Load() != 2 || refreshRequests.Load() != 1 {
@@ -820,10 +827,10 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 		if !errors.Is(err, ErrModelUnavailable) || errors.Is(err, ErrLoginRequired) {
 			t.Fatalf("404 classifications = %v", err)
 		}
-		if !strings.Contains(err.Error(), body) {
-			t.Fatalf("404 error = %v, want backend response body", err)
+		if !strings.Contains(err.Error(), "status 404") || strings.Contains(err.Error(), "backend model detail") {
+			t.Fatalf("404 error = %v, want backend code without backend response body", err)
 		}
-		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, requestFailureModelUnavailable) || !strings.Contains(diagnostic, body) {
+		if diagnostic := requestFailureDiagnostic(err); !strings.Contains(diagnostic, requestFailureModelUnavailable) || strings.Contains(diagnostic, "backend model detail") {
 			t.Fatalf("404 diagnostic = %q", diagnostic)
 		}
 	})
@@ -834,7 +841,7 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 			t.Fatal(err)
 		}
 		const toolCall = `{"output":[{"type":"function_call","call_id":"call-1","name":"public_flow_tool","arguments":"{}"}]}`
-		const body = `{"error":{"message":"backend rejected the post-tool request"}}`
+		const body = `{"error":{"type":"auth_error","code":"post_tool_rejected","message":"private post-tool detail"}}`
 		var backendRequests, toolCalls atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if backendRequests.Add(1) == 1 {
@@ -873,8 +880,8 @@ func TestCodexProviderPreservesBackendErrorsThroughPublicFlows(t *testing.T) {
 		if !errors.Is(err, postToolAuthenticationMarker{}) || PostToolAuthenticationMessage(err) != postToolAuthenticationWarning {
 			t.Fatalf("post-tool classifications = %v", err)
 		}
-		if !strings.Contains(err.Error(), body) || !strings.Contains(err.Error(), "Check and reconcile external state") {
-			t.Fatalf("post-tool error = %v, want backend response body and recovery guidance", err)
+		if !strings.Contains(err.Error(), "Check and reconcile external state") || strings.Contains(err.Error(), "private post-tool detail") {
+			t.Fatalf("post-tool error = %v, want recovery guidance without backend body", err)
 		}
 		if backendRequests.Load() != 2 || toolCalls.Load() != 1 {
 			t.Fatalf("post-tool requests = %d, tool calls = %d", backendRequests.Load(), toolCalls.Load())
@@ -1457,7 +1464,7 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 			NewSession(Config{Model: "private-model"}, provider), terminalStore,
 			EnvironmentFilePickerFunc(func() (string, error) { return "", ErrEnvironmentFilePickerCanceled }), terminalUI{interactive: interactive, width: 200})
 		if interactive {
-			if err != nil || !strings.Contains(output.String(), "OpenAI authentication failed after a tool started.") || !strings.Contains(output.String(), "Check and reconcile external state") || !strings.Contains(output.String(), "before retrying.") || !strings.Contains(output.String(), "fake-backend-secret") {
+			if err != nil || !strings.Contains(output.String(), "OpenAI authentication failed after a tool started.") || !strings.Contains(output.String(), "Check and reconcile external state") || !strings.Contains(output.String(), "before retrying.") || strings.Contains(output.String(), "fake-backend-secret") {
 				t.Fatalf("interactive warning: err=%v output=%q", err, output.String())
 			}
 		} else if err == nil || !strings.Contains(err.Error(), postToolAuthenticationWarning) || !strings.Contains(err.Error(), requestUncertaintyWarning) || strings.Contains(err.Error(), "private-model") {
@@ -1600,21 +1607,15 @@ func TestCodexProviderRequiresStartupAuthenticationBeforeBackendRequest(t *testi
 	for _, scheduled := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(context.Background())
 		var connections atomic.Int32
-		testClientDialOverrides.Store(server.URL, func(context.Context, string, string) (net.Conn, error) {
-			step := connections.Add(1)
-			local, remote := net.Pipe()
-			_ = remote.Close()
-			started := make(chan struct{})
-			notify := sync.OnceFunc(func() { close(started) })
-			if step == 1 {
-				wire := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(customBatch), customBatch)
-				return codexTestConnection{Conn: local, Reader: strings.NewReader(wire), started: started, notify: notify}, nil
+		// Return headers before reading the canceling body. A net/http socket
+		// reader can prefetch the body and cancel before Do returns headers,
+		// which exercises a different (pre-response) cancellation boundary.
+		provider.httpClient = &http.Client{Transport: errorLoggingRoundTripper(func(*http.Request) (*http.Response, error) {
+			if connections.Add(1) == 1 {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(customBatch))}, nil
 			}
-			wire := "HTTP/1.1 401 Unauthorized\r\nContent-Length: 1\r\nConnection: close\r\n\r\n"
-			body := io.MultiReader(strings.NewReader(wire), cancelingDeadlineReader{cancel: cancel})
-			return codexTestConnection{Conn: local, Reader: body, started: started, notify: notify}, nil
-		})
-		provider.httpClient = webFetchTestClient(t, server, nil)
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(cancelingDeadlineReader{cancel: cancel})}, nil
+		})}
 		var err error
 		if scheduled {
 			_, err = NewSession(Config{Model: "gpt-test"}, provider).ReplyScheduled(ctx, "scheduled")

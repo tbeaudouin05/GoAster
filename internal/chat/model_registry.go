@@ -16,6 +16,7 @@ import (
 
 	appconfig "goaster/config"
 	"goaster/internal/artefacts"
+	"goaster/internal/diagnostics"
 )
 
 const (
@@ -569,4 +570,20 @@ func (s *Session) PendingModelRecoveryNotice() string {
 	recovery.reported = true
 	modelRecovery[pathName] = recovery
 	return recovery.notice
+}
+
+// Resolve diagnostic model names only against the trusted configured registry.
+func configuredModelDiagnostic(registry ModelRegistry, model string) []diagnostics.Field {
+	modelRegistryMu.Lock()
+	defer modelRegistryMu.Unlock()
+	config, _, _, err := registry.loadLocked()
+	if err != nil {
+		return nil
+	}
+	for _, configured := range config.Models {
+		if configured.ID == model {
+			return []diagnostics.Field{{Key: "configured_model", Value: configured.ID}}
+		}
+	}
+	return nil
 }

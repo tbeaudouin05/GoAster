@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"goaster/internal/diagnostics"
 )
 
 const (
@@ -129,10 +132,10 @@ func searchDuckDuckGo(ctx context.Context, client *http.Client, endpoint string,
 
 	searchURL, err := url.Parse(endpoint)
 	if err != nil {
-		return "", fmt.Errorf("build DuckDuckGo URL: %w", err)
+		return "", webRuntimeFailure("chat.web_search", fmt.Errorf("build DuckDuckGo URL: %w", err), "")
 	}
 	if searchURL.Scheme != "http" && searchURL.Scheme != "https" || searchURL.Host == "" {
-		return "", fmt.Errorf("build DuckDuckGo URL: endpoint must be an HTTP or HTTPS URL")
+		return "", webRuntimeFailure("chat.web_search", fmt.Errorf("build DuckDuckGo URL: endpoint must be an HTTP or HTTPS URL"), "")
 	}
 	query := searchURL.Query()
 	query.Set("q", args.Query)
@@ -147,31 +150,46 @@ func searchDuckDuckGo(ctx context.Context, client *http.Client, endpoint string,
 	defer cancel()
 	request, err := http.NewRequestWithContext(searchContext, http.MethodGet, searchURL.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("build DuckDuckGo request: %w", err)
+		return "", webRuntimeFailure("chat.web_search", fmt.Errorf("build DuckDuckGo request: %w", err), "")
 	}
 	request.Header.Set("Accept", "text/html,application/xhtml+xml")
 	request.Header.Set("User-Agent", webSearchUserAgent)
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("DuckDuckGo request failed: %w", err)
+		return "", webRuntimeFailure("chat.web_search", fmt.Errorf("DuckDuckGo request failed: %w", err), "")
+	}
+	if response == nil || response.Body == nil {
+		return "", webRuntimeFailure("chat.web_search", errors.New("DuckDuckGo response body is missing"), "")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("DuckDuckGo search failed with status %s", response.Status)
+		return "", webRuntimeFailure("chat.web_search", fmt.Errorf("DuckDuckGo search failed with status %s", response.Status), response.Status)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, webSearchMaxBodyBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("read DuckDuckGo response: %w", err)
+		return "", webRuntimeFailure("chat.web_search", fmt.Errorf("read DuckDuckGo response: %w", err), response.Status)
 	}
 	if len(body) > webSearchMaxBodyBytes {
-		return "", fmt.Errorf("DuckDuckGo response exceeds %d bytes", webSearchMaxBodyBytes)
+		return "", webRuntimeFailure("chat.web_search", fmt.Errorf("DuckDuckGo response exceeds %d bytes", webSearchMaxBodyBytes), response.Status)
 	}
 	results, err := parseDuckDuckGoResults(body, count)
 	if err != nil {
-		return "", fmt.Errorf("parse DuckDuckGo response: %w", err)
+		return "", webRuntimeFailure("chat.web_search", fmt.Errorf("parse DuckDuckGo response: %w", err), response.Status)
 	}
 	return formatDuckDuckGoResults(args.Query, results), nil
+}
+
+func webRuntimeFailure(operation string, err error, status string) error {
+	if err == nil {
+		return nil
+	}
+	fields := []diagnostics.Field{}
+	if strings.TrimSpace(status) != "" {
+		fields = append(fields, diagnostics.Field{Key: "status", Value: status})
+	}
+	diagnostics.Error(operation, err, fields...)
+	return err
 }
 
 func duckDuckGoDateFilter(rangeCode string) string {

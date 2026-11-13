@@ -10,7 +10,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"goaster/internal/chat"
 	"goaster/internal/controlsecret"
 	"goaster/internal/controltransport"
+	"goaster/internal/diagnostics"
 	"goaster/internal/localenv"
 	"goaster/internal/telegramcommands"
 )
@@ -116,7 +116,56 @@ type telegramFile struct {
 
 type telegramFormattingError struct{}
 
-func (telegramFormattingError) Error() string { return "Telegram request failed" }
+func (telegramFormattingError) Error() string { return "Telegram rejected message formatting" }
+
+type telegramAPIError struct {
+	method      string
+	status      string
+	errorCode   int
+	description string
+}
+
+func (err telegramAPIError) Error() string {
+	status := strings.Join(strings.Fields(err.status), " ")
+	if status == "" {
+		status = "unknown status"
+	}
+	if err.errorCode != 0 {
+		return fmt.Sprintf("Telegram %s failed with status %s (error_code=%d)", err.method, status, err.errorCode)
+	}
+	return fmt.Sprintf("Telegram %s failed with status %s", err.method, status)
+}
+
+func (err telegramAPIError) DiagnosticFields() []diagnostics.Field {
+	return []diagnostics.Field{{Key: "backend_message", Value: diagnostics.RemoteMessage(err.description)}}
+}
+
+// Keep startup messages safe for callers while preserving errors.Is/As causes.
+type telegramStartupError struct {
+	message string
+	cause   error
+}
+
+func (err telegramStartupError) Error() string { return err.message }
+func (err telegramStartupError) Unwrap() error { return err.cause }
+
+func telegramFailure(method string, err error, status string, errorCode int, requestID string) error {
+	if err == nil {
+		return nil
+	}
+	fields := []diagnostics.Field{{Key: "method", Value: method}}
+	if strings.TrimSpace(status) != "" {
+		fields = append(fields, diagnostics.Field{Key: "status", Value: status})
+	}
+	if errorCode != 0 {
+		fields = append(fields, diagnostics.Field{Key: "backend_code", Value: strconv.Itoa(errorCode)})
+	}
+	if strings.TrimSpace(requestID) != "" {
+		fields = append(fields, diagnostics.Field{Key: "request_id", Value: requestID})
+	}
+	diagnostics.Error("telegram.api", err, fields...)
+	return err
+}
 
 type agentModelError struct {
 	message string
@@ -157,19 +206,27 @@ const telegramNoActiveTurnMessage = "No agent turn is running."
 func Run(ctx context.Context, paths Paths, ready func() error) error {
 	controlSecret, err := controlsecret.Load()
 	if err != nil {
+		diagnostics.Error("telegram.startup.control_secret", err)
 		return err
 	}
 	agent, err := newAgentClient()
 	if err != nil {
+		diagnostics.Error("telegram.startup.agent_client", err)
 		return err
 	}
 	token, err := readPrivate(paths.Token)
-	if err != nil || ValidateToken(string(token)) != nil {
-		return fmt.Errorf("Telegram token file is invalid")
+	if err != nil {
+		diagnostics.Error("telegram.startup.token", err)
+		return telegramStartupError{message: "Telegram token file is invalid", cause: err}
+	}
+	if err := ValidateToken(string(token)); err != nil {
+		diagnostics.Error("telegram.startup.token", err)
+		return telegramStartupError{message: "Telegram token file is invalid", cause: err}
 	}
 	pairing, err := loadPairing(paths)
 	if err != nil {
-		return fmt.Errorf("Telegram pairing state is invalid")
+		diagnostics.Error("telegram.startup.pairing", err)
+		return telegramStartupError{message: "Telegram pairing state is invalid", cause: err}
 	}
 	a := &adapter{
 		token: string(token), pairing: pairing,
@@ -197,7 +254,7 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 	}
 	updates, err := a.getUpdates(ctx, 0, 0)
 	if err != nil {
-		return fmt.Errorf("Telegram polling could not start; check the bot token, connection and webhook settings")
+		return telegramStartupError{message: "Telegram polling could not start; check the bot token, connection and webhook settings", cause: err}
 	}
 	if !a.agentEndpointAvailable(ctx, "/livez") {
 		return fmt.Errorf("remote agent is unavailable")
@@ -205,7 +262,8 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 	a.registerTelegramCommands(ctx)
 	if ready != nil {
 		if err := ready(); err != nil {
-			return fmt.Errorf("could not report Telegram service readiness")
+			diagnostics.Error("telegram.ready", err)
+			return telegramStartupError{message: "could not report Telegram service readiness", cause: err}
 		}
 	}
 	var offset int64
@@ -317,22 +375,37 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 }
 
 func (a *adapter) agentEndpointAvailable(ctx context.Context, endpoint string) bool {
-	if a.agent == nil {
+	if a == nil || a.agent == nil {
+		telegramFailure("agent probe", errors.New("remote agent client is unavailable"), "", 0, "")
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8765"+endpoint, nil)
 	if err != nil {
+		telegramFailure("agent probe", fmt.Errorf("build request for %s: %w", endpoint, err), "", 0, "")
 		return false
 	}
 	resp, err := a.agent.Do(req)
 	if err != nil {
+		telegramFailure("agent probe", fmt.Errorf("request %s: %w", endpoint, err), "", 0, "")
+		return false
+	}
+	if resp == nil || resp.Body == nil {
+		telegramFailure("agent probe", fmt.Errorf("request %s returned no response body", endpoint), "", 0, "")
 		return false
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 33))
-	return err == nil && resp.StatusCode == http.StatusOK && string(body) == "ok\n"
+	if err != nil {
+		telegramFailure("agent probe", fmt.Errorf("read response from %s: %w", endpoint, err), resp.Status, 0, resp.Header.Get("x-request-id"))
+		return false
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != "ok\n" {
+		telegramFailure("agent probe", fmt.Errorf("request %s returned an unavailable response", endpoint), resp.Status, 0, resp.Header.Get("x-request-id"))
+		return false
+	}
+	return true
 }
 
 func (a *adapter) getUpdates(ctx context.Context, offset int64, timeout int) ([]update, error) {
@@ -343,7 +416,7 @@ func (a *adapter) getUpdates(ctx context.Context, offset int64, timeout int) ([]
 		AllowedUpdates []string `json:"allowed_updates"`
 	}{offset, timeout, []string{"message"}}, &updates)
 	if err == nil && updates == nil {
-		return nil, fmt.Errorf("Telegram response was invalid")
+		return nil, telegramFailure("getUpdates", errors.New("Telegram response contained no update list"), "200 OK", 0, "")
 	}
 	return updates, err
 }
@@ -354,40 +427,59 @@ func (a *adapter) registerTelegramCommands(ctx context.Context) {
 	if err := a.call(registrationCtx, "setMyCommands", struct {
 		Commands []telegramBotCommand `json:"commands"`
 	}{Commands: telegramBotCommands}, nil); err != nil {
-		fmt.Fprintln(os.Stderr, "telegram: command menu registration failed")
+		return
 	}
 }
 
 func (a *adapter) call(ctx context.Context, method string, payload any, result any) error {
+	if a == nil || a.client == nil {
+		return telegramFailure(method, errors.New("Telegram client is unavailable"), "", 0, "")
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("Telegram request failed")
+		return telegramFailure(method, fmt.Errorf("encode Telegram request: %w", err), "", 0, "")
 	}
 	// This URL must never be included in an error or log because it contains the token.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.apiBase+"/bot"+a.token+"/"+method, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("Telegram request failed")
+		return telegramFailure(method, fmt.Errorf("build Telegram request: %w", err), "", 0, "")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("Telegram request failed")
+		return telegramFailure(method, fmt.Errorf("Telegram transport: %w", err), "", 0, "")
+	}
+	if resp == nil || resp.Body == nil {
+		return telegramFailure(method, errors.New("Telegram response body is missing"), "", 0, "")
 	}
 	defer resp.Body.Close()
 	var envelope struct {
 		OK          bool            `json:"ok"`
 		Result      json.RawMessage `json:"result"`
 		Description string          `json:"description"`
+		ErrorCode   int             `json:"error_code"`
 	}
-	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&envelope)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024+1))
+	if readErr != nil {
+		return telegramFailure(method, fmt.Errorf("read Telegram response: %w", readErr), resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
+	}
+	if len(body) > 4*1024*1024 {
+		return telegramFailure(method, errors.New("Telegram response body exceeds the limit"), resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
+	}
+	decodeErr := json.Unmarshal(body, &envelope)
 	if isTelegramFormattingRejection(envelope.Description) {
-		return telegramFormattingError{}
+		return telegramFailure(method, telegramFormattingError{}, resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
 	}
 	if decodeErr != nil || !envelope.OK || resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Telegram request failed")
+		if decodeErr != nil {
+			return telegramFailure(method, fmt.Errorf("decode Telegram response: %w", decodeErr), resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
+		}
+		return telegramFailure(method, telegramAPIError{method: method, status: resp.Status, errorCode: envelope.ErrorCode, description: envelope.Description}, resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
 	}
-	if result != nil && json.Unmarshal(envelope.Result, result) != nil {
-		return fmt.Errorf("Telegram response was invalid")
+	if result != nil {
+		if err := json.Unmarshal(envelope.Result, result); err != nil {
+			return telegramFailure(method, fmt.Errorf("decode Telegram result: %w", err), resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
+		}
 	}
 	return nil
 }
@@ -590,6 +682,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		}
 		data, err := localenv.ReadSavedFile()
 		if err != nil {
+			diagnostics.Error("telegram.environment.read", err)
 			a.send(ctx, m.Chat.ID, "The environment file is unavailable.")
 			return
 		}
@@ -910,46 +1003,70 @@ func (a *adapter) sendMessage(ctx context.Context, chatID int64, text string) (i
 }
 
 func sendDocument(ctx context.Context, client httpDoer, apiBase, token string, chatID int64, filename string, data []byte) error {
+	if client == nil {
+		return telegramFailure("sendDocument", errors.New("Telegram client is unavailable"), "", 0, "")
+	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
-		return fmt.Errorf("Telegram request failed")
+		return telegramFailure("sendDocument", fmt.Errorf("encode chat ID: %w", err), "", 0, "")
 	}
 	if threadID := telegramThreadID(ctx); threadID != 0 {
 		if err := writer.WriteField("message_thread_id", strconv.FormatInt(threadID, 10)); err != nil {
-			return fmt.Errorf("Telegram request failed")
+			return telegramFailure("sendDocument", fmt.Errorf("encode thread ID: %w", err), "", 0, "")
 		}
 	}
 	part, err := writer.CreateFormFile("document", filename)
 	if err != nil {
-		return fmt.Errorf("Telegram request failed")
+		return telegramFailure("sendDocument", fmt.Errorf("create document part: %w", err), "", 0, "")
 	}
 	if _, err := part.Write(data); err != nil {
-		return fmt.Errorf("Telegram request failed")
+		return telegramFailure("sendDocument", fmt.Errorf("write document part: %w", err), "", 0, "")
 	}
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("Telegram request failed")
+		return telegramFailure("sendDocument", fmt.Errorf("close multipart request: %w", err), "", 0, "")
 	}
 	return callMultipart(ctx, client, apiBase, token, "sendDocument", writer.FormDataContentType(), body.Bytes())
 }
 
 func callMultipart(ctx context.Context, client httpDoer, apiBase, token, method, contentType string, body []byte) error {
+	if client == nil {
+		return telegramFailure(method, errors.New("Telegram client is unavailable"), "", 0, "")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/bot"+token+"/"+method, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("Telegram request failed")
+		return telegramFailure(method, fmt.Errorf("build Telegram request: %w", err), "", 0, "")
 	}
 	req.Header.Set("Content-Type", contentType)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("Telegram request failed")
+		return telegramFailure(method, fmt.Errorf("Telegram transport: %w", err), "", 0, "")
+	}
+	if resp == nil || resp.Body == nil {
+		return telegramFailure(method, errors.New("Telegram response body is missing"), "", 0, "")
 	}
 	defer resp.Body.Close()
 	var envelope struct {
-		OK bool `json:"ok"`
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		ErrorCode   int    `json:"error_code"`
 	}
-	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&envelope)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024+1))
+	if readErr != nil {
+		return telegramFailure(method, fmt.Errorf("read Telegram response: %w", readErr), resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
+	}
+	if len(body) > 4*1024*1024 {
+		return telegramFailure(method, errors.New("Telegram response body exceeds the limit"), resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
+	}
+	decodeErr := json.Unmarshal(body, &envelope)
+	if isTelegramFormattingRejection(envelope.Description) {
+		return telegramFailure(method, telegramFormattingError{}, resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
+	}
 	if decodeErr != nil || !envelope.OK || resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Telegram request failed")
+		if decodeErr != nil {
+			return telegramFailure(method, fmt.Errorf("decode Telegram response: %w", decodeErr), resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
+		}
+		return telegramFailure(method, telegramAPIError{method: method, status: resp.Status, errorCode: envelope.ErrorCode, description: envelope.Description}, resp.Status, envelope.ErrorCode, resp.Header.Get("x-request-id"))
 	}
 	return nil
 }
@@ -1005,6 +1122,9 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 }
 
 func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, attachments []attachment.Incoming, onToolCall func(string, string), agent httpDoer, controlSecret string) (string, error) {
+	if agent == nil {
+		return "", telegramAgentFailure(errors.New("remote agent client is unavailable"), "", 0, "")
+	}
 	body, err := json.Marshal(struct {
 		Message     string                `json:"message"`
 		ChatID      int64                 `json:"chat_id"`
@@ -1012,30 +1132,36 @@ func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, at
 		Attachments []attachment.Incoming `json:"attachments,omitempty"`
 	}{Message: text, ChatID: chatID, UserID: userID, Attachments: attachments})
 	if err != nil {
-		return "", fmt.Errorf("agent request failed: %w", err)
+		return "", telegramAgentFailure(fmt.Errorf("encode agent request: %w", err), "", 0, "")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:8765/chat", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("agent request failed: %w", err)
+		return "", telegramAgentFailure(fmt.Errorf("build agent request: %w", err), "", 0, "")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(telegramControlAuthorizationHeader, controlSecret)
 	resp, err := agent.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("agent request failed: %w", err)
+		return "", telegramAgentFailure(fmt.Errorf("agent transport: %w", err), "", 0, "")
+	}
+	if resp == nil || resp.Body == nil {
+		return "", telegramAgentFailure(errors.New("agent response body is missing"), "", 0, "")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnsupportedMediaType {
 		return "", attachment.ErrUnsupportedImage
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if readErr != nil {
+			return "", telegramAgentFailure(fmt.Errorf("read agent error response: %w", readErr), resp.Status, 0, resp.Header.Get("x-request-id"))
+		}
 		if resp.Header.Get("X-GoAster-Error") == "post-tool-authentication" {
 			message := strings.TrimSuffix(string(body), "\n")
 			if chat.IsPostToolAuthenticationMessage(message) {
 				return "", agentModelError{message: message}
 			}
-			return "", fmt.Errorf("agent request failed")
+			return "", telegramAgentFailure(fmt.Errorf("agent returned an invalid post-tool authentication error"), resp.Status, 0, resp.Header.Get("x-request-id"))
 		}
 		message := strings.TrimSpace(string(body))
 		if resp.Header.Get("X-GoAster-Error") == "skill-recovery" && chat.IsSkillRecoveryMessage(message) {
@@ -1044,7 +1170,7 @@ func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, at
 		if strings.HasPrefix(message, "model ") {
 			return "", agentModelError{message: truncateRunes(message, 512)}
 		}
-		return "", fmt.Errorf("agent request failed")
+		return "", telegramAgentFailure(fmt.Errorf("agent returned status %s", resp.Status), resp.Status, 0, resp.Header.Get("x-request-id"))
 	}
 	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 4*1024*1024))
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
@@ -1062,10 +1188,10 @@ func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, at
 			Error string `json:"error"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &toolEvent); err != nil {
-			return "", fmt.Errorf("agent request failed: %w", err)
+			return "", telegramAgentFailure(fmt.Errorf("decode agent stream event: %w", err), resp.Status, 0, resp.Header.Get("x-request-id"))
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &replyEvent); err != nil {
-			return "", fmt.Errorf("agent request failed: %w", err)
+			return "", telegramAgentFailure(fmt.Errorf("decode agent stream event: %w", err), resp.Status, 0, resp.Header.Get("x-request-id"))
 		}
 		switch replyEvent.Type {
 		case "tool_call":
@@ -1091,15 +1217,33 @@ func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, at
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("agent request failed: %w", err)
+		return "", telegramAgentFailure(fmt.Errorf("scan agent response: %w", err), resp.Status, 0, resp.Header.Get("x-request-id"))
 	}
 	if strings.TrimSpace(reply) == "" {
 		if modelError != "" {
 			return "", agentModelError{message: modelError}
 		}
-		return "", fmt.Errorf("agent request failed")
+		return "", telegramAgentFailure(errors.New("agent response contained no final reply"), resp.Status, 0, resp.Header.Get("x-request-id"))
 	}
 	return reply, nil
+}
+
+func telegramAgentFailure(err error, status string, errorCode int, requestID string) error {
+	if err == nil {
+		return nil
+	}
+	fields := []diagnostics.Field{}
+	if strings.TrimSpace(status) != "" {
+		fields = append(fields, diagnostics.Field{Key: "status", Value: status})
+	}
+	if errorCode != 0 {
+		fields = append(fields, diagnostics.Field{Key: "backend_code", Value: strconv.Itoa(errorCode)})
+	}
+	if strings.TrimSpace(requestID) != "" {
+		fields = append(fields, diagnostics.Field{Key: "request_id", Value: requestID})
+	}
+	diagnostics.Error("telegram.agent.chat", err, fields...)
+	return err
 }
 
 func isTelegramEnvironmentMessage(text string) bool {
@@ -1265,27 +1409,33 @@ func (a *adapter) downloadAttachments(ctx context.Context, m *message) ([]attach
 		return nil, nil
 	}
 	source, err := m.attachmentSource()
-	if err != nil || strings.TrimSpace(source.fileID) == "" {
-		return nil, fmt.Errorf("attachment download failed")
+	if err != nil {
+		return nil, telegramFailure("downloadAttachment", fmt.Errorf("select attachment: %w", err), "", 0, "")
+	}
+	if strings.TrimSpace(source.fileID) == "" {
+		return nil, telegramFailure("downloadAttachment", errors.New("attachment has no Telegram file ID"), "", 0, "")
 	}
 	limit := a.maxAttachmentBytes()
 	if source.fileSize < 0 || source.fileSize > limit {
-		return nil, fmt.Errorf("attachment exceeds the size limit")
+		return nil, telegramFailure("downloadAttachment", errors.New("attachment exceeds the size limit"), "", 0, "")
 	}
 
 	var file telegramFile
 	if err := a.call(ctx, "getFile", struct {
 		FileID string `json:"file_id"`
-	}{source.fileID}, &file); err != nil || file.FilePath == "" || file.FileSize < 0 || file.FileSize > limit {
-		return nil, fmt.Errorf("attachment download failed")
+	}{source.fileID}, &file); err != nil {
+		return nil, fmt.Errorf("get Telegram file: %w", err)
+	}
+	if file.FilePath == "" || file.FileSize < 0 || file.FileSize > limit {
+		return nil, telegramFailure("downloadAttachment", errors.New("Telegram file metadata is invalid or exceeds the size limit"), "", 0, "")
 	}
 	downloadURL, err := telegramFileURL(a.apiBase, a.token, file.FilePath)
 	if err != nil {
-		return nil, fmt.Errorf("attachment download failed")
+		return nil, telegramFailure("downloadAttachment", fmt.Errorf("build Telegram file URL: %w", err), "", 0, "")
 	}
 	data, err := a.downloadFile(ctx, downloadURL, limit)
 	if err != nil {
-		return nil, fmt.Errorf("attachment download failed")
+		return nil, fmt.Errorf("download Telegram attachment: %w", err)
 	}
 	item := attachment.Incoming{
 		Type: source.kind, Filename: source.filename, MIMEType: source.mimeType,
@@ -1296,7 +1446,7 @@ func (a *adapter) downloadAttachments(ctx context.Context, m *message) ([]attach
 		if errors.Is(err, attachment.ErrUnsupportedImage) {
 			return nil, attachment.ErrUnsupportedImage
 		}
-		return nil, fmt.Errorf("attachment download failed")
+		return nil, telegramFailure("downloadAttachment", fmt.Errorf("validate downloaded attachment: %w", err), "", 0, "")
 	}
 	item.Type, item.MIMEType = metadata.Type, metadata.MIMEType
 	return []attachment.Incoming{item}, nil
@@ -1304,26 +1454,35 @@ func (a *adapter) downloadAttachments(ctx context.Context, m *message) ([]attach
 
 func (a *adapter) downloadFile(ctx context.Context, downloadURL string, limit int64) ([]byte, error) {
 	if limit <= 0 {
-		return nil, fmt.Errorf("attachment size limit is invalid")
+		return nil, telegramFailure("downloadFile", errors.New("attachment size limit is invalid"), "", 0, "")
+	}
+	if a == nil || a.client == nil {
+		return nil, telegramFailure("downloadFile", errors.New("Telegram client is unavailable"), "", 0, "")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("attachment download failed")
+		return nil, telegramFailure("downloadFile", fmt.Errorf("build Telegram file request: %w", err), "", 0, "")
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("attachment download failed")
+		return nil, telegramFailure("downloadFile", fmt.Errorf("Telegram file transport: %w", err), "", 0, "")
+	}
+	if resp == nil {
+		return nil, telegramFailure("downloadFile", errors.New("Telegram file response is missing"), "", 0, "")
 	}
 	if resp.Body == nil {
-		return nil, fmt.Errorf("attachment download failed")
+		return nil, telegramFailure("downloadFile", errors.New("Telegram file response body is missing"), resp.Status, 0, resp.Header.Get("x-request-id"))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || resp.ContentLength > limit {
-		return nil, fmt.Errorf("attachment download failed")
+		return nil, telegramFailure("downloadFile", errors.New("Telegram file download returned an unacceptable response"), resp.Status, 0, resp.Header.Get("x-request-id"))
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil || int64(len(data)) > limit {
-		return nil, fmt.Errorf("attachment download failed")
+	if err != nil {
+		return nil, telegramFailure("downloadFile", fmt.Errorf("read Telegram file: %w", err), resp.Status, 0, resp.Header.Get("x-request-id"))
+	}
+	if int64(len(data)) > limit {
+		return nil, telegramFailure("downloadFile", errors.New("Telegram file exceeds the size limit"), resp.Status, 0, resp.Header.Get("x-request-id"))
 	}
 	return data, nil
 }

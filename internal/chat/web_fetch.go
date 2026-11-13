@@ -226,23 +226,26 @@ func fetchWebPage(ctx context.Context, client *http.Client, args webFetchArgumen
 	defer cancel()
 	request, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("build web_fetch request: %w", err)
+		return "", webRuntimeFailure("chat.web_fetch", fmt.Errorf("build web_fetch request: %w", err), "")
 	}
 	request.Header.Set("User-Agent", webFetchUserAgent)
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("web_fetch request failed: %w", err)
+		return "", webRuntimeFailure("chat.web_fetch", fmt.Errorf("web_fetch request failed: %w", err), "")
+	}
+	if response == nil || response.Body == nil {
+		return "", webRuntimeFailure("chat.web_fetch", fmt.Errorf("web_fetch response body is missing"), "")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("web_fetch failed with status %s", response.Status)
+		return "", webRuntimeFailure("chat.web_fetch", fmt.Errorf("web_fetch failed with status %s", response.Status), response.Status)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, webFetchMaxBodyBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("read web_fetch response: %w", err)
+		return "", webRuntimeFailure("chat.web_fetch", fmt.Errorf("read web_fetch response: %w", err), response.Status)
 	}
 	if len(body) > webFetchMaxBodyBytes {
-		return "", fmt.Errorf("web_fetch response exceeds %d bytes", webFetchMaxBodyBytes)
+		return "", webRuntimeFailure("chat.web_fetch", fmt.Errorf("web_fetch response exceeds %d bytes", webFetchMaxBodyBytes), response.Status)
 	}
 	contentType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || contentType == "" {

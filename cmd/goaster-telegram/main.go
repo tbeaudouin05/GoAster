@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -10,16 +11,19 @@ import (
 	"strings"
 	"syscall"
 
+	"goaster/internal/diagnostics"
 	"goaster/internal/telegram"
 )
 
 func main() {
 	if os.Geteuid() != 0 {
+		diagnostics.Error("telegram.main", fmt.Errorf("root privileges are required to protect adapter state"))
 		fmt.Fprintln(os.Stderr, "telegram: root is required to protect the adapter state")
 		os.Exit(1)
 	}
 	if len(os.Args) == 2 && os.Args[1] == "setup" {
 		if err := telegram.Setup(os.Stdin, telegram.DefaultPaths); err != nil {
+			diagnostics.Error("telegram.setup", err)
 			fmt.Fprintln(os.Stderr, "telegram: setup failed")
 			os.Exit(1)
 		}
@@ -39,7 +43,7 @@ func main() {
 }
 
 // systemd waits for an available agent process and a successful Telegram poll.
-func notifyReady() error {
+func notifyReady() (notifyErr error) {
 	address := os.Getenv("NOTIFY_SOCKET")
 	if address == "" {
 		return nil
@@ -51,7 +55,9 @@ func notifyReady() error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	_, err = conn.Write([]byte("READY=1"))
-	return err
+	defer func() {
+		notifyErr = errors.Join(notifyErr, conn.Close())
+	}()
+	_, notifyErr = conn.Write([]byte("READY=1"))
+	return notifyErr
 }

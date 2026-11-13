@@ -22,6 +22,7 @@ import (
 	"goaster/internal/artefacts"
 	"goaster/internal/attachment"
 	"goaster/internal/command"
+	"goaster/internal/diagnostics"
 )
 
 const (
@@ -127,7 +128,7 @@ func (s CredentialStore) Load() (Credential, error) {
 	}
 	var credential Credential
 	if err := json.Unmarshal(data, &credential); err != nil {
-		return Credential{}, fmt.Errorf("%w: parse credential file: %v", ErrLoginRequired, err)
+		return Credential{}, fmt.Errorf("%w: parse credential file: %w", ErrLoginRequired, err)
 	}
 	credential.normalize()
 	if credential.AccessToken == "" {
@@ -278,7 +279,7 @@ func (a *OpenAIAuthenticator) RequestDeviceCode(ctx context.Context) (DeviceCode
 		return DeviceCode{}, fmt.Errorf("read device code response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return DeviceCode{}, errors.New(httpStatusErrorMessage("device code request failed", response.Status, body))
+		return DeviceCode{}, newBackendError("device code request failed", response.StatusCode, body, response.Header.Get("x-request-id"))
 	}
 	var result struct {
 		DeviceAuthID string          `json:"device_auth_id"`
@@ -376,7 +377,7 @@ func (a *OpenAIAuthenticator) pollDeviceCode(ctx context.Context, deviceCode Dev
 			continue
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return tokenResponse{}, errors.New(httpStatusErrorMessage("device authentication failed", response.Status, body))
+			return tokenResponse{}, newBackendError("device authentication failed", response.StatusCode, body, response.Header.Get("x-request-id"))
 		}
 		var code deviceTokenResponse
 		if err := json.Unmarshal(body, &code); err != nil {
@@ -407,7 +408,7 @@ func (a *OpenAIAuthenticator) exchangeCode(ctx context.Context, code deviceToken
 		return tokenResponse{}, fmt.Errorf("read token response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return tokenResponse{}, errors.New(httpStatusErrorMessage("token exchange failed", response.Status, body))
+		return tokenResponse{}, newBackendError("token exchange failed", response.StatusCode, body, response.Header.Get("x-request-id"))
 	}
 	var result tokenResponse
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -449,9 +450,9 @@ func (a *OpenAIAuthenticator) refresh(ctx context.Context, current Credential) (
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		if response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusUnauthorized {
-			return Credential{}, fmt.Errorf("%w: %s", ErrLoginRequired, httpStatusErrorMessage("saved refresh token was rejected", response.Status, body))
+			return Credential{}, fmt.Errorf("%w: %w", ErrLoginRequired, newBackendError("saved refresh token was rejected", response.StatusCode, body, response.Header.Get("x-request-id")))
 		}
-		return Credential{}, errors.New(httpStatusErrorMessage("token refresh failed", response.Status, body))
+		return Credential{}, newBackendError("token refresh failed", response.StatusCode, body, response.Header.Get("x-request-id"))
 	}
 	var result tokenResponse
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -517,7 +518,17 @@ func (a *OpenAIAuthenticator) do(ctx context.Context, method, endpoint, contentT
 		return nil, err
 	}
 	request.Header.Set("Content-Type", contentType)
-	return a.httpClient().Do(request)
+	response, err := a.httpClient().Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if response == nil {
+		return nil, errors.New("OpenAI response is missing")
+	}
+	if response.Body == nil {
+		return nil, errors.New("OpenAI response body is missing")
+	}
+	return response, nil
 }
 
 func (a *OpenAIAuthenticator) endpoint(path string) string {
@@ -570,12 +581,58 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func httpStatusErrorMessage(prefix, status string, body []byte) string {
-	message := fmt.Sprintf("%s with status %s", prefix, status)
-	if len(body) > 0 {
-		message += ": " + string(body)
+// backendError contains only constructed context and allowlisted remote details.
+type backendError struct {
+	prefix                string
+	status                int
+	kind, code, requestID string
+	message               string
+}
+
+func (err backendError) Error() string {
+	message := err.prefix
+	if err.status != 0 {
+		message += fmt.Sprintf(" with status %d %s", err.status, http.StatusText(err.status))
+	}
+	for _, field := range err.DiagnosticFields() {
+		if field.Key != "status" && field.Key != "reason" {
+			message += " " + field.Key + "=" + field.Value
+		}
 	}
 	return message
+}
+func (err backendError) DiagnosticFields() []diagnostics.Field {
+	fields := []diagnostics.Field{{Key: "reason", Value: err.prefix}}
+	if err.message != "" {
+		fields = append(fields, diagnostics.Field{Key: "backend_message", Value: err.message})
+	}
+	if err.status != 0 {
+		fields = append(fields, diagnostics.Field{Key: "status", Value: strconv.Itoa(err.status)})
+	}
+	if err.kind != "" {
+		fields = append(fields, diagnostics.Field{Key: "backend_type", Value: err.kind})
+	}
+	if err.code != "" {
+		fields = append(fields, diagnostics.Field{Key: "backend_code", Value: err.code})
+	}
+	if err.requestID != "" {
+		fields = append(fields, diagnostics.Field{Key: "request_id", Value: err.requestID})
+	}
+	return fields
+}
+func newBackendError(prefix string, status int, body []byte, requestID string) error {
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	_ = json.Unmarshal(body, &envelope)
+	var detail codexEventError
+	if json.Unmarshal(envelope.Error, &detail) != nil {
+		var code string
+		if json.Unmarshal(envelope.Error, &code) == nil {
+			detail.Code = code
+		}
+	}
+	return backendError{prefix: prefix, status: status, message: diagnostics.RemoteMessage(detail.Message), kind: diagnostics.BackendValue(detail.Type), code: diagnostics.BackendValue(detail.Code), requestID: diagnostics.RequestID(requestID)}
 }
 
 func readLimited(reader io.Reader) ([]byte, error) {
@@ -679,6 +736,44 @@ func tokenExpiry(token string) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(seconds, 0)
+}
+
+type providerFailure struct {
+	phase  string
+	status int
+	cause  error
+}
+
+func (err providerFailure) Error() string {
+	if err.cause == nil {
+		return "provider request failed"
+	}
+	return err.cause.Error()
+}
+
+func (err providerFailure) Unwrap() error { return err.cause }
+
+func wrapProviderFailure(phase string, status int, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	var existing providerFailure
+	if errors.As(cause, &existing) {
+		return cause
+	}
+	return providerFailure{phase: phase, status: status, cause: cause}
+}
+
+func providerFailureInfo(err error) (string, int, bool) {
+	var failure providerFailure
+	if !errors.As(err, &failure) {
+		return "", 0, false
+	}
+	phase := failure.phase
+	if phase == "" {
+		phase = "provider"
+	}
+	return phase, failure.status, true
 }
 
 type CodexProvider struct {
@@ -810,7 +905,20 @@ func (p *CodexProvider) SummarizeConversation(ctx context.Context, model, previo
 	return p.modelReply(ctx, model, request, false)
 }
 
-func (p *CodexProvider) modelReply(ctx context.Context, model string, history []ChatMessage, allowTools bool) (string, error) {
+func (p *CodexProvider) modelReply(ctx context.Context, model string, history []ChatMessage, allowTools bool) (reply string, replyErr error) {
+	defer func() {
+		if replyErr == nil || ctx.Value(providerFailureBoundaryKey{}) != nil {
+			return
+		}
+		fields := configuredModelDiagnostic(ModelRegistry{}, model)
+		if phase, status, ok := providerFailureInfo(replyErr); ok {
+			fields = append(fields, diagnostics.Field{Key: "phase", Value: phase})
+			if status != 0 {
+				fields = append(fields, diagnostics.Field{Key: "status", Value: fmt.Sprintf("%d", status)})
+			}
+		}
+		diagnostics.Error("chat.provider", replyErr, fields...)
+	}()
 	credential, err := p.auth.Credential(ctx)
 	if err != nil {
 		if errors.Is(err, ErrLoginRequired) {
@@ -824,7 +932,7 @@ func (p *CodexProvider) modelReply(ctx context.Context, model string, history []
 			if PostToolAuthenticationReviewMessage(err) != "" {
 				return "", postToolAuthenticationError{cause: errors.Join(err, ctxErr), parentErr: ctxErr}
 			}
-			return "", ctxErr
+			return "", errors.Join(err, ctxErr)
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return "", err
@@ -855,7 +963,7 @@ func (p *CodexProvider) modelReply(ctx context.Context, model string, history []
 				if PostToolAuthenticationReviewMessage(err) != "" {
 					return "", postToolAuthenticationError{cause: errors.Join(err, ctxErr), parentErr: ctxErr}
 				}
-				return "", ctxErr
+				return "", errors.Join(err, ctxErr)
 			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return "", err
@@ -1223,7 +1331,17 @@ func (p *CodexProvider) executeWebFetchTool(ctx context.Context, arguments strin
 
 type toolInstructionsKey struct{}
 
-func (p *CodexProvider) requestReply(ctx context.Context, credential Credential, model string, history []ChatMessage, allowTools bool) (string, int, error) {
+func (p *CodexProvider) requestReply(ctx context.Context, credential Credential, model string, history []ChatMessage, allowTools bool) (reply string, status int, replyErr error) {
+	phase := "pre-stream"
+	defer func() {
+		if replyErr == nil {
+			return
+		}
+		if _, _, ok := providerFailureInfo(replyErr); ok {
+			return
+		}
+		replyErr = providerFailure{phase: phase, status: status, cause: replyErr}
+	}()
 	input, err := codexInputFromHistory(ctx, history)
 	if err != nil {
 		return "", 0, err
@@ -1281,6 +1399,7 @@ func (p *CodexProvider) requestReply(ctx context.Context, credential Credential,
 			}
 			return "", status, err
 		}
+		phase = "post-stream"
 		if len(response.ToolCalls) == 0 {
 			return response.Text, status, nil
 		}
@@ -1606,7 +1725,7 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 		if !ok {
 			instructions, err = toolInstructions(ctx)
 			if err != nil {
-				return codexParsedResponse{}, 0, err
+				return codexParsedResponse{}, 0, wrapProviderFailure("pre-stream", 0, err)
 			}
 		}
 		if 4096+estimateMessageTokens(ChatMessage{Content: instructions})+codexItemTokens(input) > maxContextTokens {
@@ -1622,11 +1741,11 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 		Store:        false,
 	})
 	if err != nil {
-		return codexParsedResponse{}, 0, fmt.Errorf("encode Codex request: %w", err)
+		return codexParsedResponse{}, 0, wrapProviderFailure("pre-stream", 0, fmt.Errorf("encode Codex request: %w", err))
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.backendURL, bytes.NewReader(payload))
 	if err != nil {
-		return codexParsedResponse{}, 0, fmt.Errorf("build Codex request: %w", err)
+		return codexParsedResponse{}, 0, wrapProviderFailure("pre-stream", 0, fmt.Errorf("build Codex request: %w", err))
 	}
 	request.Header.Set("Authorization", "Bearer "+credential.AccessToken)
 	if credential.AccountID != "" {
@@ -1639,27 +1758,33 @@ func (p *CodexProvider) requestCodex(ctx context.Context, credential Credential,
 	request.Header.Set("OpenAI-Beta", "responses=experimental")
 	release, err := providerCalls.acquire(ctx)
 	if err != nil {
-		return codexParsedResponse{}, 0, err
+		return codexParsedResponse{}, 0, wrapProviderFailure("pre-stream", 0, err)
 	}
 	defer release()
 	response, err := p.client().Do(request)
 	if err != nil {
-		return codexParsedResponse{}, 0, fmt.Errorf("Codex request: %w", err)
+		return codexParsedResponse{}, 0, wrapProviderFailure("pre-stream", 0, fmt.Errorf("Codex request: %w", err))
+	}
+	if response == nil {
+		return codexParsedResponse{}, 0, wrapProviderFailure("pre-stream", 0, errors.New("Codex response is missing"))
+	}
+	if response.Body == nil {
+		return codexParsedResponse{}, response.StatusCode, wrapProviderFailure("pre-stream", response.StatusCode, errors.New("Codex response body is missing"))
 	}
 	defer response.Body.Close()
 	body, readErr := readLimited(response.Body)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		if readErr != nil {
-			return codexParsedResponse{}, response.StatusCode, fmt.Errorf("%s: read Codex response: %w", httpStatusErrorMessage("Codex backend request failed", response.Status, body), readErr)
+			return codexParsedResponse{}, response.StatusCode, wrapProviderFailure("pre-stream", response.StatusCode, fmt.Errorf("%w: read Codex response: %w", newBackendError("Codex backend request failed", response.StatusCode, body, response.Header.Get("x-request-id")), readErr))
 		}
-		return codexParsedResponse{}, response.StatusCode, errors.New(httpStatusErrorMessage("Codex backend request failed", response.Status, body))
+		return codexParsedResponse{}, response.StatusCode, wrapProviderFailure("pre-stream", response.StatusCode, newBackendError("Codex backend request failed", response.StatusCode, body, response.Header.Get("x-request-id")))
 	}
 	if readErr != nil {
-		return codexParsedResponse{}, response.StatusCode, fmt.Errorf("read Codex response: %w", readErr)
+		return codexParsedResponse{}, response.StatusCode, wrapProviderFailure("stream", response.StatusCode, fmt.Errorf("read Codex response: %w", readErr))
 	}
 	parsed, err := parseCodexResponseResult(body)
 	if err != nil {
-		return codexParsedResponse{}, response.StatusCode, err
+		return codexParsedResponse{}, response.StatusCode, wrapProviderFailure("stream", response.StatusCode, errors.Join(err, backendError{prefix: "Codex stream failed", requestID: diagnostics.RequestID(response.Header.Get("x-request-id"))}))
 	}
 	return parsed, response.StatusCode, nil
 }
@@ -1715,6 +1840,8 @@ type codexOutputContent struct {
 
 type codexStreamEvent struct {
 	Type      string           `json:"type"`
+	Code      string           `json:"code"`
+	Message   string           `json:"message"`
 	Delta     string           `json:"delta"`
 	Text      string           `json:"text"`
 	ItemID    string           `json:"item_id"`
@@ -1727,6 +1854,7 @@ type codexStreamEvent struct {
 }
 
 type codexEventError struct {
+	Type    string `json:"type"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
@@ -1769,7 +1897,9 @@ func parseCodexResponseResult(body []byte) (codexParsedResponse, error) {
 	}
 	if trimmed[0] == '{' {
 		var response codexResponse
-		if err := json.Unmarshal(trimmed, &response); err == nil {
+		if err := json.Unmarshal(trimmed, &response); err != nil {
+			return codexParsedResponse{}, fmt.Errorf("parse Codex response JSON: %w", err)
+		} else {
 			parsed, parseErr := parsedCodexResponse(response)
 			if parseErr != nil {
 				return codexParsedResponse{}, parseErr
@@ -1925,17 +2055,14 @@ func parseCodexStreamResponse(body []byte) (codexParsedResponse, error) {
 		}
 		switch event.Type {
 		case "response.failed", "response.incomplete", "error":
-			failure := ""
+			detail := codexEventError{Code: event.Code, Message: event.Message}
 			if event.Error != nil {
-				failure = codexEventErrorMessage(*event.Error)
+				detail = *event.Error
 			}
-			if failure == "" && event.Response != nil {
-				failure = codexEventErrorMessage(event.Response.Error)
+			if detail.Type == "" && detail.Code == "" && event.Response != nil {
+				detail = event.Response.Error
 			}
-			if failure != "" {
-				return fmt.Errorf("Codex response failed: %s", failure)
-			}
-			return fmt.Errorf("Codex response failed")
+			return backendError{prefix: "Codex response failed: backend returned an error", message: diagnostics.RemoteMessage(detail.Message), kind: diagnostics.BackendValue(detail.Type), code: diagnostics.BackendValue(detail.Code)}
 		case "response.completed":
 			sawCompletion = true
 			if err := processResponse(event.Response); err != nil {
@@ -2086,18 +2213,6 @@ func parseCodexStreamResponse(body []byte) (codexParsedResponse, error) {
 		return codexParsedResponse{}, fmt.Errorf("Codex response contained no output text")
 	}
 	return codexParsedResponse{Text: output.String(), ToolCalls: toolCalls}, nil
-}
-
-func codexEventErrorMessage(eventError codexEventError) string {
-	code := strings.TrimSpace(eventError.Code)
-	message := strings.TrimSpace(eventError.Message)
-	if code != "" && message != "" {
-		return code + ": " + message
-	}
-	if message != "" {
-		return message
-	}
-	return code
 }
 
 func codexFunctionCallFromItem(item codexOutputItem) (codexFunctionCall, error) {
