@@ -1,2 +1,2 @@
 name: goaster-migration
-description: Provision one explicitly approved Hetzner server with callback-only cloud-init using existing shell, cron, environment, and provider tools; GoAsterWeb owns setup and all later migration work remains manual.
+description: Guide one explicitly approved Hetzner server with callback-only cloud-init using existing shell, cron, environment, and provider tools; stop before mutation if the protected owner handoff cannot be delivered safely, and leave setup to GoAsterWeb.

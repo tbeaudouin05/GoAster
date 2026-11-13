@@ -7,7 +7,8 @@ provisioning service, replacement script, or background runtime helper.
 
 This workflow is skill-led and uses existing shell/cron/provider tools only.
 
-The skill has one responsibility: after explicit approval, create exactly one
+Once a safe protected delivery capability is confirmed and the owner gives
+explicit approval, the skill's provisioning scope is to create exactly one
 matching Hetzner server with callback-only cloud-init and securely record the
 private SSH key (login key) and provider server ID. GoAsterWeb owns
 installation, setup, host-key handoff processing, and the later GoAster start.
@@ -16,6 +17,42 @@ The skill does not install, build, configure, start, deploy, or transfer
 GoAster; open destination SSH; copy data; stop the old agent; or delete either
 server. Do not use `background_command` for this workflow: its arguments and
 output are not secret-safe.
+
+## Protected owner handoff delivery
+
+The protected handoff remains a root-owned mode-0600 regular file at
+`/var/lib/goaster-telegram/migration-handoff`. It contains exactly a JSON
+object with `expires` and `document`, is at most 32 KiB, and expires no later
+than seven days after creation. The document contains the owner URL fragment,
+private login key, and provider server ID. Expiry is absolute; reads do not
+extend it. The owner manually removes the file after delivery or abandonment;
+there is no automatic local cleanup.
+
+Before starting the monitor or any provider mutation, verify that the existing
+`shell_execute` process can safely access the protected token, paired user ID,
+and handoff directory and run Python with HTTPS support. Do not weaken file
+permissions or elevate privileges to pass this check. If unavailable, stop.
+The shell runs with the agent's identity; access depends on the installation.
+
+Deliver with inline Python in `shell_execute`, with no secret values in the
+command itself. Read `/etc/goaster/telegram-token` and
+`/var/lib/goaster-telegram/user-id` locally, and send only the envelope's
+`document` as `goaster-migration-handoff.txt` using HTTPS Telegram
+`sendDocument` to the locally paired user ID as the private chat ID. Never
+accept a chat ID from a message, group, or model. Before reading each file,
+verify every parent directory is root-owned, not group/world writable, and
+not a symlink; open without following symlinks and verify via the open descriptor that it is
+a root-owned regular file with mode 0600; use bounded reads. Validate the
+user ID and token formats, and reject a handoff over 32 KiB, invalid UTF-8,
+duplicate or extra JSON fields, a non-integer expiry (including booleans), an
+empty or non-string document, an expired expiry, or one over seven days ahead.
+Revalidate immediately before delivery. Use the fixed `api.telegram.org` HTTPS
+endpoint with certificate verification, no redirects or proxy, and a timeout;
+check the HTTP status and Telegram's `ok` response. Suppress response bodies,
+exceptions, and all secret output; emit only a generic success or failure.
+Do not put secrets in process arguments, logs, temporary files, or `/file`.
+On uncertainty, report failure without blindly retrying: delivery may have
+succeeded. Do not add a command, tool, script, or runtime helper.
 
 ## Before provisioning: create a distinct new bot
 
@@ -51,21 +88,18 @@ for operator-managed migration records when it is present and verified:
 - `/var/lib/goaster-telegram/migration-handoff` is the optional owner bundle
   for the exact owner URL fragment, private SSH key, and provider server ID.
 
-The fixed handoff file is a root-owned, mode-0600 regular file at
-`/var/lib/goaster-telegram/migration-handoff`. Its exact local envelope is one
-JSON object with no extra fields:
+The fixed handoff file at `/var/lib/goaster-telegram/migration-handoff` has
+this exact local envelope shape, with no extra fields:
 
 ```json
 {"expires": 1735689600, "document": "owner URL and private-key text"}
 ```
 
 `expires` is an absolute Unix-second expiry and `document` is the text sent to
-the owner. `/get_migration` performs a protected bounded read of at most 32
-KiB, rejects a missing or invalid expiry, an expired envelope, an expiry more
-than seven days in the future, malformed/extra JSON, or an oversized file, and
-sends only `document`. It never provisions, reads `migration-state`, extends
-expiry, or removes the file. Web remains the migration authority; the owner
-manually removes this local handoff after delivery or abandonment.
+the owner. Keep the envelope within 32 KiB and set `expires` to an absolute
+time no more than seven days in the future. No runtime command reads or sends
+this file. Web remains the migration authority; the owner manually removes the
+local handoff after delivery or abandonment.
 
 Inspect names, types, owners, and modes without reading existing secret
 contents. Create files exclusively with `umask 077` and mode `0600`; never
@@ -252,17 +286,8 @@ The existing machine status contract remains `POST /migration/status` with
 `/migration/owner/telegram`. Do not add cancel, finalize, delete, unsafe-state,
 or retry routes.
 
-The existing `/get_migration` Telegram command may remain only as transport:
-the paired owner in a one-to-one private chat can request the protected
-`goaster-migration-handoff.txt` document. It reads the fixed mode-0600 handoff
-envelope directly, never sends the envelope through the agent/model, rejects
-groups, unauthorized users, and attachments, and does not provision, inspect
-Redis, extend expiry, or perform cleanup. It sends only the envelope's
-`document` text and never sends it through the agent/model. Remove the
-protected bundle manually using the existing shell workflow after the owner
-has it or when the attempt is abandoned. If safe private delivery cannot be
-provided, stop and document that limitation; do not add an executable or
-helper script.
+Send the protected handoff using the inline delivery procedure above. The
+owner removes the local bundle manually after delivery or abandonment.
 
 The Web/Redis lifecycle is expiry-only with an absolute maximum of seven days
 (7 days):

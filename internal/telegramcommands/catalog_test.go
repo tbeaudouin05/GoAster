@@ -5,61 +5,79 @@ import (
 	"testing"
 )
 
-func TestDispatchResolvesPrimaryCommandsAndAliases(t *testing.T) {
+func TestDispatchResolvesSupportedCommands(t *testing.T) {
 	for _, test := range []struct {
 		text string
 		name string
 	}{
 		{text: "/help", name: "help"},
 		{text: "/m terra", name: "m"},
-		{text: "/get_env", name: "get_env"},
-		{text: "/get-env", name: "get_env"},
-		{text: "/get_migration", name: "get_migration"},
+		{text: "/get-env", name: "get-env"},
 	} {
 		command, ok := Dispatch(test.text)
 		if !ok || command.Name != test.name {
 			t.Errorf("Dispatch(%q) = %+v, %v; want %q", test.text, command, ok, test.name)
 		}
 	}
-	for _, text := range []string{"", "hello", "/more", "/help@other_bot"} {
+	for _, text := range []string{"", "hello", "/more", "/help@other_bot", "/get_env", "/get_migration"} {
 		if _, ok := Dispatch(text); ok {
 			t.Errorf("Dispatch(%q) unexpectedly matched", text)
 		}
 	}
 }
 
-func TestHelpAndMenuRenderFromTheSameCatalog(t *testing.T) {
+func TestHelpContainsOnlyOneConciseLinePerCommand(t *testing.T) {
 	help := HelpText()
-	menu := Menu()
+	lines := strings.Split(help, "\n")
 	commands := Catalog()
-	if len(menu) != len(commands) {
-		t.Fatalf("menu count = %d, catalog count = %d", len(menu), len(commands))
+	if len(lines) != len(commands) {
+		t.Fatalf("help has %d lines for %d commands: %q", len(lines), len(commands), help)
 	}
 	for index, command := range commands {
-		if menu[index].Command != command.Name || menu[index].Description != command.MenuDescription {
-			t.Fatalf("menu[%d] = %+v, catalog[%d] = %+v", index, menu[index], index, command)
-		}
-		if !strings.Contains(help, command.Usage+" — "+command.HelpDescription) {
-			t.Fatalf("help omitted %s", command.Usage)
+		want := command.Usage + ": " + command.HelpDescription
+		if lines[index] != want || !strings.HasSuffix(command.HelpDescription, ".") {
+			t.Errorf("help line %d = %q, want %q", index, lines[index], want)
 		}
 		if command.Access == "" {
-			t.Fatalf("command %s omitted access requirements", command.Name)
-		}
-		if command.Name != "get_env" && len(command.Aliases) != 0 {
-			t.Fatalf("unexpected aliases for %s: %v", command.Name, command.Aliases)
+			t.Errorf("command %s omitted access requirements", command.Name)
 		}
 	}
-	if !strings.Contains(help, "/get_env, /get-env") || !strings.Contains(help, "private chat") {
-		t.Fatalf("help omitted alias or access guidance: %q", help)
+	for _, forbidden := range []string{"Available Telegram commands:", "paired account", "private chat", "/get_env", "/get_migration", "—"} {
+		if strings.Contains(help, forbidden) {
+			t.Errorf("help contains non-command or repetitive access text %q: %q", forbidden, help)
+		}
 	}
 }
 
-func TestReferenceContainsAliasesAndAccessRequirements(t *testing.T) {
+func TestMenuOmitsCommandsTelegramCannotRegister(t *testing.T) {
+	want := []string{"help", "stop", "start", "pair", "clear", "m", "env"}
+	menu := Menu()
+	if len(menu) != len(want) {
+		t.Fatalf("menu count = %d, want %d: %#v", len(menu), len(want), menu)
+	}
+	for index, command := range menu {
+		if command.Command != want[index] || strings.Contains(command.Command, "-") {
+			t.Errorf("menu[%d] = %+v, want command %q", index, command, want[index])
+		}
+		if command.Description == "" || len(command.Description) > 256 {
+			t.Errorf("menu command %q has an invalid description", command.Command)
+		}
+	}
+	for _, command := range Catalog() {
+		if command.Name == "get-env" && command.MenuDescription != "" {
+			t.Fatal("hyphenated /get-env was configured for Telegram's native menu")
+		}
+	}
+}
+
+func TestReferenceContainsCanonicalCommandsAndAccessRequirements(t *testing.T) {
 	reference := Reference()
 	for _, want := range []string{
-		"/get_env, /get-env",
-		"Aliases: `/get-env`",
-		"Access requirements:",
+		"## /get-env",
+		"Primary command: `/get-env`",
+		"Aliases: none",
+		"Access requirements: Paired account only, private chat only.",
+		"Native Telegram menu: no",
 		"Pairing requires a private chat",
 		"After pairing, the paired account can use /pair in a private chat, group, or supergroup for readiness guidance",
 		"/start CODE is ignored",
@@ -71,13 +89,9 @@ func TestReferenceContainsAliasesAndAccessRequirements(t *testing.T) {
 			t.Errorf("reference omitted %q", want)
 		}
 	}
-	if strings.Contains(reference, "telegram-commands.md") {
-		t.Fatal("runtime reference names a persistent reference file")
-	}
-	if strings.Contains(reference, "/start CODE is rejected") {
-		t.Fatal("runtime reference incorrectly says paired /start CODE is rejected")
-	}
-	if strings.Contains(reference, "github.com") || strings.Contains(reference, "http://") || strings.Contains(reference, "https://") {
-		t.Fatal("reference depends on a public URL")
+	for _, forbidden := range []string{"/get_env", "/get_migration", "telegram-commands.md", "github.com", "http://", "https://"} {
+		if strings.Contains(reference, forbidden) {
+			t.Errorf("reference contains obsolete or external text %q", forbidden)
+		}
 	}
 }

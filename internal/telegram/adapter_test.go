@@ -107,7 +107,7 @@ func TestPrivatePairingAndAuthorization(t *testing.T) {
 	a.handle(context.Background(), textMessage(20, -100123, "group", telegramHelpCommand))
 	if len(sent) != 1 || sent[0].ChatID != 20 || sent[0].Text != telegramHelpText ||
 		!strings.Contains(sent[0].Text, "/stop") || !strings.Contains(sent[0].Text, "/get-env") || !strings.Contains(sent[0].Text, "ACCEPT") ||
-		!strings.Contains(sent[0].Text, "paired account") || !strings.Contains(sent[0].Text, "private chat") {
+		strings.Contains(sent[0].Text, "paired account") || strings.Contains(sent[0].Text, "private chat") || strings.Contains(sent[0].Text, "Available Telegram commands") {
 		t.Fatal("help was unavailable in a private chat before pairing or visible in an unpaired group")
 	}
 	a.handle(context.Background(), privateMessage(20, "/start"))
@@ -770,7 +770,7 @@ func TestPollingReadinessOffsetAndRedactedErrors(t *testing.T) {
 }
 
 func TestTelegramCommandMenuUsesSupportedHelpCommands(t *testing.T) {
-	want := []string{"help", "stop", "start", "pair", "clear", "m", "env", "get_env", "get_migration"}
+	want := []string{"help", "stop", "start", "pair", "clear", "m", "env"}
 	if len(telegramBotCommands) != len(want) {
 		t.Fatalf("Telegram command count = %d, want %d", len(telegramBotCommands), len(want))
 	}
@@ -784,6 +784,11 @@ func TestTelegramCommandMenuUsesSupportedHelpCommands(t *testing.T) {
 		}
 		if !strings.Contains(telegramHelpText, "/"+command.Command) {
 			t.Fatalf("Telegram help does not describe /%s", command.Command)
+		}
+	}
+	for _, command := range telegramBotCommands {
+		if command.Command == "get-env" || command.Command == "get_env" {
+			t.Fatalf("environment export command %q is invalid for Telegram's native menu", command.Command)
 		}
 	}
 }

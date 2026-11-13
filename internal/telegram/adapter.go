@@ -31,20 +31,19 @@ type httpDoer interface {
 }
 
 type adapter struct {
-	token                string
-	pairing              *pairing
-	pairingMu            sync.Mutex
-	turnMu               sync.Mutex
-	activeTurns          map[telegramTurnKey][]telegramActiveTurn
-	nextTurnID           uint64
-	environmentMu        sync.Mutex
-	environmentBlocked   map[environmentProposalKey]bool
-	migrationHandoffPath string // test seam; Run uses the root-only default path.
-	client               httpDoer
-	agent                httpDoer
-	controlSecret        string
-	apiBase              string
-	attachmentMaxBytes   int64 // test seam; zero uses attachment.MaxBytes.
+	token              string
+	pairing            *pairing
+	pairingMu          sync.Mutex
+	turnMu             sync.Mutex
+	activeTurns        map[telegramTurnKey][]telegramActiveTurn
+	nextTurnID         uint64
+	environmentMu      sync.Mutex
+	environmentBlocked map[environmentProposalKey]bool
+	client             httpDoer
+	agent              httpDoer
+	controlSecret      string
+	apiBase            string
+	attachmentMaxBytes int64 // test seam; zero uses attachment.MaxBytes.
 }
 
 type update struct {
@@ -137,8 +136,6 @@ const (
 	telegramStopCommand                = telegramcommands.StopCommand
 	telegramEnvironmentCommand         = telegramcommands.EnvironmentCommand
 	telegramGetEnvironmentCommand      = telegramcommands.GetEnvironmentCommand
-	telegramGetEnvironmentManualAlias  = telegramcommands.GetEnvironmentManualAlias
-	telegramGetMigrationCommand        = telegramcommands.GetMigrationHandoffCommand
 	telegramEnvironmentAcceptKeyword   = "ACCEPT"
 	telegramEnvironmentFilename        = "goaster.env"
 )
@@ -176,11 +173,10 @@ func Run(ctx context.Context, paths Paths, ready func() error) error {
 	}
 	a := &adapter{
 		token: string(token), pairing: pairing,
-		controlSecret:        controlSecret,
-		migrationHandoffPath: defaultMigrationHandoffPath,
-		client:               &http.Client{Timeout: 40 * time.Second, CheckRedirect: noRedirect},
-		agent:                agent,
-		apiBase:              "https://api.telegram.org",
+		controlSecret: controlSecret,
+		client:        &http.Client{Timeout: 40 * time.Second, CheckRedirect: noRedirect},
+		agent:         agent,
+		apiBase:       "https://api.telegram.org",
 	}
 	return a.run(ctx, ready)
 }
@@ -460,9 +456,6 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if isTelegramGetEnvironmentCommand(text) {
 		text = telegramGetEnvironmentCommand
 	}
-	if isTelegramGetMigrationCommand(text) {
-		text = telegramGetMigrationCommand
-	}
 	a.pairingMu.Lock()
 	pairedUserID := a.pairing.userID
 	paired := false
@@ -602,20 +595,6 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		}
 		if err := sendDocument(ctx, a.client, a.apiBase, a.token, m.Chat.ID, telegramEnvironmentFilename, data); err != nil {
 			a.send(ctx, m.Chat.ID, "The environment file could not be sent.")
-		}
-		return
-	}
-	if text == telegramGetMigrationCommand {
-		if m.Chat.Type != "private" {
-			a.send(ctx, m.Chat.ID, "Migration handoffs are available only in a private chat.")
-			return
-		}
-		if hasAttachment {
-			a.send(ctx, m.Chat.ID, "Usage: /get_migration without an attachment.")
-			return
-		}
-		if err := a.sendMigrationHandoff(ctx, m.Chat.ID); err != nil {
-			a.send(ctx, m.Chat.ID, "The migration handoff could not be sent.")
 		}
 		return
 	}
@@ -911,20 +890,6 @@ func (a *adapter) send(ctx context.Context, userID int64, text string) error {
 	return err
 }
 
-func (a *adapter) sendMigrationHandoff(ctx context.Context, chatID int64) error {
-	pathName := a.migrationHandoffPath
-	if pathName == "" {
-		pathName = defaultMigrationHandoffPath
-	}
-	document, err := readMigrationHandoff(pathName)
-	if err != nil || len(document) == 0 {
-		clear(document)
-		return fmt.Errorf("migration handoff is unavailable")
-	}
-	defer clear(document)
-	return sendDocument(ctx, a.client, a.apiBase, a.token, chatID, migrationHandoffFilename, document)
-}
-
 func (a *adapter) sendMessage(ctx context.Context, chatID int64, text string) (int64, error) {
 	var result struct {
 		MessageID int64 `json:"message_id"`
@@ -1142,14 +1107,7 @@ func isTelegramEnvironmentMessage(text string) bool {
 }
 
 func isTelegramGetEnvironmentCommand(text string) bool {
-	return isTelegramCatalogCommand(text, telegramGetEnvironmentCommand) ||
-		isTelegramCatalogCommand(text, telegramGetEnvironmentManualAlias) ||
-		isTelegramCommandOrMention(text, telegramGetEnvironmentCommand) ||
-		isTelegramCommandOrMention(text, telegramGetEnvironmentManualAlias)
-}
-
-func isTelegramGetMigrationCommand(text string) bool {
-	return isTelegramCommandOrMention(text, telegramGetMigrationCommand)
+	return isTelegramCommandOrMention(text, telegramGetEnvironmentCommand)
 }
 
 func isTelegramCatalogCommand(text, spelling string) bool {

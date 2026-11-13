@@ -8,22 +8,21 @@ import (
 )
 
 const (
-	HelpCommand                = "/help"
-	StopCommand                = "/stop"
-	StartCommand               = "/start"
-	PairCommand                = "/pair"
-	ClearCommand               = "/clear"
-	ModelCommand               = "/m"
-	EnvironmentCommand         = "/env"
-	GetEnvironmentCommand      = "/get_env"
-	GetEnvironmentManualAlias  = "/get-env"
-	GetMigrationHandoffCommand = "/get_migration"
-	CommandReferenceToolName   = "telegram_command_reference"
+	HelpCommand              = "/help"
+	StopCommand              = "/stop"
+	StartCommand             = "/start"
+	PairCommand              = "/pair"
+	ClearCommand             = "/clear"
+	ModelCommand             = "/m"
+	EnvironmentCommand       = "/env"
+	GetEnvironmentCommand    = "/get-env"
+	CommandReferenceToolName = "telegram_command_reference"
 )
 
-// Command describes one supported Telegram slash command. Name is the
-// command used by Telegram's native menu, while Aliases contains manually
-// accepted command spellings that are not menu entries.
+// Command describes one supported Telegram slash command. Name is its
+// canonical spelling without a leading slash. Aliases contains additional
+// manually accepted command spellings; MenuDescription is empty when Telegram
+// cannot register the command in its native menu.
 type Command struct {
 	Name            string
 	Aliases         []string
@@ -43,71 +42,62 @@ var catalog = []Command{
 	{
 		Name:            "help",
 		Usage:           "/help",
-		HelpDescription: "Show this list.",
+		HelpDescription: "Show available commands.",
 		MenuDescription: "Show available commands",
 		Access:          "Before pairing, private chats. After pairing, the paired account in private chats, groups, and supergroups. Use bare /help; addressed command mentions are ignored.",
 	},
 	{
 		Name:            "stop",
 		Usage:           "/stop",
-		HelpDescription: "Cancel the current agent turn in this chat/thread (paired account).",
+		HelpDescription: "Cancel this chat's active turn.",
 		MenuDescription: "Cancel the current agent turn",
 		Access:          "Paired account only, in the same chat and Telegram topic as the active turn. Use the bare command in a private chat, group, or supergroup; addressed command mentions are ignored.",
 	},
 	{
 		Name:            "start",
 		Usage:           "/start",
-		HelpDescription: "Show pairing or readiness guidance; /start CODE never pairs.",
+		HelpDescription: "Show pairing or readiness guidance.",
 		MenuDescription: "Show pairing or readiness guidance",
 		Access:          "Before pairing, bare /start gives guidance in private chats; /start CODE is ignored. After pairing, the paired account can use /start or /start CODE in a private chat, group, or supergroup for readiness guidance. /start CODE never pairs or forwards the code.",
 	},
 	{
 		Name:            "pair",
 		Usage:           "/pair CODE",
-		HelpDescription: "Pair the first account with the one-time code (pairing requires a private chat).",
+		HelpDescription: "Pair with a one-time code or show readiness guidance.",
 		MenuDescription: "Pair this account with GoAster",
 		Access:          "Pairing requires a private chat. Before pairing, /pair CODE consumes the one-time code for the first valid account; bare /pair gives instructions. After pairing, the paired account can use /pair in a private chat, group, or supergroup for readiness guidance; it does not expose or forward a code.",
 	},
 	{
 		Name:            "clear",
 		Usage:           "/clear",
-		HelpDescription: "Clear this chat's history (paired account).",
+		HelpDescription: "Clear this chat's history.",
 		MenuDescription: "Clear this chat's history",
 		Access:          "Paired account only, in a private chat, group, or supergroup. It takes no attachment or argument and clears the chat's shared history across Telegram topics.",
 	},
 	{
 		Name:            "m",
 		Usage:           "/m [MODEL_OR_ALIAS]",
-		HelpDescription: "Show or select this chat's model (paired account).",
+		HelpDescription: "Show or select this chat's model.",
 		MenuDescription: "Show or select this chat's model",
 		Access:          "Paired account only, in a private chat, group, or supergroup. Use /m to view the current model or /m MODEL_OR_ALIAS to select one; attachments are not accepted.",
 	},
 	{
 		Name:            "env",
 		Usage:           "/env (attach goaster.env)",
-		HelpDescription: "Preview settings changes; reply ACCEPT to apply (paired account, private chat only).",
+		HelpDescription: "Preview settings changes; reply ACCEPT to apply.",
 		MenuDescription: "Preview an environment update",
 		Access:          "Paired account only, private chat only. Attach a document named goaster.env to /env in the same message, review the preview, then reply exactly ACCEPT. /env accepts a valid @bot_username suffix.",
 	},
 	{
-		Name:            "get_env",
-		Aliases:         []string{"get-env"},
-		Usage:           "/get_env, /get-env",
-		HelpDescription: "Send the saved goaster.env file (paired account, private chat only).",
-		MenuDescription: "Download the saved environment file",
-		Access:          "Paired account only, private chat only. The native menu uses /get_env; the manually typed alias /get-env is also accepted. Either spelling accepts a valid @bot_username suffix.",
-	},
-	{
-		Name:            "get_migration",
-		Usage:           "/get_migration",
-		HelpDescription: "Send the protected migration handoff as a document (paired account, private chat only).",
-		MenuDescription: "Send the protected migration handoff",
-		Access:          "Paired account only, private chat only. This transport reads the protected handoff directly, never through the agent; attachments are not accepted.",
+		Name:            "get-env",
+		Usage:           "/get-env",
+		HelpDescription: "Send the saved goaster.env file.",
+		Access:          "Paired account only, private chat only. Accepts a valid @bot_username suffix.",
 	},
 }
 
-const helpFooter = "Before pairing, /help and bare /start provide guidance in private chats; pairing requires a private chat. After pairing, only the paired account can use the bot, and bare /start or /pair provide readiness guidance in private chats, groups, and supergroups. " +
-	"Telegram topics in the same chat share conversation history and model settings. /env, ACCEPT, environment file retrieval, and migration handoff retrieval require a private chat. /env, /get_env, and /get-env accept @bot_username suffixes; use bare /help and /stop."
+const referenceSharedBehavior = "Before pairing, /help and bare /start provide guidance in private chats; pairing requires a private chat. After pairing, only the paired account can use the bot, and bare /start or /pair provide readiness guidance in private chats, groups, and supergroups. " +
+	"Telegram topics in the same chat share conversation history and model settings. /env, ACCEPT, and /get-env require a private chat. /env and /get-env accept @bot_username suffixes; use bare /help and /stop."
 
 // Catalog returns the supported commands in their stable display order.
 func Catalog() []Command {
@@ -122,6 +112,9 @@ func Catalog() []Command {
 func Menu() []MenuCommand {
 	commands := make([]MenuCommand, 0, len(catalog))
 	for _, command := range catalog {
+		if command.MenuDescription == "" {
+			continue
+		}
 		commands = append(commands, MenuCommand{Command: command.Name, Description: command.MenuDescription})
 	}
 	return commands
@@ -151,13 +144,11 @@ func Dispatch(text string) (Command, bool) {
 
 // HelpText renders the user-facing help text from the catalog.
 func HelpText() string {
-	var help strings.Builder
-	help.WriteString("Available Telegram commands:\n")
+	lines := make([]string, 0, len(catalog))
 	for _, command := range catalog {
-		fmt.Fprintf(&help, "%s — %s\n", command.Usage, command.HelpDescription)
+		lines = append(lines, fmt.Sprintf("%s: %s", command.Usage, command.HelpDescription))
 	}
-	help.WriteString(helpFooter)
-	return help.String()
+	return strings.Join(lines, "\n")
 }
 
 // Reference renders the command reference from the catalog in the running
@@ -181,7 +172,7 @@ func Reference() string {
 		reference.WriteString("\n")
 	}
 	reference.WriteString("## Shared behavior\n\n")
-	reference.WriteString(helpFooter)
+	reference.WriteString(referenceSharedBehavior)
 	reference.WriteByte('\n')
 	return reference.String()
 }

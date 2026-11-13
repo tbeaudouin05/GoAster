@@ -51,7 +51,13 @@ func TestTelegramCommandSkillUsesRuntimeReferenceAcrossStarterUpgrade(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{telegramcommands.CommandReferenceToolName, "current running GoAster binary", "aliases", "access requirements"} {
+	for _, want := range []string{
+		telegramcommands.CommandReferenceToolName,
+		"current running GoAster binary",
+		"aliases",
+		"access requirements",
+		"menu command names cannot contain hyphens",
+	} {
 		if !strings.Contains(strings.ToLower(skill), strings.ToLower(want)) {
 			t.Errorf("Telegram command skill omitted %q: %s", want, skill)
 		}

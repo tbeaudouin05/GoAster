@@ -8,9 +8,9 @@ access was performed for this change.
 
 ## GoAster-side responsibility
 
-The `goaster-migration` skill uses the existing shell, cron, environment, and
-authenticated Hetzner/provider tools to do only the following after explicit
-approval:
+The `goaster-migration` skill is a pure workflow using existing shell, cron,
+environment, and authenticated Hetzner/provider tools. Before mutation it
+verifies protected delivery prerequisites, and after explicit approval it can:
 
 1. Inspect the current project and exact target terms read-only.
 2. Obtain pre-create callback authorization, register one fresh provider SSH
@@ -40,23 +40,20 @@ the skill stops rather than inventing a helper. Secrets never appear in
 model-visible output, logs, command arguments, cron messages, temporary files,
 or project memory.
 
-The fixed mode-0600 handoff file at
+The fixed root-owned mode-0600 handoff file at
 `/var/lib/goaster-telegram/migration-handoff` contains exactly this JSON
-envelope shape, with no extra fields:
+envelope shape, with no extra fields, and is bounded to 32 KiB:
 
 ```json
 {"expires": 1735689600, "document": "owner URL and private-key text"}
 ```
 
-`expires` is an absolute Unix-second expiry and `document` is the text for the
-owner. The Telegram adapter performs a protected bounded read of at most 32
-KiB and rejects a missing or invalid expiry, an expired envelope, an expiry
-more than seven days in the future, malformed/extra JSON, or an oversized
-file. It sends only `document`, never the envelope or secrets through the
-agent/model, and clears the read bytes on return on a best-effort basis. The
-owner manually removes the local handoff after delivery or abandonment; there
-is no lock, provisioning state machine, identity registry, or automatic local
-cleanup. GoAsterWeb remains the migration authority.
+`expires` is an absolute Unix-second expiry no more than seven days in the
+future, and `document` contains the owner URL fragment, private login key, and
+provider server ID. The expiry does not extend on reads. The GoAster runtime
+does not read or send this file. The owner manually removes it after delivery
+or abandonment; there is no automatic local cleanup. GoAsterWeb remains the
+migration authority.
 
 ## Approval and monitor
 
@@ -155,18 +152,17 @@ and the owner bearer secret; it never returns the host key. Machine
 `/migration/owner/start`, and `/migration/owner/telegram`. No cancel,
 finalize, delete, unsafe-state, or retry route is added.
 
-## Optional private Telegram transport
+## Protected owner handoff delivery
 
-The existing `/get_migration` command is retained only as transport for an
-already protected handoff. The paired owner can request the fixed
-`goaster-migration-handoff.txt` document from a one-to-one private chat. The
-adapter reads the mode-0600 JSON envelope directly, sends only its `document`
-field, never sends it through the agent/model, rejects groups, unauthorized
-users, and attachments, and does not create, monitor, inspect Redis, extend
-expiry, or clean up provisioning state. The operator manually removes the
-protected bundle after delivery or when the attempt is abandoned. If safe
-private delivery is not available, the supported limitation is to stop; no
-executable or helper script is added.
+The skill can use inline Python through `shell_execute` to send the document
+by Telegram HTTPS directly to the locally paired user's private chat. It reads
+the token, paired user ID, and handoff locally without putting secrets in
+arguments or captured output. It validates protected file ownership, mode,
+type, bounded content, envelope and expiry before sending, verifies TLS, and
+suppresses response bodies and errors. The detailed procedure is in the skill.
+The shell runs as the agent identity, so installations without access to the
+protected files must stop without weakening permissions. The owner manually
+removes the bundle after delivery or abandonment.
 
 ## Stop and reconcile
 

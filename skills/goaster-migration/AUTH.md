@@ -23,6 +23,8 @@ or memory supplied to the model. If existing shell/provider tools cannot
 perform the required protected write and redacted response handling, stop.
 Do not invent a migration executable, script, or runtime helper.
 
-`/get_migration` is only an optional direct document transport for an already
-protected handoff to the paired owner in a private chat. It is not an input
-channel, provisioning authorization, Redis operation, or setup path.
+Use the existing shell for inline protected Telegram delivery as specified in
+SKILL.md. The destination is the locally paired user ID, never an arbitrary
+chat. Verify access without changing permissions before mutation, and stop if
+the protected delivery prerequisites cannot be met. Do not add a command,
+tool, script, or runtime helper.
