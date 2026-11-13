@@ -36,11 +36,14 @@ const (
 	DefaultProviderEndpoint   = "https://api.hetzner.cloud/v1"
 	stateVersion              = 1
 	stateMaxBytes             = 256 * 1024
+	handoffMaxBytes           = 32 * 1024
 	commandInputMaxBytes      = 64 * 1024
 	providerResponseMaxBytes  = 256 * 1024
 	webResponseMaxBytes       = 32 * 1024
 	providerMutationTimeout   = 15 * time.Second
 	migrationGrantLifetime    = 7 * 24 * time.Hour
+	handoffStagingSuffix      = ".staging"
+	providerTokenEnvMax       = 128
 	statusMonitoring          = "monitoring"
 	statusWebRegistering      = "web_registering"
 	statusRegistered          = "registered"
@@ -58,6 +61,11 @@ var (
 	errTargetChanged     = errors.New("approved migration target changed")
 	errRemoteUnavailable = errors.New("migration remote request failed")
 	errRemoteMalformed   = errors.New("migration remote response was malformed")
+	errMigrationExpired  = errors.New("migration handoff expired")
+
+	// ErrCleanupBusy means a monitor or delivery operation currently owns the
+	// durable migration lock. The supervised Telegram tick may try again later.
+	ErrCleanupBusy = errors.New("migration cleanup is busy")
 )
 
 // Paths are fixed runtime locations. Production callers use DefaultPaths;
@@ -101,11 +109,23 @@ type Target struct {
 // Request is accepted only on root-owned stdin by goaster-telegram migration.
 // ProviderToken is never persisted, logged, or returned.
 type Request struct {
-	Action        string `json:"action"`
-	JobID         string `json:"job_id"`
-	WebOrigin     string `json:"web_origin"`
-	ProviderToken string `json:"provider_token"`
-	Target        Target `json:"target"`
+	Action           string `json:"action"`
+	JobID            string `json:"job_id"`
+	WebOrigin        string `json:"web_origin"`
+	ProviderToken    string `json:"provider_token"`
+	ProviderTokenEnv string `json:"provider_token_env,omitempty"`
+	Target           Target `json:"target"`
+}
+
+// LauncherRequest is the non-secret stdin contract for the root command. The
+// launcher reads ProviderTokenEnv from its own environment and constructs a
+// Request in memory; callers never provide ProviderToken here.
+type LauncherRequest struct {
+	Action           string `json:"action"`
+	JobID            string `json:"job_id"`
+	WebOrigin        string `json:"web_origin"`
+	ProviderTokenEnv string `json:"provider_token_env,omitempty"`
+	Target           Target `json:"target"`
 }
 
 // Result is the complete safe output of the privileged helper. It contains no
@@ -168,6 +188,55 @@ func RunCommand(ctx context.Context, input io.Reader, output io.Writer, options 
 	return nil
 }
 
+// RunLauncher reads a bounded, non-secret launcher request, resolves the
+// nominated environment variable locally, and passes the complete helper
+// request to RunCommand only through memory.
+func RunLauncher(ctx context.Context, input io.Reader, output io.Writer, options Options, lookupEnv func(string) (string, bool)) error {
+	data, err := io.ReadAll(io.LimitReader(input, commandInputMaxBytes+1))
+	defer clear(data)
+	if err != nil || len(data) > commandInputMaxBytes {
+		return errInvalidInput
+	}
+	var launch LauncherRequest
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&launch); err != nil {
+		return errInvalidInput
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errInvalidInput
+	}
+	if lookupEnv == nil {
+		lookupEnv = os.LookupEnv
+	}
+	if !safeLauncherRequest(launch, options.AllowInsecureHTTP) {
+		return errInvalidInput
+	}
+	token := ""
+	if launch.Action == "monitor" {
+		var found bool
+		token, found = lookupEnv(launch.ProviderTokenEnv)
+		if !found || token == "" {
+			return errInvalidInput
+		}
+	}
+	request := Request{
+		Action:           launch.Action,
+		JobID:            launch.JobID,
+		WebOrigin:        launch.WebOrigin,
+		ProviderToken:    token,
+		ProviderTokenEnv: launch.ProviderTokenEnv,
+		Target:           launch.Target,
+	}
+	requestData, err := json.Marshal(request)
+	clear([]byte(token))
+	if err != nil {
+		return errInvalidInput
+	}
+	defer clear(requestData)
+	return RunCommand(ctx, bytes.NewReader(requestData), output, options)
+}
+
 // Execute performs one non-overlapping monitor invocation. It is safe to call
 // again after a restart: mutation states are terminal rather than replayed.
 func Execute(ctx context.Context, request Request, options Options) (Result, error) {
@@ -198,17 +267,18 @@ func Execute(ctx context.Context, request Request, options Options) (Result, err
 	}
 	if !exists {
 		state = migrationState{
-			Version:     stateVersion,
-			JobID:       request.JobID,
-			Fingerprint: fingerprint,
-			Origin:      request.WebOrigin,
-			Target:      request.Target,
-			Status:      statusMonitoring,
+			Version:          stateVersion,
+			JobID:            request.JobID,
+			Fingerprint:      fingerprint,
+			Origin:           request.WebOrigin,
+			ProviderTokenEnv: request.ProviderTokenEnv,
+			Target:           request.Target,
+			Status:           statusMonitoring,
 		}
 		if err := saveState(options.Paths.State, state); err != nil {
 			return Result{}, errStateUnavailable
 		}
-	} else if state.JobID != request.JobID || state.Fingerprint != fingerprint || state.Origin != request.WebOrigin || !sameTarget(state.Target, request.Target) {
+	} else if state.JobID != request.JobID || state.Fingerprint != fingerprint || state.Origin != request.WebOrigin || state.ProviderTokenEnv != request.ProviderTokenEnv || !sameTarget(state.Target, request.Target) {
 		return Result{}, errInvalidInput
 	}
 
@@ -246,6 +316,7 @@ func Execute(ctx context.Context, request Request, options Options) (Result, err
 			return base, nil
 		}
 		state.SelectedLocationID = availability.LocationID
+		state.SelectedLocationName = availability.LocationName
 		publicKey, privateKey, keyErr := generateLoginKey()
 		if keyErr != nil {
 			base = machine.terminalResult(state, base, keyErr)
@@ -307,34 +378,26 @@ func Execute(ctx context.Context, request Request, options Options) (Result, err
 	}
 
 	if state.Status == statusKeyRegistered && !state.HandoffReady {
-		handoff := buildHandoff(state)
-		identity, stageErr := protectedfile.WriteExclusive(options.Paths.Handoff, []byte(handoff))
-		clear([]byte(handoff))
+		var stageErr error
+		state, stageErr = publishHandoff(options.Paths, state)
 		if stageErr != nil {
 			base = machine.terminalResult(state, base, stageErr)
 			return base, nil
 		}
-		state.HandoffIdentity = identity
-		state.HandoffReady = true
-		if err := saveState(options.Paths.State, state); err != nil {
-			return Result{}, errStateUnavailable
-		}
 	}
 	if state.Status == statusKeyRegistered && state.HandoffReady {
-		content, readErr := protectedfile.Read(options.Paths.Handoff, stateMaxBytes)
-		if readErr == nil && content.Identity != state.HandoffIdentity {
+		content, readErr := protectedfile.Read(options.Paths.Handoff, handoffMaxBytes)
+		if readErr != nil {
 			base = machine.terminalResult(state, base, errTerminal)
 			return base, nil
 		}
-		if readErr != nil {
-			if _, statErr := os.Lstat(options.Paths.Handoff); !errors.Is(statErr, os.ErrNotExist) {
-				base = machine.terminalResult(state, base, errTerminal)
-				return base, nil
-			}
+		if content.Identity != state.HandoffIdentity {
+			base = machine.terminalResult(state, base, errTerminal)
+			return base, nil
 		}
 	}
 
-	if state.Status != statusKeyRegistered || state.ProviderKeyID <= 0 || !state.HandoffReady || state.SelectedLocationID <= 0 {
+	if state.Status != statusKeyRegistered || state.ProviderKeyID <= 0 || !state.HandoffReady || state.SelectedLocationID <= 0 || !safeIdentifier(state.SelectedLocationName, 128) {
 		base = machine.terminalResult(state, base, errTerminal)
 		return base, nil
 	}
@@ -347,6 +410,7 @@ func Execute(ctx context.Context, request Request, options Options) (Result, err
 		return base, nil
 	}
 	state.SelectedLocationID = availability.LocationID
+	state.SelectedLocationName = availability.LocationName
 	if err := machine.checkNetworks(ctx, request.Target.NetworkIDs); err != nil {
 		base = machine.terminalResult(state, base, err)
 		return base, nil
@@ -361,7 +425,18 @@ func Execute(ctx context.Context, request Request, options Options) (Result, err
 	if err := saveState(options.Paths.State, state); err != nil {
 		return Result{}, errStateUnavailable
 	}
-	createCtx, cancel := createContext(ctx, state.Expires, machine.currentUnix())
+	if state.Expires <= machine.currentUnix() {
+		return expireState(options.Paths.State, options.Paths.Handoff, state, base)
+	}
+	createNow := machine.currentUnix()
+	if state.Expires <= createNow {
+		return expireState(options.Paths.State, options.Paths.Handoff, state, base)
+	}
+	createCtx, cancel := createContext(ctx, state.Expires, createNow)
+	if createCtx.Err() != nil {
+		cancel()
+		return expireState(options.Paths.State, options.Paths.Handoff, state, base)
+	}
 	serverID, createErr := machine.createServer(createCtx, state)
 	cancel()
 	if createErr != nil {
@@ -380,25 +455,27 @@ func Execute(ctx context.Context, request Request, options Options) (Result, err
 }
 
 type migrationState struct {
-	Version            int                    `json:"version"`
-	JobID              string                 `json:"job_id"`
-	Fingerprint        string                 `json:"fingerprint"`
-	Origin             string                 `json:"origin"`
-	Target             Target                 `json:"target"`
-	Status             string                 `json:"status"`
-	Attempt            string                 `json:"attempt,omitempty"`
-	CallbackSecret     string                 `json:"callback_secret,omitempty"`
-	OwnerSecret        string                 `json:"owner_secret,omitempty"`
-	ServerLabel        string                 `json:"server_label,omitempty"`
-	Expires            int64                  `json:"expires,omitempty"`
-	PublicKey          string                 `json:"public_key,omitempty"`
-	PrivateKey         string                 `json:"private_key,omitempty"`
-	ProviderKeyID      int64                  `json:"provider_key_id,omitempty"`
-	SelectedLocationID int64                  `json:"selected_location_id,omitempty"`
-	HandoffReady       bool                   `json:"handoff_ready,omitempty"`
-	HandoffIdentity    protectedfile.Identity `json:"handoff_identity,omitempty"`
-	ServerID           int64                  `json:"server_id,omitempty"`
-	TerminalReason     string                 `json:"terminal_reason,omitempty"`
+	Version              int                    `json:"version"`
+	JobID                string                 `json:"job_id"`
+	Fingerprint          string                 `json:"fingerprint"`
+	Origin               string                 `json:"origin"`
+	ProviderTokenEnv     string                 `json:"provider_token_env,omitempty"`
+	Target               Target                 `json:"target"`
+	Status               string                 `json:"status"`
+	Attempt              string                 `json:"attempt,omitempty"`
+	CallbackSecret       string                 `json:"callback_secret,omitempty"`
+	OwnerSecret          string                 `json:"owner_secret,omitempty"`
+	ServerLabel          string                 `json:"server_label,omitempty"`
+	Expires              int64                  `json:"expires,omitempty"`
+	PublicKey            string                 `json:"public_key,omitempty"`
+	PrivateKey           string                 `json:"private_key,omitempty"`
+	ProviderKeyID        int64                  `json:"provider_key_id,omitempty"`
+	SelectedLocationID   int64                  `json:"selected_location_id,omitempty"`
+	SelectedLocationName string                 `json:"selected_location_name,omitempty"`
+	HandoffReady         bool                   `json:"handoff_ready,omitempty"`
+	HandoffIdentity      protectedfile.Identity `json:"handoff_identity,omitempty"`
+	ServerID             int64                  `json:"server_id,omitempty"`
+	TerminalReason       string                 `json:"terminal_reason,omitempty"`
 }
 
 type grant struct {
@@ -491,7 +568,7 @@ func validateRequest(request Request, allowInsecure bool) error {
 		}
 		return nil
 	}
-	if request.Action != "monitor" || request.ProviderToken == "" || strings.ContainsAny(request.ProviderToken, "\r\n") {
+	if request.Action != "monitor" || request.ProviderToken == "" || strings.ContainsAny(request.ProviderToken, "\r\n") || request.ProviderTokenEnv != "" && !validProviderTokenEnv(request.ProviderTokenEnv) {
 		return errInvalidInput
 	}
 	origin, err := normalizeOrigin(request.WebOrigin, allowInsecure)
@@ -502,6 +579,42 @@ func validateRequest(request Request, allowInsecure bool) error {
 		return err
 	}
 	return nil
+}
+
+func safeLauncherRequest(request LauncherRequest, allowInsecure bool) bool {
+	if !safeIdentifier(request.JobID, 256) {
+		return false
+	}
+	if request.Action == "cleanup" {
+		return request.WebOrigin == "" && emptyTarget(request.Target) && (request.ProviderTokenEnv == "" || validProviderTokenEnv(request.ProviderTokenEnv))
+	}
+	if request.Action != "monitor" || !validProviderTokenEnv(request.ProviderTokenEnv) {
+		return false
+	}
+	return validateRequest(Request{
+		Action:           request.Action,
+		JobID:            request.JobID,
+		WebOrigin:        request.WebOrigin,
+		ProviderToken:    "launcher-token",
+		ProviderTokenEnv: request.ProviderTokenEnv,
+		Target:           request.Target,
+	}, allowInsecure) == nil
+}
+
+func validProviderTokenEnv(value string) bool {
+	if len(value) == 0 || len(value) > providerTokenEnvMax {
+		return false
+	}
+	for index, character := range []byte(value) {
+		if index == 0 && character != '_' && (character < 'A' || character > 'Z') && (character < 'a' || character > 'z') {
+			return false
+		}
+		if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func emptyTarget(target Target) bool {
@@ -603,10 +716,11 @@ func completeOptions(options Options) Options {
 
 func requestFingerprint(request Request) string {
 	value, _ := json.Marshal(struct {
-		JobID  string `json:"job_id"`
-		Origin string `json:"origin"`
-		Target Target `json:"target"`
-	}{request.JobID, request.WebOrigin, request.Target})
+		JobID            string `json:"job_id"`
+		Origin           string `json:"origin"`
+		ProviderTokenEnv string `json:"provider_token_env"`
+		Target           Target `json:"target"`
+	}{request.JobID, request.WebOrigin, request.ProviderTokenEnv, request.Target})
 	digest := sha256.Sum256(value)
 	return hex.EncodeToString(digest[:])
 }
@@ -648,11 +762,20 @@ func ensureDirectory(path string) error {
 		}
 	}
 	for index := len(missing) - 1; index >= 0; index-- {
-		if err := os.Mkdir(missing[index], 0700); err != nil && !errors.Is(err, os.ErrExist) {
-			return errStateUnavailable
+		created := true
+		if err := os.Mkdir(missing[index], 0700); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return errStateUnavailable
+			}
+			created = false
 		}
 		if err := os.Chmod(missing[index], 0700); err != nil {
 			return errStateUnavailable
+		}
+		if created {
+			if err := syncDirectoryPath(filepath.Dir(missing[index])); err != nil {
+				return errStateUnavailable
+			}
 		}
 	}
 	return nil
@@ -724,7 +847,7 @@ func loadState(path string) (migrationState, bool, error) {
 }
 
 func validState(state migrationState) bool {
-	if state.Version != stateVersion || !safeIdentifier(state.JobID, 256) || len(state.Fingerprint) != sha256.Size*2 || strings.ToLower(state.Fingerprint) != state.Fingerprint || !safeIdentifier(state.Origin, 512) || !safeIdentifier(state.Status, 64) {
+	if state.Version != stateVersion || !safeIdentifier(state.JobID, 256) || len(state.Fingerprint) != sha256.Size*2 || strings.ToLower(state.Fingerprint) != state.Fingerprint || !safeIdentifier(state.Origin, 512) || state.ProviderTokenEnv != "" && !validProviderTokenEnv(state.ProviderTokenEnv) || !safeIdentifier(state.Status, 64) {
 		return false
 	}
 	switch state.Status {
@@ -762,15 +885,82 @@ func saveState(path string, state migrationState) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return errStateUnavailable
 	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil || directory.Sync() != nil {
-		if directory != nil {
-			directory.Close()
-		}
+	if err := syncDirectoryPath(filepath.Dir(path)); err != nil {
 		return errStateUnavailable
 	}
-	directory.Close()
 	ok = true
+	return nil
+}
+
+var syncDirectoryPath = filesync.DirectoryPath
+
+func handoffStagePath(path string) string { return path + handoffStagingSuffix }
+
+func publishHandoff(paths Paths, state migrationState) (migrationState, error) {
+	stagePath := handoffStagePath(paths.Handoff)
+	if state.HandoffIdentity != (protectedfile.Identity{}) {
+		if content, err := protectedfile.Read(paths.Handoff, handoffMaxBytes); err == nil && content.Identity == state.HandoffIdentity {
+			state.HandoffReady = true
+			if err := saveState(paths.State, state); err != nil {
+				return state, errStateUnavailable
+			}
+			return state, nil
+		}
+		if content, err := protectedfile.Read(stagePath, handoffMaxBytes); err == nil && content.Identity == state.HandoffIdentity {
+			if err := publishStagedFile(stagePath, paths.Handoff); err != nil {
+				_ = protectedfile.RemoveIfSame(stagePath, state.HandoffIdentity)
+				return state, err
+			}
+			state.HandoffReady = true
+			if err := saveState(paths.State, state); err != nil {
+				return state, errStateUnavailable
+			}
+			return state, nil
+		}
+		return state, errTerminal
+	}
+
+	// The staging name is reserved and never published. Removing an orphan
+	// from a crash before the identity was persisted is safe under the monitor
+	// lock and prevents it from blocking the next local staging attempt.
+	if err := protectedfile.RemoveUnpublished(stagePath); err != nil {
+		return state, err
+	}
+	handoff := []byte(buildHandoff(state))
+	identity, err := protectedfile.WriteExclusive(stagePath, handoff)
+	clear(handoff)
+	if err != nil {
+		return state, err
+	}
+	state.HandoffIdentity = identity
+	state.HandoffReady = false
+	if err := saveState(paths.State, state); err != nil {
+		_ = protectedfile.RemoveIfSame(stagePath, identity)
+		return state, errStateUnavailable
+	}
+	if err := publishStagedFile(stagePath, paths.Handoff); err != nil {
+		_ = protectedfile.RemoveIfSame(stagePath, identity)
+		return state, err
+	}
+	state.HandoffReady = true
+	if err := saveState(paths.State, state); err != nil {
+		return state, errStateUnavailable
+	}
+	return state, nil
+}
+
+func publishStagedFile(stagePath, handoffPath string) error {
+	if _, err := os.Lstat(handoffPath); err == nil {
+		return errTerminal
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errStateUnavailable
+	}
+	if err := os.Rename(stagePath, handoffPath); err != nil {
+		return errStateUnavailable
+	}
+	if err := syncDirectoryPath(filepath.Dir(handoffPath)); err != nil {
+		return errStateUnavailable
+	}
 	return nil
 }
 
@@ -818,25 +1008,132 @@ func machineTerminal(options Options, state migrationState, base Result, reason 
 }
 
 func expireState(statePath, handoffPath string, state migrationState, base Result) (Result, error) {
-	if state.HandoffReady {
-		if err := protectedfile.RemoveIfSame(handoffPath, state.HandoffIdentity); err != nil {
-			state.TerminalReason = "handoff_replaced"
+	cleanupErr := error(nil)
+	if state.HandoffIdentity != (protectedfile.Identity{}) {
+		if state.HandoffReady {
+			cleanupErr = protectedfile.RemoveIfSame(handoffPath, state.HandoffIdentity)
 		} else {
+			stageErr := protectedfile.RemoveIfSame(handoffStagePath(handoffPath), state.HandoffIdentity)
+			finalErr := protectedfile.RemoveIfSame(handoffPath, state.HandoffIdentity)
+			cleanupErr = errors.Join(stageErr, finalErr)
+		}
+		if cleanupErr == nil {
 			state.HandoffReady = false
 			state.HandoffIdentity = protectedfile.Identity{}
-			state.TerminalReason = "expired"
 		}
 	} else {
-		state.TerminalReason = "expired"
+		cleanupErr = protectedfile.RemoveUnpublished(handoffStagePath(handoffPath))
 	}
 	state.CallbackSecret = ""
 	state.OwnerSecret = ""
 	state.PrivateKey = ""
 	state.Status = statusTerminal
-	_ = saveState(statePath, state)
+	if cleanupErr != nil {
+		state.TerminalReason = "cleanup_failed"
+	} else {
+		state.TerminalReason = "expired"
+	}
+	stateErr := saveState(statePath, state)
 	base.Status, base.StopCron = statusTerminal, true
 	base.Attempt, base.ServerID = state.Attempt, state.ServerID
-	return base, nil
+	return base, errors.Join(cleanupErr, stateErr)
+}
+
+// CleanupExpired performs expiry cleanup under the same lock used by the
+// monitor and handoff delivery. It does not create a runtime directory when
+// no migration state exists, so Telegram startup does not depend on migration
+// setup. A busy lock is a normal tick miss; callers may try on the next tick.
+func CleanupExpired(paths Paths, now func() time.Time) error {
+	if _, err := os.Lstat(paths.State); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return errStateUnavailable
+	}
+	lock, err := acquireLock(paths.Lock)
+	if err != nil {
+		if filesync.IsLockBusy(err) {
+			return ErrCleanupBusy
+		}
+		return errStateUnavailable
+	}
+	defer lock.Close()
+	state, exists, err := loadState(paths.State)
+	if err != nil {
+		return errStateUnavailable
+	}
+	if !exists || state.Expires <= 0 || currentTime(now).Unix() < state.Expires {
+		return nil
+	}
+	_, err = expireState(paths.State, paths.Handoff, state, Result{JobID: state.JobID, Status: state.Status})
+	return err
+}
+
+// DeliverHandoff reads and sends one complete handoff while holding the
+// monitor lock. There is intentionally no durable delivery claim: a failed
+// or ambiguous send leaves the file available for manual/repeated owner use
+// until expiry. A successful send removes the exact identity that was read.
+func DeliverHandoff(ctx context.Context, paths Paths, now func() time.Time, send func([]byte) error) error {
+	if send == nil {
+		return errors.New("migration handoff unavailable")
+	}
+	lock, err := acquireLock(paths.Lock)
+	if err != nil {
+		if filesync.IsLockBusy(err) {
+			return ErrCleanupBusy
+		}
+		return errors.New("migration handoff unavailable")
+	}
+	defer lock.Close()
+	state, exists, err := loadState(paths.State)
+	if err != nil || !exists || state.Expires <= 0 {
+		return errors.New("migration handoff unavailable")
+	}
+	if currentTime(now).Unix() >= state.Expires {
+		_, cleanupErr := expireState(paths.State, paths.Handoff, state, Result{JobID: state.JobID, Status: state.Status})
+		if cleanupErr != nil {
+			return cleanupErr
+		}
+		return errMigrationExpired
+	}
+	if !state.HandoffReady && state.HandoffIdentity != (protectedfile.Identity{}) {
+		if content, readErr := protectedfile.Read(paths.Handoff, handoffMaxBytes); readErr == nil && content.Identity == state.HandoffIdentity {
+			state.HandoffReady = true
+			if err := saveState(paths.State, state); err != nil {
+				return errors.New("migration handoff unavailable")
+			}
+		}
+	}
+	if !state.HandoffReady || state.HandoffIdentity == (protectedfile.Identity{}) {
+		return errors.New("migration handoff unavailable")
+	}
+	content, err := protectedfile.Read(paths.Handoff, handoffMaxBytes)
+	if err != nil || len(content.Data) == 0 || content.Identity != state.HandoffIdentity {
+		clear(content.Data)
+		return errors.New("migration handoff unavailable")
+	}
+	defer clear(content.Data)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := send(content.Data); err != nil {
+		return err
+	}
+	if err := protectedfile.RemoveIfSame(paths.Handoff, content.Identity); err != nil {
+		return errors.New("migration handoff changed during delivery")
+	}
+	state.HandoffReady = false
+	state.HandoffIdentity = protectedfile.Identity{}
+	if err := saveState(paths.State, state); err != nil {
+		return errors.New("migration handoff state could not be saved")
+	}
+	return nil
+}
+
+func currentTime(now func() time.Time) time.Time {
+	if now == nil {
+		return time.Now().UTC()
+	}
+	return now().UTC()
 }
 
 func acquireMutationContext(parent context.Context, seconds int64) (context.Context, context.CancelFunc) {
@@ -850,7 +1147,9 @@ func acquireMutationContext(parent context.Context, seconds int64) (context.Cont
 func createContext(parent context.Context, expires, now int64) (context.Context, context.CancelFunc) {
 	remaining := expires - now
 	if remaining <= 0 {
-		return context.WithCancel(parent)
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
 	}
 	return acquireMutationContext(parent, remaining)
 }
@@ -1045,7 +1344,10 @@ func (m monitorMachine) registerProviderKey(ctx context.Context, state migration
 }
 
 func (m monitorMachine) createServer(ctx context.Context, state migrationState) (int64, error) {
-	locationID := state.SelectedLocationID
+	if err := ctx.Err(); err != nil {
+		return 0, errRemoteUnavailable
+	}
+	locationName := state.SelectedLocationName
 	userData := callbackUserData(state.Origin, state.Attempt, state.CallbackSecret)
 	body, err := json.Marshal(struct {
 		Name             string            `json:"name"`
@@ -1058,7 +1360,7 @@ func (m monitorMachine) createServer(ctx context.Context, state migrationState) 
 		Labels           map[string]string `json:"labels"`
 		Networks         []int64           `json:"networks,omitempty"`
 		PublicNet        publicNet         `json:"public_net"`
-	}{state.ServerLabel, state.Target.ServerTypeID, state.Target.ImageID, []int64{state.ProviderKeyID}, strconv.FormatInt(locationID, 10), userData, true, map[string]string{"goaster-migration-attempt": state.Attempt}, append([]int64(nil), state.Target.NetworkIDs...), publicNet{EnableIPv4: state.Target.EnableIPv4, EnableIPv6: state.Target.EnableIPv6}})
+	}{state.ServerLabel, state.Target.ServerTypeID, state.Target.ImageID, []int64{state.ProviderKeyID}, locationName, userData, true, map[string]string{"goaster-migration-attempt": state.Attempt}, append([]int64(nil), state.Target.NetworkIDs...), publicNet{EnableIPv4: state.Target.EnableIPv4, EnableIPv6: state.Target.EnableIPv6}})
 	clear([]byte(userData))
 	if err != nil {
 		return 0, errRemoteMalformed
@@ -1109,7 +1411,7 @@ func callbackUserData(origin, attempt, callbackSecret string) string {
 }
 
 func (m monitorMachine) providerGET(ctx context.Context, endpoint string, maxBytes int64) ([]byte, error) {
-	status, body, err := m.requestJSON(ctx, strings.TrimSuffix(m.options.ProviderEndpoint, "/")+endpoint, http.MethodGet, "", "", "", nil, maxBytes)
+	status, body, err := m.requestJSON(ctx, strings.TrimSuffix(m.options.ProviderEndpoint, "/")+endpoint, http.MethodGet, requestAuthProvider, "", "", "", nil, maxBytes)
 	if err != nil || status != http.StatusOK {
 		clear(body)
 		return nil, errRemoteUnavailable
@@ -1118,14 +1420,22 @@ func (m monitorMachine) providerGET(ctx context.Context, endpoint string, maxByt
 }
 
 func (m monitorMachine) providerJSON(ctx context.Context, endpoint string, body []byte, maxBytes int64) (int, []byte, error) {
-	return m.requestJSON(ctx, strings.TrimSuffix(m.options.ProviderEndpoint, "/")+endpoint, http.MethodPost, "", m.request.ProviderToken, "application/json", body, maxBytes)
+	return m.requestJSON(ctx, strings.TrimSuffix(m.options.ProviderEndpoint, "/")+endpoint, http.MethodPost, requestAuthProvider, "", "", "application/json", body, maxBytes)
 }
 
 func (m monitorMachine) jsonRequest(ctx context.Context, endpoint, method, attempt, secret, contentType string, body []byte, maxBytes int64) (int, []byte, error) {
-	return m.requestJSON(ctx, endpoint, method, attempt, secret, contentType, body, maxBytes)
+	return m.requestJSON(ctx, endpoint, method, requestAuthWeb, attempt, secret, contentType, body, maxBytes)
 }
 
-func (m monitorMachine) requestJSON(ctx context.Context, endpoint, method, attempt, secret, contentType string, body []byte, maxBytes int64) (int, []byte, error) {
+type requestAuth uint8
+
+const (
+	requestAuthNone requestAuth = iota
+	requestAuthWeb
+	requestAuthProvider
+)
+
+func (m monitorMachine) requestJSON(ctx context.Context, endpoint, method string, auth requestAuth, attempt, secret, contentType string, body []byte, maxBytes int64) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, errRemoteUnavailable
@@ -1136,10 +1446,10 @@ func (m monitorMachine) requestJSON(ctx context.Context, endpoint, method, attem
 	if attempt != "" {
 		req.Header.Set("X-Goaster-Attempt", attempt)
 	}
-	if secret != "" {
+	if auth == requestAuthWeb && secret != "" {
 		req.Header.Set("Authorization", "Bearer "+secret)
 	}
-	if method == http.MethodGet || strings.Contains(endpoint, "/servers") || strings.Contains(endpoint, "/ssh_keys") || strings.Contains(endpoint, "/networks/") {
+	if auth == requestAuthProvider {
 		req.Header.Set("Authorization", "Bearer "+m.request.ProviderToken)
 	}
 	response, err := m.options.HTTPClient.Do(req)

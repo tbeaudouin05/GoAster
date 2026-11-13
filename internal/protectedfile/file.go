@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+
+	"goaster/internal/filesync"
 )
 
 // Identity is the stable identity of a file on the local filesystem.
@@ -75,6 +77,14 @@ func WriteExclusive(path string, data []byte) (Identity, error) {
 			_ = RemoveIfSame(path, identity)
 		}
 	}()
+	info, err := file.Stat()
+	if err != nil {
+		return Identity{}, errors.New("could not inspect protected file")
+	}
+	identity, ok := fileIdentity(info)
+	if !ok {
+		return Identity{}, errors.New("protected file identity unavailable")
+	}
 	if err := file.Chmod(0600); err != nil {
 		return Identity{}, errors.New("could not protect file")
 	}
@@ -84,18 +94,18 @@ func WriteExclusive(path string, data []byte) (Identity, error) {
 	if err := file.Sync(); err != nil {
 		return Identity{}, errors.New("could not sync protected file")
 	}
-	info, err := file.Stat()
+	info, err = file.Stat()
 	if err != nil {
 		return Identity{}, errors.New("could not inspect protected file")
 	}
-	identity, ok := fileIdentity(info)
-	if !ok || !validPrivateInfo(info, int64(len(data))) || info.Size() != int64(len(data)) {
+	currentIdentity, ok := fileIdentity(info)
+	if !ok || currentIdentity != identity || !validPrivateInfo(info, int64(len(data))) || info.Size() != int64(len(data)) {
 		return Identity{}, errors.New("protected file identity unavailable")
 	}
 	if err := file.Close(); err != nil {
 		return Identity{}, errors.New("could not close protected file")
 	}
-	if err := syncDirectory(filepath.Dir(path)); err != nil {
+	if err := syncDirectoryPath(filepath.Dir(path)); err != nil {
 		return Identity{}, errors.New("could not sync protected file directory")
 	}
 	removeOnFailure = false
@@ -122,6 +132,32 @@ func RemoveIfSame(path string, expected Identity) error {
 	}
 	if err := os.Remove(path); err != nil {
 		return errors.New("could not remove protected file")
+	}
+	if err := syncDirectoryPath(filepath.Dir(path)); err != nil {
+		return errors.New("could not sync protected file directory")
+	}
+	return nil
+}
+
+// RemoveUnpublished removes a reserved mode-0600 staging file. It is used only
+// for a file that has not been published at its public path, so an orphan from
+// an interrupted write can be cleaned without guessing at a replacement.
+func RemoveUnpublished(path string) error {
+	if !secureParents(path) {
+		return errors.New("invalid protected file path")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !validPrivateInfo(info, int64(info.Size())) {
+		return errors.New("invalid protected staging file")
+	}
+	if err := os.Remove(path); err != nil {
+		return errors.New("could not remove protected staging file")
+	}
+	if err := syncDirectoryPath(filepath.Dir(path)); err != nil {
+		return errors.New("could not sync protected file directory")
 	}
 	return nil
 }
@@ -180,11 +216,4 @@ func fileIdentity(info os.FileInfo) (Identity, bool) {
 	return identity, identity != (Identity{})
 }
 
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
-}
+var syncDirectoryPath = filesync.DirectoryPath

@@ -2,6 +2,7 @@ package migration
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -172,7 +173,7 @@ func (fixture *migrationFixture) handle(w http.ResponseWriter, r *http.Request) 
 			StartAfterCreate bool              `json:"start_after_create"`
 			Labels           map[string]string `json:"labels"`
 		}
-		if json.Unmarshal(body, &input) != nil || input.Name != "goaster-migration-"+strings.Repeat("a", 16) || input.ServerType != 22 || input.Image != 123 || input.Location != "1" || !input.StartAfterCreate || input.Labels["goaster-migration-attempt"] != strings.Repeat("a", 64) || strings.Contains(input.UserData, "provider-token-test") || strings.Contains(input.UserData, "dddddddd") {
+		if json.Unmarshal(body, &input) != nil || input.Name != "goaster-migration-"+strings.Repeat("a", 16) || input.ServerType != 22 || input.Image != 123 || input.Location != "fsn1" || !input.StartAfterCreate || input.Labels["goaster-migration-attempt"] != strings.Repeat("a", 64) || strings.Contains(input.UserData, "provider-token-test") || strings.Contains(input.UserData, "dddddddd") {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -264,6 +265,134 @@ func TestMigrationCommandOutputContainsOnlySafeStatusAndIDs(t *testing.T) {
 	}
 	if !strings.Contains(text, `"status":"created"`) || !strings.Contains(text, `"server_id":9001`) {
 		t.Fatalf("helper output omitted safe result fields: %s", text)
+	}
+}
+
+func TestMigrationLauncherReadsNamedEnvironmentWithoutEchoingToken(t *testing.T) {
+	fixture := newMigrationFixture(t)
+	fixture.releaseCreate = make(chan struct{})
+	close(fixture.releaseCreate)
+	const tokenEnv = "GOASTER_TEST_HCLOUD_TOKEN"
+	t.Setenv(tokenEnv, fixture.request.ProviderToken)
+	launch := LauncherRequest{
+		Action:           fixture.request.Action,
+		JobID:            fixture.request.JobID,
+		WebOrigin:        fixture.request.WebOrigin,
+		ProviderTokenEnv: tokenEnv,
+		Target:           fixture.request.Target,
+	}
+	input, err := json.Marshal(launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunLauncher(context.Background(), bytes.NewReader(input), &output, fixture.options, os.LookupEnv); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(input), fixture.request.ProviderToken) || strings.Contains(output.String(), fixture.request.ProviderToken) {
+		t.Fatal("launcher input or output exposed the provider token")
+	}
+	state, exists, err := loadState(fixture.options.Paths.State)
+	if err != nil || !exists || state.ProviderTokenEnv != tokenEnv {
+		t.Fatalf("launcher token reference was not durably bound: %#v, %v, exists=%v", state, err, exists)
+	}
+}
+
+type migrationDoerFunc func(*http.Request) (*http.Response, error)
+
+func (function migrationDoerFunc) Do(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
+func TestMigrationWebAuthDoesNotFollowEndpointText(t *testing.T) {
+	var authorization string
+	machine := monitorMachine{
+		request: Request{ProviderToken: "provider-secret"},
+		options: Options{
+			HTTPClient: migrationDoerFunc(func(request *http.Request) (*http.Response, error) {
+				authorization = request.Header.Get("Authorization")
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+			}),
+		},
+	}
+	if _, _, err := machine.jsonRequest(context.Background(), "https://servers.example/migration/status", http.MethodPost, strings.Repeat("a", 64), "web-secret", "application/json", []byte("{}"), 1024); err != nil {
+		t.Fatal(err)
+	}
+	if authorization != "Bearer web-secret" {
+		t.Fatalf("web request authorization = %q, want web secret", authorization)
+	}
+}
+
+func TestMigrationExpiryAfterCreateClaimSkipsProviderPost(t *testing.T) {
+	fixture := newMigrationFixture(t)
+	fixture.releaseCreate = make(chan struct{})
+	close(fixture.releaseCreate)
+	var calls atomic.Int32
+	fixture.options.Now = func() time.Time {
+		if calls.Add(1) >= 6 {
+			return fixture.now.Add(8 * 24 * time.Hour)
+		}
+		return fixture.now
+	}
+	result, err := Execute(t.Context(), fixture.request, fixture.options)
+	if err != nil || result.Status != statusTerminal {
+		t.Fatalf("post-claim expiry result = %#v, %v", result, err)
+	}
+	if fixture.createCount.Load() != 0 {
+		t.Fatalf("post-claim expiry submitted %d create calls", fixture.createCount.Load())
+	}
+	state, exists, err := loadState(fixture.options.Paths.State)
+	if err != nil || !exists || state.Status != statusTerminal {
+		t.Fatalf("post-claim expiry did not retain terminal claim: %#v, %v, exists=%v", state, err, exists)
+	}
+}
+
+func TestNewRuntimeDirectoryMustSyncItsParentBeforeUse(t *testing.T) {
+	oldSync := syncDirectoryPath
+	syncDirectoryPath = func(string) error { return errors.New("directory sync failed") }
+	defer func() { syncDirectoryPath = oldSync }()
+
+	root := filepath.Join(t.TempDir(), "new-runtime", "nested")
+	if err := ensureDirectory(root); err == nil {
+		t.Fatal("ensureDirectory succeeded after a parent sync failure")
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("directory was used after a parent sync failure: %v", err)
+	}
+}
+
+func TestInterruptedUnpublishedHandoffIsCleanedBeforeRepublish(t *testing.T) {
+	fixture := newMigrationFixture(t)
+	if err := ensureRuntimeParents(fixture.options.Paths); err != nil {
+		t.Fatal(err)
+	}
+	state := migrationState{
+		Version:              stateVersion,
+		JobID:                fixture.request.JobID,
+		Fingerprint:          requestFingerprint(fixture.request),
+		Origin:               fixture.request.WebOrigin,
+		Target:               fixture.request.Target,
+		Status:               statusKeyRegistered,
+		Attempt:              strings.Repeat("a", 64),
+		OwnerSecret:          strings.Repeat("o", 8),
+		ServerLabel:          "goaster-migration-" + strings.Repeat("a", 16),
+		SelectedLocationID:   1,
+		SelectedLocationName: "fsn1",
+	}
+	stagePath := handoffStagePath(fixture.options.Paths.Handoff)
+	if _, err := protectedfile.WriteExclusive(stagePath, []byte("interrupted")); err != nil {
+		t.Fatal(err)
+	}
+	state, err := publishHandoff(fixture.options.Paths, state)
+	if err != nil || !state.HandoffReady {
+		t.Fatalf("publishHandoff() = %#v, %v", state, err)
+	}
+	if _, err := os.Stat(stagePath); !os.IsNotExist(err) {
+		t.Fatalf("orphan staging file remains: %v", err)
+	}
+	content, err := protectedfile.Read(fixture.options.Paths.Handoff, stateMaxBytes)
+	if err != nil || content.Identity != state.HandoffIdentity {
+		t.Fatalf("published handoff identity = %#v, %v; state = %#v", content, err, state)
 	}
 }
 
@@ -394,12 +523,44 @@ func TestMigrationExpiryCleansExactHandoffAndPreservesReplacement(t *testing.T) 
 	if err := saveState(fixture.options.Paths.State, state); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Execute(t.Context(), fixture.request, fixture.options); err != nil {
-		t.Fatal(err)
+	if _, err := Execute(t.Context(), fixture.request, fixture.options); err == nil {
+		t.Fatal("expiry cleanup reported success after the handoff was replaced")
 	}
 	data, err := os.ReadFile(fixture.options.Paths.Handoff)
 	if err != nil || string(data) != "replacement" {
 		t.Fatalf("expiry cleanup removed replacement: %q, %v", data, err)
+	}
+}
+
+func TestMigrationDeliveryChecksExpiryBeforeSendingAndClearsSecrets(t *testing.T) {
+	fixture := newMigrationFixture(t)
+	fixture.releaseCreate = make(chan struct{})
+	close(fixture.releaseCreate)
+	if _, err := Execute(t.Context(), fixture.request, fixture.options); err != nil {
+		t.Fatal(err)
+	}
+	state, exists, err := loadState(fixture.options.Paths.State)
+	if err != nil || !exists {
+		t.Fatalf("load state = %#v, %v, exists=%v", state, err, exists)
+	}
+	state.Expires = fixture.now.Add(-time.Second).Unix()
+	if err := saveState(fixture.options.Paths.State, state); err != nil {
+		t.Fatal(err)
+	}
+	sends := 0
+	err = DeliverHandoff(t.Context(), fixture.options.Paths, func() time.Time { return fixture.now }, func([]byte) error {
+		sends++
+		return nil
+	})
+	if err == nil || sends != 0 {
+		t.Fatalf("expired handoff delivery error=%v sends=%d", err, sends)
+	}
+	state, exists, err = loadState(fixture.options.Paths.State)
+	if err != nil || !exists || state.Status != statusTerminal || state.OwnerSecret != "" || state.CallbackSecret != "" || state.PrivateKey != "" {
+		t.Fatalf("expired delivery state = %#v, %v, exists=%v", state, err, exists)
+	}
+	if _, err := os.Stat(fixture.options.Paths.Handoff); !os.IsNotExist(err) {
+		t.Fatalf("expired delivery left the handoff: %v", err)
 	}
 }
 

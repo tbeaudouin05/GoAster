@@ -91,18 +91,36 @@ there is no second create prompt and no separate price ceiling.
 
 Do not generate a key with `ssh-keygen`, put a grant in a temporary directory,
 or call either remote API from a shell/model turn. The distinct root-only
-boundary is:
+boundary is the existing Telegram binary's launcher subcommand:
 
 ```text
 goaster-telegram migration
 ```
 
-It reads one bounded JSON object from stdin and never accepts a secret in an
-argument. The owner-controlled launcher supplies `action: "monitor"`, the
-exact cron `job_id`, the public HTTPS `web_origin`, the Hetzner token, and the
-approved `target` values on that protected stdin. The helper emits only
-`job_id`, `status`, `attempt`, `server_id`, and `stop_cron`; it never emits a
-URL, key, token, grant, response body, or provider error.
+It reads one bounded, non-secret JSON object from stdin and never accepts a
+secret in an argument or in that object. The launcher reads the exact named
+environment variable from its root-running process environment, constructs the
+helper request in memory, and passes it to `RunCommand`; the token is never
+visible to the model or the command transcript. The request shape is:
+
+```json
+{"action":"monitor","job_id":"<exact-cron-job-id>","web_origin":"https://<deployed-origin>","provider_token_env":"HCLOUD_TOKEN","target":{"server_type_id":22,"server_type_name":"cx22","architecture":"x86","image_id":123,"image_name":"ubuntu-24.04","locations":[{"id":1,"name":"fsn1","hourly_gross":"0.0100"}],"network_ids":[],"enable_ipv4":true,"enable_ipv6":false}}
+```
+
+`HCLOUD_TOKEN` above is an environment-variable reference, not a token value;
+replace it only with the exact existing key used by the root shell path. On
+the observed installation documented in `docs/goasterweb-installation.md`,
+the concrete invocation is:
+
+```sh
+printf '%s\n' '{"action":"monitor","job_id":"<exact-cron-job-id>","web_origin":"https://<deployed-origin>","provider_token_env":"HCLOUD_TOKEN","target":{"server_type_id":22,"server_type_name":"cx22","architecture":"x86","image_id":123,"image_name":"ubuntu-24.04","locations":[{"id":1,"name":"fsn1","hourly_gross":"0.0100"}],"network_ids":[],"enable_ipv4":true,"enable_ipv6":false}}' | /opt/goasterweb/bin/goaster-telegram migration
+```
+
+Use the actual root-running binary already configured by the target service;
+the observed path above is not an installation requirement or a new startup
+dependency. The helper emits only `job_id`, `status`, `attempt`, `server_id`,
+and `stop_cron`; it never emits a URL, key, token, grant, response body, or
+provider error.
 
 The non-secret target shape is `server_type_id/name`, `architecture`,
 `image_id/name`, `locations: [{id, name, hourly_gross}]`, `network_ids`,
@@ -113,9 +131,10 @@ job and cannot reuse the durable state.
 The helper keeps the durable state at root-owned mode-0600
 `/var/lib/goaster-telegram/migration-state` and serializes invocations with
 the matching protected lock file. The state includes the exact job
-fingerprint, fixed server type/image/location/network/price terms, and the
-dedicated key/grant. It stages the final owner URL plus private key directly,
-exclusively and mode 0600, at
+fingerprint, token-environment reference, fixed server type/image/location/
+network/price terms, and the dedicated key/grant. It writes a complete mode
+0600 handoff to a protected sibling staging path, persists its device/inode
+identity, and only then atomically publishes it at
 `/var/lib/goaster-telegram/migration-handoff`; it does not create arbitrary
 secret files under a temporary directory.
 
@@ -137,7 +156,8 @@ Use the existing cron tool to schedule a non-overlapping chat turn every 30
 minutes, 24/7, with the exact job ID supplied to the helper. The cron tool
 schedules chat turns, not shell commands; the turn may invoke
 `shell_execute` only through the already deployed root-running GoAster command
-path, with the request JSON supplied on stdin by a local secret-aware launcher.
+path, using the `goaster-telegram migration` invocation above with the bounded
+request JSON supplied on stdin by the local secret-aware launcher.
 The command line and model-visible output contain no provider token or grant.
 Do not use `background_command` input for this: its sessions are in-memory and
 its input/output is not secret-safe. If the target host has no existing
@@ -165,9 +185,13 @@ automatically.
 
 After the seven-day grant expires, the same root-only command accepts a
 `cleanup` request containing only the exact job ID (no token, URL, or target
-secrets). It removes the saved handoff only if its persisted device/inode
-identity still matches; a missing file is already clean and a replacement is
-left untouched.
+secrets), for example `{"action":"cleanup","job_id":"<exact-cron-job-id>"}`
+on stdin. The supervised Telegram service also runs expiry cleanup from its
+existing polling tick. Delivery checks expiry while holding the same monitor
+lock before sending; it has no one-shot delivery claim, so a failed or
+ambiguous send retains the reusable handoff until expiry. A successful send
+may remove only the exact file identity that was read; cleanup errors are
+failures requiring manual follow-up.
 
 ### 6. Use the current callback user-data contract
 
@@ -241,9 +265,10 @@ temporary directory, argument, log, or model output. The already paired owner
 can send `/get_migration`; GoAster sends the fixed document
 `goaster-migration-handoff.txt` directly, does not call the agent, and rejects
 groups, unauthorized users, and messages with attachments. A successful send
-removes only the exact file identity that was read. A failed/uncertain send
-retains it; terminal grant expiry removes only that same identity and never a
-replacement file. A missing or failed delivery returns only a generic error.
+removes only the exact file identity that was read while holding the monitor
+lock. A failed/uncertain send retains it; terminal grant expiry removes only
+that same identity and never a replacement file. A missing, expired, or failed
+delivery returns only a generic error.
 The helper performs key generation, web registration, provider-key
 registration, and protected staging only after a matching target is available;
 it does not expose those secrets.
@@ -280,14 +305,18 @@ and `/migration/owner/telegram`. There is no cancel, finalize, delete,
 unsafe-state, or retry endpoint. Database errors and malformed/expired state
 are service failures, not permission to continue.
 
-The helper uses the exact Hetzner Cloud API contract reviewed for this job:
-`GET /server_types/{id}` returns the server type, locations, availability,
-deprecation, and per-location `price_hourly.gross`; `GET /images/{id}` must
+The helper uses the exact Hetzner Cloud API contract reviewed for this job. The
+primary schema evidence for the create request is the upstream
+[`ServerCreateRequest`](https://raw.githubusercontent.com/hetznercloud/hcloud-go/main/hcloud/schema/server.go)
+source: `location` is the approved location name string, not a numeric ID
+encoded as a string. `GET /server_types/{id}` returns server-type locations
+with separate `id`, `name`, `available`, and `deprecation` fields plus
+per-location `price_hourly.gross` entries. `GET /images/{id}` must
 return the approved available, non-deprecated system image and architecture;
 and configured `GET /networks/{id}` reads must succeed before mutation. After
 the match, it makes one `POST /ssh_keys` with the canonical public key and
 `goaster-migration-attempt=<attempt>` label, then one `POST /servers` with the
-numeric server type/image IDs, the selected approved location ID, the SSH-key
+numeric server type/image IDs, the selected approved location name, the SSH-key
 ID, approved networks, `start_after_create: true`, approved public-net flags,
 the exact migration name/label, and callback-only user-data. Provider calls
 use the token only in an in-memory bearer header, reject redirects, have a

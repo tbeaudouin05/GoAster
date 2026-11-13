@@ -12,7 +12,7 @@ not as evidence that a production origin exists.
 ## GoAster-side scope
 
 - `skills/goaster-migration` gives the owner-approved flow and invokes the
-  root-only `goaster-telegram migration` helper: read-only old-host inventory,
+  root-only `goaster-telegram migration` secret-aware launcher: read-only old-host inventory,
   a new BotFather bot, a verified current CX/CAX target such as 4 GB or 8 GB,
   all eligible locations by default, one approved 30-minute monitor, exactly
   one create, and manual reconciliation on every error or timeout.
@@ -28,14 +28,15 @@ not as evidence that a production origin exists.
   owner in a private chat. It sends the mode-0600 staged handoff file directly
   as `goaster-migration-handoff.txt`; it does not call the agent or model and
   rejects unauthorized users, groups, and messages with attachments. A
-  successful send removes the exact file identity read; failure retains it and
-  expiry cleanup never removes a replacement file.
+  successful send removes the exact file identity read under the monitor lock;
+  failure retains it and expiry cleanup never removes a replacement file.
 - Data selection, fresh OpenAI and Telegram setup, manual copying, cutover,
   old-agent stop, and server deletion remain owner-controlled. No GoAster-owned
   provisioning or transfer service was added.
 
-The helper persists a fingerprint of the exact approved job and serializes
-invocations with a protected lock. Its `creating` state is written before the
+The helper persists a fingerprint of the exact approved job, including the
+provider-token environment-variable reference but never the token value, and
+serializes invocations with a protected lock. Its `creating` state is written before the
 single provider `POST /servers`; a restart in any mutation state is terminal
 and manual rather than a replay. It returns only safe IDs/status and instructs
 the existing cron tool to stop the exact job after `terminal` or confirmed
@@ -43,6 +44,23 @@ creation. Development tests use mocked HTTP only and cover matching-only
 monitoring, parallel calls, restart, timeout, stale handoff, expiry cleanup,
 and replacement protection. After expiry, its job-identity-only cleanup action
 can remove the exact saved handoff without receiving a provider token.
+
+The launcher accepts only bounded non-secret JSON on stdin. It reads the exact
+`provider_token_env` name from the root process environment, builds the helper
+request in memory, and emits only the safe helper result. On the observed
+installation, the concrete form is:
+
+```sh
+printf '%s\n' '{"action":"monitor","job_id":"<exact-cron-job-id>","web_origin":"https://<deployed-origin>","provider_token_env":"HCLOUD_TOKEN","target":{"server_type_id":22,"server_type_name":"cx22","architecture":"x86","image_id":123,"image_name":"ubuntu-24.04","locations":[{"id":1,"name":"fsn1","hourly_gross":"0.0100"}],"network_ids":[],"enable_ipv4":true,"enable_ipv6":false}}' | /opt/goasterweb/bin/goaster-telegram migration
+```
+
+`/opt/goasterweb/bin/goaster-telegram` is the observed service binary from
+`docs/goasterweb-installation.md`, not a repository-wide installation path.
+Use the actual root-running binary configured by the target service. The
+supervised Telegram polling tick performs expiry cleanup; no new daemon or
+startup dependency is added. Handoff delivery checks expiry under the same
+monitor lock and does not add a one-shot delivery claim; failed or ambiguous
+sends retain the reusable handoff until expiry.
 
 ## GoAsterWeb contract
 
@@ -87,6 +105,14 @@ HTTPS origin. It reads `/etc/ssh/ssh_host_ed25519_key.pub`, posts the canonical
 key with `curl --config -`, does not retry a lost response, and exits unless
 the response is exactly `204`. It never contains the owner secret, owner URL,
 login private key, provider token, bot token, or database credential.
+
+The primary provider schema evidence is the upstream
+[`ServerCreateRequest`](https://raw.githubusercontent.com/hetznercloud/hcloud-go/main/hcloud/schema/server.go)
+source. Its `Location` field is the location name string, not a numeric ID
+encoded as a string. Server-type location availability/deprecation and
+per-location prices are separate fields; the helper sends the selected
+approved location name after matching its ID, name, availability, deprecation,
+and price.
 
 Owner setup uses the fragment exchange and short-lived session, exact provider
 binding, a `private_key` multipart upload, and CSRF-protected JSON requests to

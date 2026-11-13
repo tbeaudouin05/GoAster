@@ -31,7 +31,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "telegram: migration helper requires root")
 			os.Exit(1)
 		}
-		if err := migration.RunCommand(context.Background(), os.Stdin, os.Stdout, migration.DefaultOptions()); err != nil {
+		if err := migration.RunLauncher(context.Background(), os.Stdin, os.Stdout, migration.DefaultOptions(), os.LookupEnv); err != nil {
 			fmt.Fprintln(os.Stderr, "telegram: migration helper failed")
 			os.Exit(1)
 		}

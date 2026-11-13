@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"goaster/internal/protectedfile"
 )
 
 const testMigrationHandoff = "owner URL: https://migration.example/migration#attempt=attempt&owner=owner-secret\n-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-key\n-----END OPENSSH PRIVATE KEY-----\n"
@@ -20,7 +23,69 @@ func migrationHandoffFile(t *testing.T, contents string, mode os.FileMode) strin
 	if err := os.WriteFile(pathName, []byte(contents), mode); err != nil {
 		t.Fatal(err)
 	}
+	content, err := protectedfile.Read(pathName, 32*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(filepath.Dir(pathName), "migration-state")
+	state := map[string]any{
+		"version": 1, "job_id": "telegram-test", "fingerprint": strings.Repeat("a", 64),
+		"origin": "https://migration.example", "status": "key_registered",
+		"target": map[string]any{
+			"server_type_id": 22, "server_type_name": "cx22", "architecture": "x86",
+			"image_id": 123, "image_name": "ubuntu-24.04",
+			"locations":   []any{map[string]any{"id": 1, "name": "fsn1", "hourly_gross": "0.0100"}},
+			"enable_ipv4": true,
+		},
+		"expires": time.Now().Add(time.Hour).Unix(), "handoff_ready": true,
+		"handoff_identity": content.Identity,
+		"callback_secret":  "callback-secret", "owner_secret": "owner-secret", "private_key": "private-key",
+	}
+	stateData, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, stateData, 0600); err != nil {
+		t.Fatal(err)
+	}
 	return pathName
+}
+
+func TestTelegramServiceTickCleansExpiredMigrationState(t *testing.T) {
+	pathName := migrationHandoffFile(t, testMigrationHandoff, 0600)
+	statePath := filepath.Join(filepath.Dir(pathName), "migration-state")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	state["expires"] = time.Now().Add(-time.Minute).Unix()
+	data, err = json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := adapter{migrationHandoffPath: pathName}
+	if err := a.cleanupMigrationExpiry(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(pathName); !os.IsNotExist(err) {
+		t.Fatalf("expiry tick left handoff: %v", err)
+	}
+	cleaned, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"callback-secret", "owner-secret", "private-key"} {
+		if bytes.Contains(cleaned, []byte(secret)) {
+			t.Fatalf("expiry tick retained %q in state", secret)
+		}
+	}
 }
 
 func TestTelegramMigrationHandoffIsSentDirectlyToAuthorizedPrivateOwner(t *testing.T) {

@@ -1,6 +1,7 @@
 package protectedfile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -58,5 +59,19 @@ func TestReadRejectsUnsafeParentAndMode(t *testing.T) {
 	}
 	if _, err := Read(unsafePath, 1024); err == nil {
 		t.Fatal("Read accepted a writable parent")
+	}
+}
+
+func TestWriteExclusiveCleansFileWhenDirectorySyncFails(t *testing.T) {
+	oldSync := syncDirectoryPath
+	syncDirectoryPath = func(string) error { return errors.New("directory sync failed") }
+	defer func() { syncDirectoryPath = oldSync }()
+
+	path := filepath.Join(t.TempDir(), "handoff")
+	if _, err := WriteExclusive(path, []byte("private handoff")); err == nil {
+		t.Fatal("WriteExclusive succeeded after a directory sync failure")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("failed staging left a protected file: %v", err)
 	}
 }
