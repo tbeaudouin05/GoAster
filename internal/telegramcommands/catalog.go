@@ -100,9 +100,9 @@ var catalog = []Command{
 	{
 		Name:            "get_migration",
 		Usage:           "/get_migration",
-		HelpDescription: "Send the staged migration handoff as a document (paired account, private chat only).",
-		MenuDescription: "Send the staged migration handoff",
-		Access:          "Paired account only, private chat only. The handoff is sent directly as a document, never through the agent; attachments are not accepted.",
+		HelpDescription: "Send the protected migration handoff as a document (paired account, private chat only).",
+		MenuDescription: "Send the protected migration handoff",
+		Access:          "Paired account only, private chat only. This transport reads the protected handoff directly, never through the agent; attachments are not accepted.",
 	},
 }
 

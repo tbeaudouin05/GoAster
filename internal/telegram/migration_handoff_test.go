@@ -11,11 +11,21 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"goaster/internal/protectedfile"
 )
 
 const testMigrationHandoff = "owner URL: https://migration.example/migration#attempt=attempt&owner=owner-secret\n-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-key\n-----END OPENSSH PRIVATE KEY-----\n"
+
+func migrationHandoffEnvelope(t *testing.T, expires time.Time, document string) string {
+	t.Helper()
+	envelope, err := json.Marshal(struct {
+		Expires  int64  `json:"expires"`
+		Document string `json:"document"`
+	}{Expires: expires.Unix(), Document: document})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(envelope)
+}
 
 func migrationHandoffFile(t *testing.T, contents string, mode os.FileMode) string {
 	t.Helper()
@@ -23,73 +33,11 @@ func migrationHandoffFile(t *testing.T, contents string, mode os.FileMode) strin
 	if err := os.WriteFile(pathName, []byte(contents), mode); err != nil {
 		t.Fatal(err)
 	}
-	content, err := protectedfile.Read(pathName, 32*1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	statePath := filepath.Join(filepath.Dir(pathName), "migration-state")
-	state := map[string]any{
-		"version": 1, "job_id": "telegram-test", "fingerprint": strings.Repeat("a", 64),
-		"origin": "https://migration.example", "status": "key_registered",
-		"target": map[string]any{
-			"server_type_id": 22, "server_type_name": "cx22", "architecture": "x86",
-			"image_id": 123, "image_name": "ubuntu-24.04",
-			"locations":   []any{map[string]any{"id": 1, "name": "fsn1", "hourly_gross": "0.0100"}},
-			"enable_ipv4": true,
-		},
-		"expires": time.Now().Add(time.Hour).Unix(), "handoff_ready": true,
-		"handoff_identity": content.Identity,
-		"callback_secret":  "callback-secret", "owner_secret": "owner-secret", "private_key": "private-key",
-	}
-	stateData, err := json.Marshal(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(statePath, stateData, 0600); err != nil {
-		t.Fatal(err)
-	}
 	return pathName
 }
 
-func TestTelegramServiceTickCleansExpiredMigrationState(t *testing.T) {
-	pathName := migrationHandoffFile(t, testMigrationHandoff, 0600)
-	statePath := filepath.Join(filepath.Dir(pathName), "migration-state")
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state map[string]any
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatal(err)
-	}
-	state["expires"] = time.Now().Add(-time.Minute).Unix()
-	data, err = json.Marshal(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(statePath, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	a := adapter{migrationHandoffPath: pathName}
-	if err := a.cleanupMigrationExpiry(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(pathName); !os.IsNotExist(err) {
-		t.Fatalf("expiry tick left handoff: %v", err)
-	}
-	cleaned, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, secret := range []string{"callback-secret", "owner-secret", "private-key"} {
-		if bytes.Contains(cleaned, []byte(secret)) {
-			t.Fatalf("expiry tick retained %q in state", secret)
-		}
-	}
-}
-
 func TestTelegramMigrationHandoffIsSentDirectlyToAuthorizedPrivateOwner(t *testing.T) {
-	pathName := migrationHandoffFile(t, testMigrationHandoff, 0600)
+	pathName := migrationHandoffFile(t, migrationHandoffEnvelope(t, time.Now().Add(time.Hour), testMigrationHandoff), 0600)
 	var documentBody []byte
 	messageCount := 0
 	a := adapter{
@@ -130,15 +78,51 @@ func TestTelegramMigrationHandoffIsSentDirectlyToAuthorizedPrivateOwner(t *testi
 		t.Fatalf("migration handoff targeted the wrong chat; body length = %d", len(documentBody))
 	}
 	if !bytes.Contains(documentBody, []byte(`filename="`+migrationHandoffFilename+`"`)) || !bytes.Contains(documentBody, []byte(testMigrationHandoff)) {
-		t.Fatal("migration handoff document did not contain the staged owner handoff")
+		t.Fatal("migration handoff document did not contain the protected owner handoff")
 	}
-	if _, err := os.Stat(pathName); !os.IsNotExist(err) {
-		t.Fatalf("successful handoff delivery left the staged file: %v", err)
+}
+
+func TestReadMigrationHandoffRejectsInvalidEnvelopes(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	cases := []struct {
+		name     string
+		contents string
+	}{
+		{
+			name:     "expired",
+			contents: migrationHandoffEnvelope(t, now.Add(-time.Second), "expired-secret"),
+		},
+		{
+			name:     "missing expiry",
+			contents: `{"document":"missing-expiry-secret"}`,
+		},
+		{
+			name:     "malformed",
+			contents: `{"expires":1800000000,"document":`,
+		},
+		{
+			name:     "more than seven days future",
+			contents: migrationHandoffEnvelope(t, now.Add(migrationHandoffMaxAge+time.Second), "future-secret"),
+		},
+		{
+			name:     "oversized",
+			contents: strings.Repeat("x", migrationHandoffMaxBytes+1),
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			pathName := migrationHandoffFile(t, test.contents, 0600)
+			if _, err := readMigrationHandoffAt(pathName, now); err == nil {
+				t.Fatal("readMigrationHandoffAt accepted an invalid envelope")
+			} else if strings.Contains(err.Error(), "secret") {
+				t.Fatalf("invalid envelope error exposed secret data: %q", err)
+			}
+		})
 	}
 }
 
 func TestTelegramMigrationHandoffRejectsUnauthorizedGroupsAndAttachments(t *testing.T) {
-	pathName := migrationHandoffFile(t, testMigrationHandoff, 0600)
+	pathName := migrationHandoffFile(t, migrationHandoffEnvelope(t, time.Now().Add(time.Hour), testMigrationHandoff), 0600)
 	documentCount := 0
 	var messages []string
 	a := adapter{
@@ -190,7 +174,7 @@ func TestTelegramMigrationHandoffRejectsUnauthorizedGroupsAndAttachments(t *test
 }
 
 func TestTelegramMigrationHandoffFailureDoesNotEchoData(t *testing.T) {
-	pathName := migrationHandoffFile(t, testMigrationHandoff, 0600)
+	pathName := migrationHandoffFile(t, migrationHandoffEnvelope(t, time.Now().Add(time.Hour), testMigrationHandoff), 0600)
 	var messages []string
 	client := doerFunc(func(r *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(r.URL.Path, "/sendDocument") {
@@ -213,9 +197,6 @@ func TestTelegramMigrationHandoffFailureDoesNotEchoData(t *testing.T) {
 	if strings.Contains(messages[0], "sensitive") || strings.Contains(messages[0], "owner-secret") {
 		t.Fatal("delivery failure exposed secret data")
 	}
-	if _, err := os.Stat(pathName); err != nil {
-		t.Fatalf("failed delivery removed the handoff: %v", err)
-	}
 
 	missing := adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid", migrationHandoffPath: filepath.Join(t.TempDir(), "missing"), client: client}
 	messages = nil
@@ -232,39 +213,5 @@ func TestTelegramMigrationHandoffFailureDoesNotEchoData(t *testing.T) {
 	unsafe.handle(context.Background(), privateMessage(42, telegramGetMigrationCommand))
 	if len(messages) != 1 || messages[0] != "The migration handoff could not be sent." {
 		t.Fatalf("unsafe handoff response = %#v", messages)
-	}
-}
-
-func TestTelegramMigrationHandoffDoesNotRemoveReplacedFile(t *testing.T) {
-	pathName := migrationHandoffFile(t, testMigrationHandoff, 0600)
-	var messages []string
-	client := doerFunc(func(r *http.Request) (*http.Response, error) {
-		if strings.HasSuffix(r.URL.Path, "/sendDocument") {
-			oldPath := pathName + ".old"
-			if err := os.Rename(pathName, oldPath); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(pathName, []byte("replacement handoff"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			return response(http.StatusOK, `{"ok":true,"result":true}`), nil
-		}
-		var payload struct {
-			Text string `json:"text"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		messages = append(messages, payload.Text)
-		return response(http.StatusOK, `{"ok":true,"result":{}}`), nil
-	})
-	a := adapter{token: testToken, pairing: &pairing{userID: 42}, apiBase: "https://example.invalid", migrationHandoffPath: pathName, client: client}
-	a.handle(context.Background(), privateMessage(42, telegramGetMigrationCommand))
-	if len(messages) != 1 || messages[0] != "The migration handoff could not be sent." {
-		t.Fatalf("replacement handoff response = %#v", messages)
-	}
-	data, err := os.ReadFile(pathName)
-	if err != nil || string(data) != "replacement handoff" {
-		t.Fatalf("replacement handoff was removed or changed: %q, %v", data, err)
 	}
 }

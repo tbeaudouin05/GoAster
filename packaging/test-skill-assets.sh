@@ -73,48 +73,65 @@ for phrase in (
 migration = (root / "skills" / "goaster-migration" / "SKILL.md").read_text(encoding="utf-8")
 migration_text = " ".join(migration.split())
 for phrase in (
-    "Scope and current implementation status",
-    "implemented locally at commit `ef8bf6e`",
-    "but it is not deployed",
-    "trusted, normally operated database",
-    "seven-day expiry",
-    "There is no cancellation route",
-    "one-to-one private Telegram chat",
-    "NEW BotFather bot first",
-    "CX or CAX target",
-    "4 GB RAM",
-    "8 GB gives more headroom",
-    "all eligible locations",
-    "exactly one create operation",
+    "pure skill workflow",
+    "existing `shell_execute`, `cron`, and authenticated Hetzner/provider tools",
+    "no migration executable",
+    "callback-only cloud-init",
+    "securely record the private SSH key (login key) and provider server ID",
+    "does not install, build, configure, start, deploy, or transfer GoAster",
+    "destination SSH",
+    "informed approval",
+    "exactly one create",
     "no second create prompt",
     "every 30 minutes, 24/7",
     "goaster-migration-<first 16 lowercase hex characters of attempt>",
     "goaster-migration-attempt=<attempt>",
+    "/migration/register",
+    "callback authorization only",
+    "not host handoff recording",
     "/migration/host-key",
-    "does not retry an ambiguous response",
-    "owner secret, owner URL, login private key, Hetzner token",
+    "records this host-key handoff in Redis",
+    "absolute maximum of seven days",
+    "There is no cancellation route",
+    "unsafe-status escape",
+    "automatic recovery",
+    "distinct new BotFather bot",
+    "Never copy or reuse the old bot token",
+    "old and new agents may coexist",
     "fragment-only URL",
-    "`private_key` multipart file",
     "/get_migration",
-    "does not call the agent",
-    "Do not retry automatically",
-    "never delete a server automatically",
-    "Future live-readiness preflight",
-    "not a permanent architecture blocker",
-    "No backup or snapshot is required",
+    "exact local envelope",
+    "protected bounded read of at most 32 KiB",
+    "owner manually removes this local handoff",
+    "never sends it through the agent/model",
+    "does not wait for or claim to observe the later guest callback",
+    "no new callback polling",
+    "do not add an executable or helper script",
+    "Never blindly repeat a create",
+    "manually identify the unwanted new server",
+    "manually delete it if appropriate",
+    "start over with a new attempt",
+    "Do not invent a helper",
 ):
     if phrase not in migration_text:
         raise SystemExit(f"goaster-migration workflow missing required guidance: {phrase!r}")
 
 for obsolete_phrase in (
-    "Hard blocker:",
-    "no GoAsterWeb handoff endpoint",
-    "Approved availability monitor: future policy only",
-    "Finding a matching offer is not approval to create it",
-    "stop before any separately approved create operation",
+    "goaster-telegram migration",
+    "RunLauncher",
+    "RunCommand",
+    "migration helper",
+    "migration monitor implementation",
 ):
     if obsolete_phrase in migration_text:
         raise SystemExit(f"goaster-migration workflow retained obsolete blocker/policy: {obsolete_phrase!r}")
+
+if (root / "internal" / "migration").exists():
+    raise SystemExit("removed internal/migration provisioning package is still present")
+main_source = (root / "cmd" / "goaster-telegram" / "main.go").read_text(encoding="utf-8")
+for forbidden in ("goaster-telegram migration", "RunLauncher", "internal/migration"):
+    if forbidden in main_source:
+        raise SystemExit(f"goaster-telegram retained removed migration CLI reference: {forbidden!r}")
 
 installed_migration = (installed_root / "skills" / "goaster-migration" / "SKILL.md").read_text(encoding="utf-8")
 for forbidden in ("GoAsterWeb/", "../../docs/", "../docs/", "migration-handoff-20261112"):
@@ -124,14 +141,28 @@ for forbidden in ("GoAsterWeb/", "../../docs/", "../docs/", "migration-handoff-2
 notes = (root / "docs" / "goaster-migration.md").read_text(encoding="utf-8")
 notes_text = " ".join(notes.split())
 for phrase in (
-    "GoAster-side scope",
-    "local commit `ef8bf6e`",
+    "pure skill",
+    "GoAster-side responsibility",
+    "exactly one explicitly approved Hetzner server",
     "POST /migration/register",
+    "callback authorization, not host handoff recording",
     "POST /migration/host-key",
     "goaster-migration-attempt=<attempt>",
-    "The expiry-only decision is closed",
-    "Remaining live readiness",
-    "No live provider, Redis, Telegram, OpenAI, or production check",
+    "records this host-key handoff in Redis",
+    "expiry-only with a maximum of seven days",
+    "distinct new BotFather bot",
+    "Do not copy or reuse the old bot token",
+    "old and new agents may coexist",
+    "exactly this JSON envelope shape",
+    "protected bounded read of at most 32 KiB",
+    "owner manually removes the local handoff",
+    "does not observe callback delivery",
+    "no new callback polling",
+    "There is no cancellation route",
+    "30-minute, 24/7 monitor",
+    "Never blindly repeat a create",
+    "manually deletes the unwanted server",
+    "No live provider request",
 ):
     if phrase not in notes_text:
         raise SystemExit(f"migration task notes missing required scope/contract: {phrase!r}")

@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +23,6 @@ import (
 	"goaster/internal/controlsecret"
 	"goaster/internal/controltransport"
 	"goaster/internal/localenv"
-	"goaster/internal/migration"
 	"goaster/internal/telegramcommands"
 )
 
@@ -42,8 +40,6 @@ type adapter struct {
 	environmentMu        sync.Mutex
 	environmentBlocked   map[environmentProposalKey]bool
 	migrationHandoffPath string // test seam; Run uses the root-only default path.
-	migrationPaths       migration.Paths
-	migrationNow         func() time.Time // test seam; nil uses the system clock.
 	client               httpDoer
 	agent                httpDoer
 	controlSecret        string
@@ -182,7 +178,6 @@ func Run(ctx context.Context, paths Paths, ready func() error) error {
 		token: string(token), pairing: pairing,
 		controlSecret:        controlSecret,
 		migrationHandoffPath: defaultMigrationHandoffPath,
-		migrationPaths:       migration.DefaultPaths,
 		client:               &http.Client{Timeout: 40 * time.Second, CheckRedirect: noRedirect},
 		agent:                agent,
 		apiBase:              "https://api.telegram.org",
@@ -218,8 +213,6 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 		}
 	}
 	var offset int64
-	cleanupTicker := time.NewTicker(time.Minute)
-	defer cleanupTicker.Stop()
 	var handlers sync.WaitGroup
 	tails := make(map[int64]chan struct{})
 	epochs := make(map[int64]context.Context)
@@ -231,13 +224,6 @@ func (a *adapter) run(ctx context.Context, ready func() error) error {
 	}()
 	defer handlers.Wait()
 	for {
-		select {
-		case <-cleanupTicker.C:
-			if err := a.cleanupMigrationExpiry(); err != nil && !errors.Is(err, migration.ErrCleanupBusy) {
-				return fmt.Errorf("migration expiry cleanup failed")
-			}
-		default:
-		}
 		for _, item := range updates {
 			if ctx.Err() != nil {
 				return nil
@@ -926,35 +912,17 @@ func (a *adapter) send(ctx context.Context, userID int64, text string) error {
 }
 
 func (a *adapter) sendMigrationHandoff(ctx context.Context, chatID int64) error {
-	return migration.DeliverHandoff(ctx, a.currentMigrationPaths(), a.migrationNow, func(data []byte) error {
-		return sendDocument(ctx, a.client, a.apiBase, a.token, chatID, migrationHandoffFilename, data)
-	})
-}
-
-func (a *adapter) currentMigrationPaths() migration.Paths {
-	paths := a.migrationPaths
 	pathName := a.migrationHandoffPath
 	if pathName == "" {
 		pathName = defaultMigrationHandoffPath
 	}
-	if paths.State == "" || paths.Lock == "" {
-		if pathName != defaultMigrationHandoffPath {
-			directory := filepath.Dir(pathName)
-			paths = migration.Paths{
-				State:   filepath.Join(directory, "migration-state"),
-				Lock:    filepath.Join(directory, "migration-state.lock"),
-				Handoff: pathName,
-			}
-		} else {
-			paths = migration.DefaultPaths
-		}
+	document, err := readMigrationHandoff(pathName)
+	if err != nil || len(document) == 0 {
+		clear(document)
+		return fmt.Errorf("migration handoff is unavailable")
 	}
-	paths.Handoff = pathName
-	return paths
-}
-
-func (a *adapter) cleanupMigrationExpiry() error {
-	return migration.CleanupExpired(a.currentMigrationPaths(), a.migrationNow)
+	defer clear(document)
+	return sendDocument(ctx, a.client, a.apiBase, a.token, chatID, migrationHandoffFilename, document)
 }
 
 func (a *adapter) sendMessage(ctx context.Context, chatID int64, text string) (int64, error) {

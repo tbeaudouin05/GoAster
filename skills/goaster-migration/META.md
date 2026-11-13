@@ -1,2 +1,2 @@
 name: goaster-migration
-description: Guide a paired owner through a GoAsterWeb-backed Hetzner move using existing shell, cron, environment, and Hetzner skills; data transfer, cutover, and deletion remain manual.
+description: Provision one explicitly approved Hetzner server with callback-only cloud-init using existing shell, cron, environment, and provider tools; GoAsterWeb owns setup and all later migration work remains manual.

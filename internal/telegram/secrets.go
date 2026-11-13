@@ -17,8 +17,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
-	"goaster/internal/migration"
 	"goaster/internal/protectedfile"
 )
 
@@ -55,9 +55,10 @@ var DefaultPaths = Paths{
 }
 
 const (
-	defaultMigrationHandoffPath = migration.DefaultHandoffPath
+	defaultMigrationHandoffPath = "/var/lib/goaster-telegram/migration-handoff"
 	migrationHandoffFilename    = "goaster-migration-handoff.txt"
 	migrationHandoffMaxBytes    = 32 * 1024
+	migrationHandoffMaxAge      = 7 * 24 * time.Hour
 )
 
 // SetupInput is the complete SSH stdin payload; no other local settings cross
@@ -172,6 +173,38 @@ func readPrivateBounded(path string, maxBytes int64) ([]byte, error) {
 		return nil, err
 	}
 	return content.Data, nil
+}
+
+func readMigrationHandoff(path string) ([]byte, error) {
+	return readMigrationHandoffAt(path, time.Now())
+}
+
+func readMigrationHandoffAt(path string, now time.Time) ([]byte, error) {
+	data, err := readPrivateBounded(path, migrationHandoffMaxBytes)
+	if err != nil {
+		return nil, errors.New("invalid migration handoff")
+	}
+	defer clear(data)
+
+	var envelope struct {
+		Expires  int64  `json:"expires"`
+		Document string `json:"document"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return nil, errors.New("invalid migration handoff")
+	}
+	var extra struct{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, errors.New("invalid migration handoff")
+	}
+	nowUnix := now.Unix()
+	maxExpires := nowUnix + int64(migrationHandoffMaxAge/time.Second)
+	if envelope.Expires <= nowUnix || envelope.Expires > maxExpires || envelope.Document == "" {
+		return nil, errors.New("invalid migration handoff")
+	}
+	return []byte(envelope.Document), nil
 }
 
 type pairing struct {
