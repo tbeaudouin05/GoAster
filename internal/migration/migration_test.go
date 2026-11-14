@@ -301,7 +301,7 @@ func TestStopMonitorReportsRunningDuringAvailability(t *testing.T) {
 	}
 }
 
-func TestLegacyPriceApprovalsRequireReviewBeforeExecution(t *testing.T) {
+func TestLegacyPriceApprovalFieldsRequireReviewBeforeExecution(t *testing.T) {
 	for _, legacy := range []Request{
 		{ApprovedHourlyGross: "0.10"},
 		{ApprovedCurrency: "EUR"},

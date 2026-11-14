@@ -1,6 +1,10 @@
 # GoAster central migration
 
-**Migration execution is currently unavailable:** trusted paired Telegram identity and durable one-use approval are not fully wired. Approval requests, monitor startup, and automatic monitor resumption are disabled pending completion.
+**Migration execution is currently disabled:** read-only estimates and
+availability checks may be inspected, but monitor startup, provider creation,
+and automatic monitor resumption are disabled. Before any future billable
+operation, require ordinary explicit user approval in a private conversation.
+That conversational approval is not a trusted cryptographic binding.
 
 GoAster implements the source side of the versioned central migration machine
 API. It uses the existing scheduler and paired Telegram delivery path; it does
@@ -9,20 +13,27 @@ or a provider-create helper.
 
 The source workflow is deliberately small:
 
-1. The paired owner asks for an exact Hetzner server type and optional strict
-   location preference.
+1. The owner asks in a private conversation for an exact Hetzner server type
+   and optional strict location preference.
 2. GoAster performs a current, read-only public price estimate and presents
    the per-location gross hourly terms.
-3. Only after explicit paired private owner approval does GoAster check
-   central availability immediately and schedule the same check every 30
+3. Before any billable operation, the owner gives ordinary explicit approval
+   for the exact terms in that private conversation. This is a conversational
+   workflow requirement, not a trusted cryptographic binding.
+4. If a future trusted authorization design enables execution, GoAster checks
+   central availability immediately and schedules the same check every 30
    minutes while no eligible location exists.
-4. When availability is returned, GoAster disables and verifies the exact
+5. When availability is returned, GoAster disables and verifies the exact
    monitor, generates the login key and owner-link secret locally, and sends
    exactly one creation request.
-5. GoAster stores the private key and protected handoff in a private
+6. GoAster stores the private key and protected handoff in a private
    `~/.goaster/tmp/migration-*` task directory and sends the setup link plus
    private key directly to the locally paired Telegram user. The model sees
    only safe status and provider identity fields.
+
+The current runtime stops before the future execution steps above. The
+monitor, create-once, stop, and uncertain-outcome safeguards remain documented
+requirements for any later enabled implementation.
 
 The task directory and handoff are intentionally retained for the owner’s
 manual cleanup. There is no automatic cleanup implementation.
@@ -107,30 +118,30 @@ that fragment only for the protected Telegram handoff.
 The source’s `estimate`/`quote` operation uses read-only provider pricing data
 to show a current public gross estimate, including public IPv4, for the exact
 type and requested locations. It may omit locations not currently available;
-those locations remain eligible if allowed by the request. This is a source-side estimate and is not sent
-to or returned by GoAsterWeb. A `start` request from the paired private
-Telegram conversation obtains a fresh estimate and sends the exact server
-type, strict locations, currency, per-location gross prices, and one-create
-statement directly to the protected paired user. The model-facing operation
+those locations remain eligible if allowed by the request. This is a
+source-side estimate and is not sent to or returned by GoAsterWeb. Present the
+exact server type, strict locations, currency, per-location gross prices, and
+one-create statement to the owner in a private conversation. Before any
+billable operation, obtain ordinary explicit approval for those terms (or the
+fact that pricing is unavailable) and exactly one create. Do not treat a group
+conversation as sufficient.
+
+Do not invent or require a special command, exact reply, button, code,
+callback, or dedicated approval record. Ordinary conversational approval
+expresses user intent but does not provide a trusted cryptographic binding
+between the user, terms, and provider request. The model-facing operation
 does not accept an approval flag, quoted price, currency, monitor ID, chat ID,
-or private material.
+or private material. The current runtime remains disabled, so conversational
+approval cannot start the monitor or provider create path.
 
-The owner must reply exactly `APPROVE GOASTER MIGRATION <code>` in that private
-chat. The source-generated code is bound to those exact terms, is never
-returned to the model, is ignored in groups, expires after ten minutes, and is
-consumed before the monitor/create path. A changed, replayed, expired, missing,
-or process-restarted approval fails closed without a provider mutation. After
-the private approval, the model may retry `start` with the same exact type and
-locations; a different request creates a new approval requirement.
-
-The first availability request runs immediately. If its `locations` result is
-empty, the existing scheduler stores one non-secret 30-minute monitor. If a
-location becomes available, GoAster disables and verifies that job before
-calling creation. No HTTP retry, provider delete, automatic rollback, or
-second create exists. A timeout, lost response, missing details, malformed
-response, or Redis/provider binding uncertainty is a manual-reconciliation
-condition. Inspect the token-scoped Hetzner project and GoAsterWeb owner/status
-page before any fresh owner-approved attempt.
+For any future execution, the first availability request runs immediately. If
+its `locations` result is empty, the existing scheduler stores one non-secret
+30-minute monitor. If a location becomes available, GoAster disables and
+verifies that job before calling creation. No HTTP retry, provider delete,
+automatic rollback, or second create exists. A timeout, lost response, missing
+details, malformed response, or Redis/provider binding uncertainty is a
+manual-reconciliation condition. Inspect the token-scoped Hetzner project and
+GoAsterWeb owner/status page before any fresh owner-approved attempt.
 
 ## Protected handoff and ownership boundary
 

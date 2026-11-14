@@ -6,7 +6,8 @@ Migration guidance and packaging checks use the fixed public service
 `https://goasterweb-thomas.fly.dev/`. The skill prohibits deployment/address
 questions and speculative readiness gates while retaining TLS verification,
 stop/report on actual HTTPS failures, secret protections, create-once records,
-new-bot identity and exact cost approval.
+new-bot identity, and private-conversation explicit approval for exact cost
+terms.
 
 ## Offline validation
 

@@ -36,8 +36,25 @@ func TestMigrationToolKeepsSecretsAndModelApprovalOutOfSchema(t *testing.T) {
 	if registrar.tool.Name != migrationToolName || registrar.tool.Handler == nil {
 		t.Fatalf("registered migration tool = %#v", registrar.tool)
 	}
-	if !strings.Contains(registrar.tool.Description, "may omit locations not currently available") {
-		t.Fatalf("estimate limitation missing from tool description: %s", registrar.tool.Description)
+	for _, required := range []string{
+		"may omit locations not currently available",
+		"ordinary explicit user approval",
+		"private conversation",
+		"not a trusted cryptographic binding",
+		"migration execution is currently disabled",
+	} {
+		if !strings.Contains(registrar.tool.Description, required) {
+			t.Fatalf("tool description missing %q: %s", required, registrar.tool.Description)
+		}
+	}
+	for _, forbidden := range []string{
+		"trusted paired-private",
+		"approval code",
+		"APPROVE GOASTER MIGRATION",
+	} {
+		if strings.Contains(registrar.tool.Description, forbidden) {
+			t.Fatalf("rejected approval prototype remained in tool description: %q", forbidden)
+		}
 	}
 	parameters, err := json.Marshal(registrar.tool.Parameters)
 	if err != nil {

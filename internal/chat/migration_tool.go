@@ -15,7 +15,7 @@ const migrationToolName = "goaster_migration"
 
 // MigrationToolOperations keeps the model-facing control plane separate from
 // the privileged migration executor. No operation accepts a token, key,
-// owner URL, chat ID, approval code, or callback secret.
+// owner URL, chat ID, or callback secret.
 type MigrationToolOperations struct {
 	Estimate     func(context.Context, migration.PriceRequest) (migration.PriceEstimate, error)
 	Quote        func(context.Context, migration.QuoteRequest) (migration.QuoteResult, error)
@@ -26,14 +26,15 @@ type MigrationToolOperations struct {
 }
 
 // RegisterMigrationTool exposes the source-side migration control plane. The
-// handoff itself is delivered directly by the paired Telegram implementation.
+// handoff itself is delivered directly by the paired Telegram implementation
+// after a future execution path is explicitly enabled.
 func RegisterMigrationTool(registrar ToolRegistrar, operations MigrationToolOperations) error {
 	if registrar == nil {
 		return errors.New("migration tool registrar is nil")
 	}
 	return registrar.RegisterTool(Tool{
 		Name:        migrationToolName,
-		Description: "Estimate the current public gross price for an exact Hetzner server type and optional location allow-list. Estimates may omit locations not currently available, which remain eligible if allowed. Request or start one GoAsterWeb migration monitor after trusted paired-private Telegram owner approval. Approval terms and the Telegram destination are handled locally; no approval code, provider token, private key, or owner link is accepted or returned here.",
+		Description: "Estimate the current public gross price for an exact Hetzner server type and optional location allow-list. Estimates may omit locations not currently available, which remain eligible if allowed. Before any future billable operation, obtain ordinary explicit user approval for the exact terms in a private conversation. Conversational approval is not a trusted cryptographic binding, and migration execution is currently disabled. No provider token, private key, or owner link is accepted or returned here.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -52,7 +53,7 @@ func RegisterMigrationTool(registrar ToolRegistrar, operations MigrationToolOper
 				},
 				"job_id": map[string]any{
 					"type":        "string",
-					"description": "Non-secret monitor ID for status or stop only; start generates the monitor ID locally after trusted approval",
+					"description": "Non-secret monitor ID for status or stop only; start is currently disabled",
 				},
 			},
 			"required":             []string{"action"},
@@ -120,9 +121,6 @@ func executeMigrationTool(ctx context.Context, arguments string, operations Migr
 				return encodeMigrationToolResult(result)
 			}
 			return migrationToolUnavailable(err), nil
-		}
-		if result.Status == "approval_required" {
-			return `{"status":"approval_required","message":"Trusted paired-private Telegram owner approval is required for the exact terms; no migration action was taken."}`, nil
 		}
 		return encodeMigrationToolResult(result)
 	case "status":

@@ -1,6 +1,10 @@
 # GoAster
 
-**Migration execution is currently unavailable:** trusted paired Telegram identity and durable one-use approval are not fully wired. Approval requests, monitor startup, and automatic monitor resumption are disabled pending completion.
+**Migration execution is currently disabled:** read-only estimates and
+availability checks may be inspected, but monitor startup, provider creation,
+and automatic monitor resumption are disabled. Before any future billable
+operation, require ordinary explicit user approval in a private conversation;
+that conversational approval is not a trusted cryptographic binding.
 
 GoAster provides an agent runtime and a Telegram adapter with a subscription-backed OpenAI provider, tools, memory, and scheduling.
 
@@ -117,11 +121,12 @@ register command names with hyphens. The command may include Telegram's
 `@bot_username` suffix. Telegram receives the file directly as `goaster.env`;
 its contents are not sent to the remote agent, model, command output, or logs.
 
-For a central migration, the model cannot approve a create by supplying tool
-arguments. GoAster sends the exact source-generated terms to the paired user in
-a private chat; reply exactly `APPROVE GOASTER MIGRATION <code>` there, then
-retry the migration request. The code is one-shot, expires after ten minutes,
-is never forwarded to the model, and is ignored in groups.
+For a central migration, use a private conversation and obtain ordinary
+explicit user approval for the exact server type, strict location preference,
+current estimate/currency (or unavailable pricing), and exactly one create
+before any billable operation. This is a conversational workflow requirement,
+not a trusted cryptographic binding; migration execution is currently
+disabled, so approval cannot start a monitor or provider create.
 
 ## Models
 
@@ -164,8 +169,9 @@ not deploy or swap the retained binaries.
 
 GoAsterWeb is the initial installer for a new server setup. After installation, GoAster owns subsequent deployments. The repository does not provide service units or a GoAster installer; verify the target host’s actual configuration before deploying. The observed GoAsterWeb layout is documented in [the installation integration notes](docs/goasterweb-installation.md), not as a universal contract.
 
-The GoAster-side central migration API client, approval boundary, monitor, and
-protected paired-Telegram handoff are documented in [the migration notes](docs/goaster-migration.md).
+The GoAster-side central migration API client, durable monitor/stop safeguards,
+local resource-term binding, and protected paired-Telegram handoff are
+documented in [the migration notes](docs/goaster-migration.md).
 GoAsterWeb owns the provider sequence and destination setup; this repository
 does not deploy or modify it.
 

@@ -29,7 +29,6 @@ import (
 	"goaster/internal/diagnostics"
 	"goaster/internal/localenv"
 	"goaster/internal/migration"
-	"goaster/internal/telegram"
 )
 
 const maxChatEnvelopeBytes int64 = 1 << 20
@@ -69,8 +68,6 @@ const (
 	environmentMalformedPreviewRequest
 	environmentMalformedAcceptRequest
 )
-
-type migrationApprovalHandler func(context.Context, migration.ApprovalCommand) (migration.ApprovalResult, error)
 
 func (r *countingReader) Read(p []byte) (int, error) {
 	n, err := r.Reader.Read(p)
@@ -241,7 +238,7 @@ type migrationSchedulerRuntime interface {
 	Stop()
 }
 
-func migrationOperations(options migration.Options, jobs migrationSchedulerRuntime, ready bool, approval migration.ApprovalController) chat.MigrationToolOperations {
+func migrationOperations(options migration.Options, jobs migrationSchedulerRuntime, ready bool) chat.MigrationToolOperations {
 	return chat.MigrationToolOperations{
 		Estimate: func(ctx context.Context, request migration.PriceRequest) (migration.PriceEstimate, error) {
 			return migration.EstimatePrice(ctx, request, options)
@@ -249,23 +246,8 @@ func migrationOperations(options migration.Options, jobs migrationSchedulerRunti
 		Availability: func(ctx context.Context, request migration.PriceRequest) (migration.AvailabilityResult, error) {
 			return migration.Availability(ctx, request, options)
 		},
-		Start: func(ctx context.Context, request migration.Request) (migration.Result, error) {
-			if !ready || jobs == nil {
-				return migration.Result{}, errors.New("migration scheduler capability is unavailable")
-			}
-			if os.Geteuid() != 0 {
-				return migration.Result{}, errors.New("migration requires the root agent runtime")
-			}
-			if options.DeliverHandoff == nil {
-				return migration.Result{}, errors.New("migration Telegram delivery capability is unavailable")
-			}
-			if err := telegram.CheckMigrationDelivery(); err != nil {
-				return migration.Result{}, err
-			}
-			if approval.Start == nil {
-				return migration.Result{}, errors.New("migration approval capability is unavailable")
-			}
-			return approval.Start(ctx, request)
+		Start: func(_ context.Context, request migration.Request) (migration.Result, error) {
+			return migration.Result{Status: "unavailable", ServerType: request.ServerType}, errors.New("migration execution is disabled")
 		},
 		Status: func(_ context.Context, jobID string) (migration.StatusResult, error) {
 			if !ready || jobs == nil {
@@ -299,10 +281,11 @@ func serve(store chat.CredentialStore) (serveErr error) {
 	}
 	defer func() { serveErr = errors.Join(serveErr, backgroundManager.Close()) }()
 	migrationOptions := migration.DefaultOptions()
-	// Migration execution remains disabled until approval identity and durable,
-	// one-use state are both enforced across process restarts. In particular,
-	// do not resume previously stored scheduler jobs through this runtime.
-	if err := chat.RegisterMigrationTool(provider, migrationOperations(migrationOptions, nil, false, migration.ApprovalController{})); err != nil {
+	// Migration execution remains disabled. Ordinary conversational approval in
+	// a private chat is workflow guidance only, not a trusted cryptographic
+	// binding; do not resume previously stored scheduler jobs through this
+	// runtime.
+	if err := chat.RegisterMigrationTool(provider, migrationOperations(migrationOptions, nil, false)); err != nil {
 		return fmt.Errorf("register migration tool: %w", err)
 	}
 	listener, err := controltransport.Listen()
@@ -354,11 +337,7 @@ func normalServerStop(err error) bool {
 	return errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled)
 }
 
-func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error, registry chat.ModelRegistry, controlSecret string, approvalHandlers ...migrationApprovalHandler) http.Handler {
-	var approveMigration migrationApprovalHandler
-	if len(approvalHandlers) == 1 {
-		approveMigration = approvalHandlers[0]
-	}
+func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat.MemoryStore, checkAuth func(context.Context) error, registry chat.ModelRegistry, controlSecret string) http.Handler {
 	var sessionsMu sync.Mutex
 	sessions := make(map[int64]*chat.Session)
 	var environmentSerialMu sync.Mutex
@@ -403,68 +382,6 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			diagnostics.Error("agent.healthz.write", err)
 		}
 	})
-	mux.HandleFunc("/migration/approve", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !validControlRequest(r, controlSecret) {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
-		if r.Header.Get("Content-Type") != "application/json" {
-			http.Error(w, "expected application/json", http.StatusUnsupportedMediaType)
-			return
-		}
-		if approveMigration == nil {
-			diagnostics.Error("agent.migration.approval", errors.New("migration approval capability is unavailable"))
-			http.Error(w, "migration approval is unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		var request struct {
-			Code    string `json:"code"`
-			ChatID  int64  `json:"chat_id"`
-			UserID  int64  `json:"user_id"`
-			Private bool   `json:"private"`
-		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil {
-			diagnostics.Error("agent.migration.approval.decode", err)
-			http.Error(w, "invalid migration approval", http.StatusBadRequest)
-			return
-		}
-		var extra json.RawMessage
-		if err := decoder.Decode(&extra); err != io.EOF {
-			if err == nil {
-				err = errors.New("migration approval contains multiple JSON values")
-			}
-			diagnostics.Error("agent.migration.approval.trailing_data", err)
-			http.Error(w, "invalid migration approval", http.StatusBadRequest)
-			return
-		}
-		if request.Code == "" || request.UserID <= 0 || request.ChatID != request.UserID || !request.Private {
-			http.Error(w, "invalid migration approval", http.StatusBadRequest)
-			return
-		}
-		result, err := approveMigration(r.Context(), migration.ApprovalCommand{
-			Code: request.Code,
-			Subject: migration.ApprovalSubject{
-				UserID:  request.UserID,
-				ChatID:  request.ChatID,
-				Private: request.Private,
-			},
-		})
-		if err != nil {
-			diagnostics.Error("agent.migration.approval", err)
-			http.Error(w, "migration approval is unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(result); err != nil {
-			diagnostics.Error("agent.migration.approval.encode", err)
-		}
-	})
 	mux.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -482,7 +399,6 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			Message     string                `json:"message"`
 			ChatID      int64                 `json:"chat_id"`
 			UserID      int64                 `json:"user_id,omitempty"`
-			Private     bool                  `json:"private,omitempty"`
 			Attachments []attachment.Incoming `json:"attachments,omitempty"`
 		}
 		maxBodyBytes := int64(base64.StdEncoding.EncodedLen(int(attachment.MaxBytes))) + maxChatEnvelopeBytes
@@ -495,10 +411,6 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 			return
 		}
 		if request.ChatID == 0 || (strings.TrimSpace(request.Message) == "" && len(request.Attachments) == 0) {
-			http.Error(w, "invalid request", http.StatusBadRequest)
-			return
-		}
-		if request.Private && (request.UserID <= 0 || request.ChatID != request.UserID) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
@@ -769,11 +681,6 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 		}
 		requestContext := chat.WithToolCallObserver(r.Context(), observer)
 		requestContext = chat.WithRuntimeFailureOperation(requestContext, "agent.chat")
-		requestContext = migration.WithApprovalSubject(requestContext, migration.ApprovalSubject{
-			UserID:  request.UserID,
-			ChatID:  request.ChatID,
-			Private: request.Private,
-		})
 		values, environmentErr := runtimeEnvironment()
 		if environmentErr != nil {
 			diagnostics.Error("agent.chat.runtime_environment", environmentErr)

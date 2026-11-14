@@ -87,14 +87,13 @@ for phrase in (
     "owner-secret digest",
     "does not send the private key or owner secret",
     "read-only provider lookups",
-    "explicitly approves those exact terms",
     "does not accept an approval flag",
-    "paired private Telegram",
-    "APPROVE GOASTER MIGRATION <code>",
-    "one-shot approval capability",
-    "ignored in groups",
-    "expires after ten minutes",
-    "consumed before the monitor/create path",
+    "ordinary explicit user approval",
+    "private conversation",
+    "not a trusted cryptographic binding",
+    "Do not invent or require a special command",
+    "dedicated approval record",
+    "Migration execution is currently disabled",
     "checks availability immediately",
     "exactly 30-minute intervals",
     "disables that exact job",
@@ -124,7 +123,7 @@ for phrase in (
     "source side of the versioned central migration machine API",
     "does not add a migration database",
     "current, read-only public price estimate",
-    "schedule the same check every 30 minutes",
+    "schedules the same check every 30 minutes",
     "directly to the locally paired Telegram user",
     "POST https://goasterweb-thomas.fly.dev/migration/v1/machines/availability",
     "POST https://goasterweb-thomas.fly.dev/migration/v1/machines/create",
@@ -134,6 +133,11 @@ for phrase in (
     "private key and owner secret never cross this request",
     "No HTTP retry",
     "manual-reconciliation condition",
+    "ordinary explicit approval",
+    "private conversation",
+    "not a trusted cryptographic binding",
+    "dedicated approval record",
+    "current runtime remains disabled",
     "<real user home>/.goaster/tmp",
     "mode-0600 files",
     "No model-selected chat or group",
@@ -143,6 +147,14 @@ for phrase in (
         raise SystemExit(f"migration task notes missing required scope/contract: {phrase!r}")
 
 for label, content in (("skill", migration), ("notes", notes)):
+    for forbidden in (
+        "APPROVE GOASTER MIGRATION",
+        "one-shot approval capability",
+        "trusted paired-private",
+        "exact-term approval notice",
+    ):
+        if forbidden in content:
+            raise SystemExit(f"migration {label} retained rejected approval prototype text: {forbidden!r}")
     for forbidden in (
         "${GOASTERWEB_ORIGIN}",
         "https://<origin>/migration",

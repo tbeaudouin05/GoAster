@@ -1,9 +1,14 @@
 # GoAster central migration
 
-**Migration execution is currently unavailable:** trusted paired Telegram identity and durable one-use approval are not fully wired. Approval requests, monitor startup, and automatic monitor resumption are disabled pending completion.
+**Migration execution is currently disabled:** read-only estimates and
+availability checks may be inspected, but monitor startup, provider creation,
+and automatic monitor resumption are disabled. Before any future billable
+operation, require ordinary explicit user approval in a private conversation.
+That conversational approval is not a trusted cryptographic binding or a
+substitute for a future trusted authorization design.
 
-Use the source-side `goaster_migration` tool for one owner-approved migration
-to the existing GoAsterWeb service. The GoAster source implementation owns
+Use the source-side `goaster_migration` tool to inspect one proposed migration
+against the existing GoAsterWeb service. The GoAster source implementation owns
 the bounded HTTPS requests, local login-key and owner-secret generation,
 30-minute availability monitor, and protected Telegram handoff. GoAsterWeb
 owns the provider create sequence, callback secret, Redis handoff, destination
@@ -54,7 +59,7 @@ attempt, server label, server ID, public IP, owner URL without the owner
 secret, and absolute expiry. The source appends the local owner secret to the
 fragment only and never puts it in a query string.
 
-## Estimate and paired approval
+## Estimate and ordinary private-conversation approval
 
 Before asking for approval, use `goaster_migration` with `estimate` (or its
 `quote` alias) for the exact server type and optional locations. The source
@@ -66,27 +71,29 @@ not substitute a cheaper type, silently choose a different location, or claim
 that the GoAsterWeb availability response contains a price.
 
 Present the returned type, strict location preference, currency, per-location
-estimate, and the fact that one provider creation sequence will occur. The
+estimate, and the fact that one provider creation sequence would occur. The
 model-facing `start` call accepts only the exact type and location request; it
 does not accept an approval flag, quoted price, currency, monitor ID, chat ID,
-or any secret. When the request arrives from the paired private Telegram
-conversation, the source obtains a fresh read-only estimate and sends an
-exact-term approval notice directly to the protected paired Telegram user.
+or any secret.
 
-The owner explicitly approves those exact terms by reviewing the
-source-generated notice and replying exactly `APPROVE GOASTER MIGRATION
-<code>` in the same private chat. That phrase is a
-one-shot approval capability bound to the displayed server type, strict
-locations, currency, per-location gross estimate, and one provider creation.
-It is ignored in groups, is never forwarded to the model, expires after ten
-minutes, is consumed before the monitor/create path, and is lost on process
-restart. After the owner approves, retry `start` with the same exact type and
-locations. Any missing, changed, expired, replayed, or uncertain approval
-stops without a provider mutation.
+Before any billable operation, obtain ordinary explicit user approval for the
+exact server type, strict location preference, current estimate and currency
+(or the fact that pricing is unavailable), and exactly one create in a private
+conversation. Do not treat approval in a group conversation as sufficient.
+Do not invent or require a special command, exact reply, button, code, callback,
+or dedicated approval record. Ordinary conversational approval is a workflow
+requirement only; it does not provide a trusted cryptographic binding between
+the user, the terms, and the future provider request.
 
-## Monitor and one create
+The current runtime is disabled, so an approval in conversation cannot start
+the monitor or provider create path. Do not retry `start` expecting a billable
+operation until a future release explicitly enables execution with a trusted
+authorization design.
 
-After approval, the source checks availability immediately. If no eligible
+## Monitor and one create (future execution only)
+
+After the required future authorization gate, the source checks availability
+immediately. If no eligible
 location is returned, it leaves one non-secret scheduler job enabled at
 exactly 30-minute intervals. The token is loaded only when a check runs; it is
 never placed in the scheduler message. A ready result disables that exact job

@@ -63,7 +63,7 @@ func StartMonitor(ctx context.Context, request Request, options Options, jobs Mo
 		return Result{}, err
 	}
 	if request.ApprovedHourlyGross != "" || request.ApprovedCurrency != "" {
-		return Result{}, errors.New("legacy migration price approval requires new approval")
+		return Result{}, errors.New("legacy migration price approval fields are unsupported")
 	}
 	options = completeOptions(options)
 	if options.DeliverHandoff == nil {
@@ -290,7 +290,7 @@ func parseSchedulerMessage(message string) (scheduledMigration, error) {
 		return scheduledMigration{}, errors.New("migration scheduler message is invalid")
 	}
 	if scheduled.Request.ApprovedHourlyGross != "" || scheduled.Request.ApprovedCurrency != "" {
-		return scheduledMigration{}, errors.New("legacy migration price approval requires new approval")
+		return scheduledMigration{}, errors.New("legacy migration price approval fields are unsupported")
 	}
 	return scheduled, nil
 }

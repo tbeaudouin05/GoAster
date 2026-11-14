@@ -1550,40 +1550,10 @@ func (postToolAgentError) Error() string {
 func (err postToolAgentError) Is(target error) bool { return target.Error() == err.Error() }
 func (err postToolAgentError) Unwrap() error        { return err.cause }
 
-func TestAgentMigrationApprovalEndpointRequiresPairedPrivateShape(t *testing.T) {
-	var received []migration.ApprovalCommand
-	approval := func(_ context.Context, command migration.ApprovalCommand) (migration.ApprovalResult, error) {
-		received = append(received, command)
-		return migration.ApprovalResult{Status: "approved"}, nil
-	}
-	h := handlerWithMemoryAndRegistryWithSecret(fakeProvider{}, nil, readyAuth, chat.ModelRegistry{}, testControlSecret, approval)
-	post := func(body string, authorized bool) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/migration/approve", strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-		if authorized {
-			r.Header.Set(controlAuthorizationHeader, testControlSecret)
-		}
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		return w
-	}
-	if response := post(`{"code":"migration-approval-0123456789abcdef0123456789abcdef","chat_id":42,"user_id":42,"private":true}`, false); response.Code != http.StatusUnauthorized || len(received) != 0 {
-		t.Fatalf("unauthorized migration approval = %d %q; received=%#v", response.Code, response.Body.String(), received)
-	}
-	for _, body := range []string{
-		`{"code":"migration-approval-0123456789abcdef0123456789abcdef","chat_id":-10042,"user_id":42,"private":false}`,
-		`{"code":"migration-approval-0123456789abcdef0123456789abcdef","chat_id":42,"user_id":43,"private":true}`,
-		`{"code":"migration-approval-0123456789abcdef0123456789abcdef","chat_id":42,"user_id":42,"private":true,"extra":true}`,
-	} {
-		if response := post(body, true); response.Code != http.StatusBadRequest || len(received) != 0 {
-			t.Fatalf("invalid migration approval = %d %q; received=%#v", response.Code, response.Body.String(), received)
-		}
-	}
-	valid := post(`{"code":"migration-approval-0123456789abcdef0123456789abcdef","chat_id":42,"user_id":42,"private":true}`, true)
-	if valid.Code != http.StatusOK || !strings.Contains(valid.Body.String(), `"status":"approved"`) || len(received) != 1 {
-		t.Fatalf("valid migration approval = %d %q; received=%#v", valid.Code, valid.Body.String(), received)
-	}
-	if received[0].Subject.UserID != 42 || received[0].Subject.ChatID != 42 || !received[0].Subject.Private {
-		t.Fatalf("trusted approval subject = %#v", received[0].Subject)
+func TestMigrationOperationsKeepExecutionDisabled(t *testing.T) {
+	operations := migrationOperations(migration.Options{}, nil, true)
+	result, err := operations.Start(context.Background(), migration.Request{ServerType: "cx22"})
+	if err == nil || !strings.Contains(err.Error(), "migration execution is disabled") || result.Status != "unavailable" {
+		t.Fatalf("migration start = %#v, %v", result, err)
 	}
 }
