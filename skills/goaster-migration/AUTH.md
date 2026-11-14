@@ -1,30 +1,33 @@
 # Authentication and authorization
 
-This skill does not grant access to Hetzner, GoAsterWeb, Redis, Telegram, a
-server, SSH, or any secret. It does not by itself authorize a monitor, billable
-create, installation, setup, data transfer, cutover, restart, or deletion.
+**Migration execution is currently unavailable:** trusted paired Telegram identity and durable one-use approval are not fully wired. Approval requests, monitor startup, and automatic monitor resumption are disabled pending completion.
 
-Load `goaster-env` for the already configured secret source and `hetzner-auth`
-for token-scoped project identity and read-only provider checks. Obtain a
-separate, informed approval for the exact current server terms, expected
-overlap cost, one create, and the 30-minute 24/7 monitor. That approval also
-authorizes terminal disable of the exact cron job on success or error; it does
-not authorize SSH or GoAster setup.
+This skill does not grant access to Hetzner, GoAsterWeb, Telegram, a server,
+SSH, or any secret. Load `goaster-env` and `hetzner-auth` for the configured
+Hetzner credential source and token-scoped project checks. A read-only price
+estimate and availability check do not authorize a billable creation.
 
-Before provisioning, the owner must create a distinct new BotFather bot. Never
-copy the old bot token or Telegram pairing state. The old and new agents may
-coexist during validation; the owner stops the old agent only after the
-cutover decision.
+The owner must explicitly approve the exact server type, optional strict
+location list, current public gross estimate/currency, and exactly one create
+from the paired private owner conversation before the `start` action. The
+source sends the exact terms directly to the protected paired private user;
+the owner must reply exactly `APPROVE GOASTER MIGRATION <code>`. The code is
+not returned to the model, is rejected in groups, expires after ten minutes,
+and is consumed once before the monitor/create path. A model-supplied approval
+flag, price, currency, monitor ID, or chat ID is not authorization. That
+approval includes the source monitor’s terminal disable on success, error, or
+uncertainty. It does not authorize installation, destination SSH, deletion,
+cutover, or a retry after an uncertain create.
 
-Keep provider tokens, Web grant secrets, owner URLs, private keys, and
-database credentials in protected environment/path handling only. Never put
-them in model-visible output, logs, arguments, cron messages, temporary files,
-or memory supplied to the model. If existing shell/provider tools cannot
-perform the required protected write and redacted response handling, stop.
-Do not invent a migration executable, script, or runtime helper.
+The provider token is request-scoped and stays in protected local handling.
+The owner secret, digest, private login key, owner URL, and callback material
+never appear in model output, scheduler messages, logs, temporary files other
+than the explicitly protected migration task directory, or ordinary chat.
+The source sends the protected handoff only to the locally paired Telegram
+user ID. If that protected delivery path is unavailable, stop before the
+create request.
 
-Use the existing shell for inline protected Telegram delivery as specified in
-SKILL.md. The destination is the locally paired user ID, never an arbitrary
-chat. Verify access without changing permissions before mutation, and stop if
-the protected delivery prerequisites cannot be met. Do not add a command,
-tool, script, or runtime helper.
+The migration task directory is a fresh private child of
+`<real user home>/.goaster/tmp`; preserve it for manual owner cleanup. Do not
+weaken permissions, override `HOME`, use a shared temporary directory, add a
+new command/helper, or invent a second attempt ledger.

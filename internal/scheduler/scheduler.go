@@ -41,6 +41,12 @@ const (
 var (
 	ErrJobNotFound    = errors.New("cron job not found")
 	ErrAlreadyStarted = errors.New("cron scheduler is already running")
+	// ErrExecutionClaimUnavailable means an action must not start because the
+	// job is disabled, under review, or already owned by another execution.
+	ErrExecutionClaimUnavailable = errors.New("cron job execution claim unavailable")
+	// ErrExecutionInProgress means a stop cannot report success while an
+	// execution claim is active.
+	ErrExecutionInProgress = errors.New("cron job execution is in progress")
 	// ErrRetry means no actions started and the job can be retried safely.
 	ErrRetry = errors.New("cron job should retry")
 	// ErrReviewRequired means execution may have performed actions and must be reviewed.
@@ -87,6 +93,7 @@ type Job struct {
 	Status         string     `json:"status"`
 	Error          string     `json:"error,omitempty"`
 	ReviewRequired bool       `json:"review_required,omitempty"`
+	ExecutionClaim bool       `json:"execution_claim,omitempty"`
 	RunCount       int        `json:"run_count"`
 	MaxRuns        int        `json:"max_runs,omitempty"`
 	DeleteAfterRun bool       `json:"delete_after_run,omitempty"`
@@ -519,6 +526,7 @@ func New(options Options) (*Scheduler, error) {
 			job.Enabled = false
 			job.NextRun = nil
 			job.ReviewRequired = true
+			job.ExecutionClaim = false
 			changed = true
 		}
 		if job.Kind == ScheduleAt && !job.DeleteAfterRun {
@@ -571,6 +579,7 @@ func (s *Scheduler) Add(job Job) (Job, error) {
 	}
 	job.Enabled = true
 	job.Status = StatusScheduled
+	job.ExecutionClaim = false
 	job.Error = ""
 	job.RunCount = 0
 	if job.Kind == ScheduleAt {
@@ -655,6 +664,9 @@ func (s *Scheduler) Update(id string, patch Patch) (Job, error) {
 	current, ok := s.jobs[id]
 	if !ok {
 		return Job{}, fmt.Errorf("%w: %s", ErrJobNotFound, id)
+	}
+	if current.ExecutionClaim {
+		return Job{}, ErrExecutionInProgress
 	}
 	updated := current
 	scheduleFields := 0
@@ -798,6 +810,9 @@ func (s *Scheduler) SetEnabled(id string, enabled bool) (Job, error) {
 	if !ok {
 		return Job{}, fmt.Errorf("%w: %s", ErrJobNotFound, id)
 	}
+	if job.ExecutionClaim {
+		return Job{}, fmt.Errorf("%w: execution claim is active", ErrExecutionInProgress)
+	}
 	if enabled {
 		if job.MaxRuns > 0 && job.RunCount >= job.MaxRuns {
 			return Job{}, fmt.Errorf("cron job %q has reached max_runs; increase max_runs above run_count or set it to 0 before enabling", id)
@@ -822,6 +837,193 @@ func (s *Scheduler) SetEnabled(id string, enabled bool) (Job, error) {
 		}
 	}
 	previous := s.jobs[id]
+	s.jobs[id] = job
+	if err := s.saveLocked(); err != nil {
+		s.jobs[id] = previous
+		return Job{}, err
+	}
+	s.signalWake()
+	return cloneJob(job), nil
+}
+
+// executionOwner is available only to the currently running scheduler executor.
+type executionOwnerKey struct{}
+type executionOwner struct {
+	scheduler chan struct{}
+	id        string
+	state     chan bool
+}
+
+// ClaimExecution reserves a job and returns a completion function. A direct
+// claim holds the run lock until completion; a scheduled claim must carry the
+// context of the executor that owns this exact job.
+func (s *Scheduler) ClaimExecution(ctx context.Context, id string) (Job, func(error) (Job, error), error) {
+	return s.claimExecution(ctx, id, Job{}, false)
+}
+
+// ClaimExecutionMatching atomically verifies the expected message and schedule before claiming.
+func (s *Scheduler) ClaimExecutionMatching(ctx context.Context, expected Job) (Job, func(error) (Job, error), error) {
+	return s.claimExecution(ctx, expected.ID, expected, true)
+}
+
+func (s *Scheduler) claimExecution(ctx context.Context, id string, expected Job, match bool) (Job, func(error) (Job, error), error) {
+	if s == nil {
+		return Job{}, nil, fmt.Errorf("cron scheduler is nil")
+	}
+	id = strings.TrimSpace(id)
+	var owner executionOwner
+	var scheduled bool
+	if ctx != nil {
+		owner, scheduled = ctx.Value(executionOwnerKey{}).(executionOwner)
+	}
+	var unlockRun func()
+	successOwner := false
+	if scheduled {
+		used := <-owner.state
+		defer func() { owner.state <- used }()
+		if used || owner.scheduler != s.wake || owner.id != id {
+			return Job{}, nil, ErrExecutionClaimUnavailable
+		}
+		defer func() {
+			if successOwner {
+				used = true
+			}
+		}()
+	} else {
+		var err error
+		unlockRun, err = s.store.lock(true)
+		if err != nil {
+			return Job{}, nil, fmt.Errorf("%w: %w", ErrExecutionClaimUnavailable, err)
+		}
+	}
+	success := false
+	defer func() {
+		if !success && unlockRun != nil {
+			unlockRun()
+		}
+	}()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.reloadLocked()
+	if err != nil {
+		return Job{}, nil, err
+	}
+	defer unlock()
+	job, ok := s.jobs[id]
+	if !ok {
+		return Job{}, nil, fmt.Errorf("%w: %s", ErrJobNotFound, id)
+	}
+	if job.ReviewRequired || !job.Enabled || (match && (job.Message != expected.Message || !sameSchedule(job, expected))) || (!scheduled && job.Status != StatusScheduled) || (scheduled && job.Status != StatusRunning) {
+		return Job{}, nil, ErrExecutionClaimUnavailable
+	}
+	previous := job
+	job.Status = StatusRunning
+	job.ExecutionClaim = true
+	job.Enabled = false
+	job.NextRun = nil
+	job.Error = ""
+	s.jobs[id] = job
+	if err := s.saveLocked(); err != nil {
+		s.jobs[id] = previous
+		return Job{}, nil, err
+	}
+	s.signalWake()
+	success = true
+	if scheduled {
+		successOwner = true
+		return cloneJob(job), nil, nil
+	}
+	var once sync.Once
+	complete := func(executionErr error) (Job, error) {
+		var completed Job
+		resultErr := ErrExecutionClaimUnavailable
+		once.Do(func() { defer unlockRun(); completed, resultErr = s.completeExecution(id, executionErr) })
+		return completed, resultErr
+	}
+	return cloneJob(job), complete, nil
+}
+
+// StopIfNotRunning atomically disables a job only when no action owns its
+// durable execution claim. It is deliberately separate from SetEnabled,
+// which permits changes to ordinary running jobs without such a claim.
+func (s *Scheduler) StopIfNotRunning(id string) (Job, error) {
+	if s == nil {
+		return Job{}, fmt.Errorf("cron scheduler is nil")
+	}
+	id = strings.TrimSpace(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.reloadLocked()
+	if err != nil {
+		return Job{}, err
+	}
+	defer unlock()
+	job, ok := s.jobs[id]
+	if !ok {
+		return Job{}, fmt.Errorf("%w: %s", ErrJobNotFound, id)
+	}
+	if job.Status == StatusRunning {
+		return Job{}, fmt.Errorf("%w: stop cannot be confirmed", ErrExecutionInProgress)
+	}
+	previous := job
+	job.Enabled = false
+	job.NextRun = nil
+	if !job.ReviewRequired {
+		job.Status = StatusDisabled
+	}
+	s.jobs[id] = job
+	if err := s.saveLocked(); err != nil {
+		s.jobs[id] = previous
+		return Job{}, err
+	}
+	s.signalWake()
+	return cloneJob(job), nil
+}
+
+// completeExecution finalizes a direct claim while its run lock is held.
+func (s *Scheduler) completeExecution(id string, executionErr error) (Job, error) {
+	if s == nil {
+		return Job{}, fmt.Errorf("cron scheduler is nil")
+	}
+	id = strings.TrimSpace(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.reloadLocked()
+	if err != nil {
+		return Job{}, err
+	}
+	defer unlock()
+	job, ok := s.jobs[id]
+	if !ok {
+		return Job{}, fmt.Errorf("%w: %s", ErrJobNotFound, id)
+	}
+	if job.Status != StatusRunning || job.Enabled || !job.ExecutionClaim {
+		return Job{}, fmt.Errorf("%w: job is not a direct execution claim", ErrExecutionClaimUnavailable)
+	}
+	previous := job
+	job.ExecutionClaim = false
+	job.Enabled = false
+	job.NextRun = nil
+	if errors.Is(executionErr, ErrRetry) && !errors.Is(executionErr, ErrReviewRequired) {
+		next, err := initialNextRun(job.schedule(), s.now())
+		if err != nil {
+			return Job{}, err
+		}
+		job.Enabled = true
+		job.NextRun = next
+		job.Status = StatusScheduled
+		job.Error = ""
+	} else if executionErr != nil {
+		job.RunCount++
+		job.Status = StatusFailed
+		job.Error = formatJobError(executionErr)
+		job.ReviewRequired = true
+	} else {
+		job.RunCount++
+		job.Status = StatusDisabled
+		job.Error = ""
+		job.ReviewRequired = false
+	}
 	s.jobs[id] = job
 	if err := s.saveLocked(); err != nil {
 		s.jobs[id] = previous
@@ -899,6 +1101,7 @@ func (s *Scheduler) RunDue(ctx context.Context) int {
 			job.Enabled = false
 			job.NextRun = nil
 			job.ReviewRequired = true
+			job.ExecutionClaim = false
 			s.jobs[id] = job
 			changed = true
 		}
@@ -1026,10 +1229,15 @@ func (s *Scheduler) claimDue() (Job, bool) {
 func (s *Scheduler) executeClaim(ctx context.Context, claimed Job) {
 	started := s.now()
 	var executionErr error
+	owned := false
 	if s.executor == nil {
 		executionErr = errors.New("cron scheduler executor is nil")
 	} else {
-		executionErr = s.executor(ctx, claimed.Message)
+		owner := executionOwner{scheduler: s.wake, id: claimed.ID, state: make(chan bool, 1)}
+		owner.state <- false
+		executionErr = s.executor(context.WithValue(ctx, executionOwnerKey{}, owner), claimed.Message)
+		owned = <-owner.state
+		owner.state <- true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1043,11 +1251,23 @@ func (s *Scheduler) executeClaim(ctx context.Context, claimed Job) {
 		return
 	}
 	previous := current
+	current.ExecutionClaim = false
 	if errors.Is(executionErr, ErrRetry) && !errors.Is(executionErr, ErrReviewRequired) {
+		if owned {
+			current.Enabled = true
+		}
 		if current.Enabled {
 			current.Status = StatusScheduled
 			if sameSchedule(current, claimed) {
-				current.NextRun = timePointer(s.now().Add(5 * time.Second))
+				if owned {
+					next, err := initialNextRun(current.schedule(), s.now())
+					if err != nil {
+						return
+					}
+					current.NextRun = next
+				} else {
+					current.NextRun = timePointer(s.now().Add(5 * time.Second))
+				}
 			}
 		} else {
 			current.Status = StatusDisabled

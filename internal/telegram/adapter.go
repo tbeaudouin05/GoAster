@@ -23,6 +23,7 @@ import (
 	"goaster/internal/controltransport"
 	"goaster/internal/diagnostics"
 	"goaster/internal/localenv"
+	"goaster/internal/migration"
 	"goaster/internal/telegramcommands"
 )
 
@@ -582,6 +583,27 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 	if m.From.ID != pairedUserID {
 		return
 	}
+	if !hasAttachment && rawText == text {
+		if code, approved := migration.ApprovalCode(text); approved {
+			signalStarted()
+			if m.Chat.Type != "private" {
+				return
+			}
+			status, err := submitMigrationApproval(ctx, code, m.Chat.ID, m.From.ID, a.agent, a.controlSecret)
+			if err != nil {
+				if ctx.Err() == nil {
+					a.send(ctx, m.Chat.ID, "The migration approval could not be recorded.")
+				}
+				return
+			}
+			if status == "approved" {
+				a.send(ctx, m.Chat.ID, "Migration approval recorded for the exact terms shown above.")
+			} else {
+				a.send(ctx, m.Chat.ID, "No matching migration approval is pending.")
+			}
+			return
+		}
+	}
 	if chat.IsClearCommand(text) && text == "/clear" && !hasAttachment && ctx.Value(telegramOrderedClearKey{}) == nil {
 		a.turnMu.Lock()
 		for key, turns := range a.activeTurns {
@@ -908,7 +930,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		sendFinal("The Telegram attachment could not be downloaded safely.")
 		return
 	}
-	reply, err := a.askAgent(ctx, text, m.Chat.ID, attachments, showToolCall)
+	reply, err := askAgentWithIdentity(ctx, text, m.Chat.ID, m.From.ID, m.Chat.Type == "private", attachments, showToolCall, a.agent, a.controlSecret)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -1118,10 +1140,14 @@ func truncateRunes(text string, max int) string {
 }
 
 func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attachments []attachment.Incoming, onToolCall func(string, string)) (string, error) {
-	return askAgentWithUser(ctx, text, chatID, 0, attachments, onToolCall, a.agent, a.controlSecret)
+	return askAgentWithIdentity(ctx, text, chatID, 0, false, attachments, onToolCall, a.agent, a.controlSecret)
 }
 
 func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, attachments []attachment.Incoming, onToolCall func(string, string), agent httpDoer, controlSecret string) (string, error) {
+	return askAgentWithIdentity(ctx, text, chatID, userID, false, attachments, onToolCall, agent, controlSecret)
+}
+
+func askAgentWithIdentity(ctx context.Context, text string, chatID, userID int64, private bool, attachments []attachment.Incoming, onToolCall func(string, string), agent httpDoer, controlSecret string) (string, error) {
 	if agent == nil {
 		return "", telegramAgentFailure(errors.New("remote agent client is unavailable"), "", 0, "")
 	}
@@ -1129,8 +1155,9 @@ func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, at
 		Message     string                `json:"message"`
 		ChatID      int64                 `json:"chat_id"`
 		UserID      int64                 `json:"user_id,omitempty"`
+		Private     bool                  `json:"private,omitempty"`
 		Attachments []attachment.Incoming `json:"attachments,omitempty"`
-	}{Message: text, ChatID: chatID, UserID: userID, Attachments: attachments})
+	}{Message: text, ChatID: chatID, UserID: userID, Private: private, Attachments: attachments})
 	if err != nil {
 		return "", telegramAgentFailure(fmt.Errorf("encode agent request: %w", err), "", 0, "")
 	}
@@ -1226,6 +1253,54 @@ func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, at
 		return "", telegramAgentFailure(errors.New("agent response contained no final reply"), resp.Status, 0, resp.Header.Get("x-request-id"))
 	}
 	return reply, nil
+}
+
+func submitMigrationApproval(ctx context.Context, code string, chatID, userID int64, agent httpDoer, controlSecret string) (string, error) {
+	if agent == nil {
+		return "", telegramAgentFailure(errors.New("remote agent client is unavailable"), "", 0, "")
+	}
+	body, err := json.Marshal(struct {
+		Code    string `json:"code"`
+		ChatID  int64  `json:"chat_id"`
+		UserID  int64  `json:"user_id"`
+		Private bool   `json:"private"`
+	}{Code: code, ChatID: chatID, UserID: userID, Private: true})
+	if err != nil {
+		return "", telegramAgentFailure(fmt.Errorf("encode migration approval request: %w", err), "", 0, "")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:8765/migration/approve", bytes.NewReader(body))
+	if err != nil {
+		return "", telegramAgentFailure(fmt.Errorf("build migration approval request: %w", err), "", 0, "")
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(telegramControlAuthorizationHeader, controlSecret)
+	response, err := agent.Do(request)
+	if err != nil {
+		return "", telegramAgentFailure(fmt.Errorf("migration approval transport: %w", err), "", 0, "")
+	}
+	if response == nil || response.Body == nil {
+		return "", telegramAgentFailure(errors.New("migration approval response body is missing"), "", 0, "")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", telegramAgentFailure(fmt.Errorf("migration approval returned status %s", response.Status), response.Status, 0, response.Header.Get("x-request-id"))
+	}
+	var result struct {
+		Status string `json:"status"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 4*1024+1))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
+		return "", telegramAgentFailure(fmt.Errorf("decode migration approval response: %w", err), response.Status, 0, response.Header.Get("x-request-id"))
+	}
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return "", telegramAgentFailure(errors.New("migration approval response contains trailing data"), response.Status, 0, response.Header.Get("x-request-id"))
+	}
+	if result.Status != "approved" && result.Status != "rejected" {
+		return "", telegramAgentFailure(errors.New("migration approval response is invalid"), response.Status, 0, response.Header.Get("x-request-id"))
+	}
+	return result.Status, nil
 }
 
 func telegramAgentFailure(err error, status string, errorCode int, requestID string) error {

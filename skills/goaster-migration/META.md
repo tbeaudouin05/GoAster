@@ -1,2 +1,2 @@
 name: goaster-migration
-description: Guide one explicitly approved Hetzner server with callback-only cloud-init using existing shell, cron, environment, and provider tools; stop before mutation if the protected owner handoff cannot be delivered safely, and leave setup to GoAsterWeb.
+description: Manage one explicitly approved central GoAsterWeb migration with exact server type/location handling, a 30-minute availability monitor, protected local key generation, and direct paired-Telegram handoff without exposing secrets to the model.

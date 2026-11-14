@@ -239,6 +239,48 @@ func TestSchedulerManagementAndPartialUpdate(t *testing.T) {
 	checkSchedulerCrossProcessRemoval(t)
 }
 
+func TestExecutionClaimAndStopAreAtomicAndDurable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.json")
+	jobs, err := New(Options{Path: path, Now: func() time.Time { return time.Unix(1000, 0) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobs.Add(Job{ID: "migration-claim", Kind: ScheduleEvery, EverySeconds: 60, Message: "migration"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, complete, err := jobs.ClaimExecution(context.Background(), job.ID)
+	if err != nil || complete == nil || claimed.Status != StatusRunning || claimed.Enabled {
+		t.Fatalf("execution claim = %+v, complete=%v, err=%v", claimed, complete != nil, err)
+	}
+	if _, err := jobs.StopIfNotRunning(job.ID); !errors.Is(err, ErrExecutionInProgress) {
+		t.Fatalf("stop during execution claim = %v, want ErrExecutionInProgress", err)
+	}
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || persisted[0].Status != StatusRunning || persisted[0].Enabled {
+		t.Fatalf("persisted execution claim = %#v", persisted)
+	}
+	completed, err := complete(nil)
+	if err != nil || completed.Status != StatusDisabled || completed.Enabled || completed.RunCount != 1 {
+		t.Fatalf("completed execution = %+v, err=%v", completed, err)
+	}
+	restarted, err := New(Options{Path: path, Now: func() time.Time { return time.Unix(1001, 0) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := restarted.Get(job.ID)
+	if !ok || saved.Status != StatusDisabled || saved.Enabled || saved.ReviewRequired || saved.RunCount != 1 {
+		t.Fatalf("reloaded completed execution = %+v, found=%v", saved, ok)
+	}
+}
+
 func TestSchedulerDeletesOneTimeJobAfterExecution(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.json")
 	var gotMessage atomic.Value
@@ -358,4 +400,155 @@ func TestSchedulerLoopWakesAndExecutesDueJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	scheduler.Stop()
+}
+
+func TestDirectExecutionHoldsRunLockUntilCompletion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.json")
+	now := time.Unix(1000, 0)
+	jobs, err := New(Options{Path: path, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Add(Job{ID: "direct-lock", Kind: ScheduleEvery, EverySeconds: 1, Message: "action"}); err != nil {
+		t.Fatal(err)
+	}
+	_, finish, err := jobs.ClaimExecution(context.Background(), "direct-lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish(errors.New("test abandoned"))
+	other, err := New(Options{Path: path, Now: func() time.Time { return now.Add(time.Hour) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs := other.RunDue(context.Background()); runs != 0 {
+		t.Fatalf("runs during direct claim: %d", runs)
+	}
+	job, ok := other.Get("direct-lock")
+	if !ok || job.Status != StatusRunning || job.ReviewRequired {
+		t.Fatalf("live claim changed: %+v", job)
+	}
+	if _, err := other.StopIfNotRunning(job.ID); !errors.Is(err, ErrExecutionInProgress) {
+		t.Fatalf("stop during claim: %v", err)
+	}
+	if _, _, err := other.ClaimExecution(context.Background(), job.ID); !errors.Is(err, ErrExecutionClaimUnavailable) {
+		t.Fatalf("overlapping claim: %v", err)
+	}
+	if _, err := finish(nil); err != nil {
+		t.Fatal(err)
+	}
+	job, err = other.StopIfNotRunning(job.ID)
+	if err != nil || job.Status != StatusDisabled {
+		t.Fatalf("stop after completion: %+v %v", job, err)
+	}
+}
+
+func TestScheduledExecutionOwnershipAndOverlap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.json")
+	now := time.Unix(1000, 0)
+	started := make(chan context.Context, 1)
+	proceed := make(chan struct{})
+	result := make(chan error, 1)
+	var claim func(context.Context, string) (Job, func(error) (Job, error), error)
+	jobs, err := New(Options{Path: path, Now: func() time.Time { return now.Add(time.Hour) }, Executor: func(ctx context.Context, _ string) error {
+		started <- ctx
+		<-proceed
+		_, finish, err := claim(ctx, "scheduled-owner")
+		if err == nil && finish != nil {
+			return errors.New("scheduled claim returned direct completion")
+		}
+		if err == nil {
+			_, _, err = claim(ctx, "scheduled-owner")
+			if !errors.Is(err, ErrExecutionClaimUnavailable) {
+				return errors.New("scheduled claim was reusable")
+			}
+			return nil
+		}
+		return err
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim = jobs.ClaimExecution
+	if _, err := jobs.Add(Job{ID: "scheduled-owner", Kind: ScheduleEvery, EverySeconds: 1, Message: "action"}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	go func() {
+		if runs := jobs.RunDue(context.Background()); runs != 1 {
+			result <- errors.New("unexpected RunDue count")
+			return
+		}
+		result <- nil
+	}()
+	var executionContext context.Context
+	select {
+	case executionContext = <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not start")
+	}
+	other, err := New(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := other.ClaimExecution(context.Background(), "scheduled-owner"); !errors.Is(err, ErrExecutionClaimUnavailable) {
+		t.Fatalf("immediate borrowed claim: %v", err)
+	}
+	if _, err := other.StopIfNotRunning("scheduled-owner"); !errors.Is(err, ErrExecutionInProgress) {
+		t.Fatalf("stop during scheduled execution: %v", err)
+	}
+	if runs := other.RunDue(context.Background()); runs != 0 {
+		t.Fatalf("overlapping RunDue: %d", runs)
+	}
+	close(proceed)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := jobs.ClaimExecution(executionContext, "scheduled-owner"); !errors.Is(err, ErrExecutionClaimUnavailable) {
+		t.Fatalf("expired owner: %v", err)
+	}
+	job, ok := other.Get("scheduled-owner")
+	if !ok || job.Enabled || job.Status == StatusRunning || job.ReviewRequired {
+		t.Fatalf("finished job: %+v", job)
+	}
+	if _, err := other.StopIfNotRunning("scheduled-owner"); err != nil {
+		t.Fatalf("stop after scheduled execution: %v", err)
+	}
+}
+
+func TestRunningSchedulerRecoversInterruptedExecutionClaim(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.json")
+	first, err := New(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := first.Add(Job{ID: "interrupted-claim", Kind: ScheduleEvery, EverySeconds: 60, Message: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := first.store.lock(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.Status, job.Enabled, job.ExecutionClaim, job.NextRun = StatusRunning, false, true, nil
+	if err := first.store.Save([]Job{job}); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	second, err := New(Options{Path: path})
+	if err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock() // Simulate the first process exiting without finalizing its claim.
+	if runs := second.RunDue(context.Background()); runs != 0 {
+		t.Fatalf("runs = %d", runs)
+	}
+	recovered, ok := second.Get(job.ID)
+	if !ok || recovered.ExecutionClaim || !recovered.ReviewRequired || recovered.Enabled || recovered.Status != StatusFailed {
+		t.Fatalf("recovered = %+v", recovered)
+	}
+	if _, err := second.SetEnabled(job.ID, true); err != nil {
+		t.Fatalf("explicit re-enable: %v", err)
+	}
 }
