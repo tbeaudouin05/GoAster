@@ -1563,3 +1563,16 @@ func TestMigrationOperationsRequireScheduler(t *testing.T) {
 		t.Fatalf("migration start = %#v, %v", result, err)
 	}
 }
+
+func TestPairedMigrationOptionsWireHandoffWithoutEnablingExecution(t *testing.T) {
+	options := pairedMigrationOptions()
+	if options.PrepareHandoff == nil {
+		t.Fatal("migration handoff preparation is not wired")
+	}
+
+	operations := migrationOperations(options, nil, false)
+	result, err := operations.Start(t.Context(), migration.Request{ServerType: "cx22"})
+	if err == nil || !strings.Contains(err.Error(), "migration scheduler capability is unavailable") || result.Status != "unavailable" {
+		t.Fatalf("migration start with disabled runtime = %#v, %v", result, err)
+	}
+}

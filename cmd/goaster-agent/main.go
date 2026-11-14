@@ -30,6 +30,7 @@ import (
 	"goaster/internal/localenv"
 	"goaster/internal/migration"
 	"goaster/internal/scheduler"
+	"goaster/internal/telegram"
 )
 
 const maxChatEnvelopeBytes int64 = 1 << 20
@@ -287,6 +288,12 @@ func migrationOperations(options migration.Options, jobs migrationSchedulerRunti
 	}
 }
 
+func pairedMigrationOptions() migration.Options {
+	options := migration.DefaultOptions()
+	options.PrepareHandoff = telegram.PrepareMigrationHandoff
+	return options
+}
+
 func serve(store chat.CredentialStore) (serveErr error) {
 	controlSecret, err := controlsecret.Load()
 	if err != nil {
@@ -303,7 +310,7 @@ func serve(store chat.CredentialStore) (serveErr error) {
 		return err
 	}
 	defer func() { serveErr = errors.Join(serveErr, backgroundManager.Close()) }()
-	migrationOptions := migration.DefaultOptions()
+	migrationOptions := pairedMigrationOptions()
 	// Execution and scheduler resumption remain disabled pending cross-service acceptance.
 	if err := chat.RegisterMigrationTool(provider, migrationOperations(migrationOptions, nil, false)); err != nil {
 		return fmt.Errorf("register migration tool: %w", err)
