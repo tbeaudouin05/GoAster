@@ -121,9 +121,10 @@ For a central migration, use a private conversation and obtain ordinary
 explicit user approval for the exact server type, strict location preference,
 current estimate/currency (or unavailable pricing), and exactly one create
 before any billable operation. This is a conversational workflow requirement,
-not a trusted cryptographic binding or a separate approval mechanism. The
-runtime starts the existing 30-minute monitor and keeps terminal or uncertain
-outcomes stopped for manual review.
+not a trusted cryptographic binding or a separate approval mechanism. Migration
+execution and scheduler resumption remain disabled pending full cross-service
+acceptance; if separately enabled later, terminal or uncertain outcomes must
+remain stopped for manual review.
 
 ## Models
 

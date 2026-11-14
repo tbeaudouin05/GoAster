@@ -200,6 +200,27 @@ func TestCreateKeepsPrivateMaterialOutOfTheRequestAndModelResult(t *testing.T) {
 	}
 }
 
+func TestCreateSupportsPreparedHandoffDelivery(t *testing.T) {
+	fixture := newMachineFixture(t)
+	taskDirectory := t.TempDir()
+	if err := os.Chmod(taskDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	prepared := 0
+	options := fixture.options(taskDirectory)
+	options.PrepareHandoff = func() (func(context.Context, []byte) error, error) {
+		prepared++
+		return func(context.Context, []byte) error { return nil }, nil
+	}
+	result, err := Create(t.Context(), Request{ServerType: "cx22", Locations: []string{"fsn1"}}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared != 1 || fixture.creates.Load() != 1 || !result.Delivered || result.Status != "created" {
+		t.Fatalf("prepared handoff create = %#v; prepared=%d creates=%d", result, prepared, fixture.creates.Load())
+	}
+}
+
 func TestCreateLostResponseIsOneRequestAndSchedulerDisablesMonitor(t *testing.T) {
 	fixture := newMachineFixture(t)
 	fixture.available.Store(true)

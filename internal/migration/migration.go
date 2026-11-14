@@ -251,7 +251,7 @@ func Create(ctx context.Context, request Request, options Options) (CreateResult
 		return CreateResult{}, err
 	}
 	options = completeOptions(options)
-	if options.DeliverHandoff == nil {
+	if options.DeliverHandoff == nil && options.PrepareHandoff == nil {
 		return CreateResult{}, errors.New("migration handoff delivery is unavailable")
 	}
 	token, err := options.LoadHetznerToken()
