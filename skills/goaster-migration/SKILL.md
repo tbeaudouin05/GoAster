@@ -70,6 +70,11 @@ those locations remain eligible if allowed by the request. Do
 not substitute a cheaper type, silently choose a different location, or claim
 that the GoAsterWeb availability response contains a price.
 
+The estimate repeats whether the request allows any eligible location or uses a
+strict allow-list. Public pricing is informational and best-effort; if the
+read-only provider lookup is unavailable, the tool reports unavailable pricing
+and does not authorize or block a future request.
+
 Present the returned type, strict location preference, currency, per-location
 estimate, and the fact that one provider creation sequence would occur. The
 model-facing `start` call accepts only the exact type and location request; it

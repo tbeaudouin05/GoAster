@@ -35,6 +35,8 @@ const (
 	MigrationWebOrigin            = "https://goasterweb-thomas.fly.dev"
 	DefaultProviderEndpoint       = "https://api.hetzner.cloud/v1"
 	MonitorIntervalSeconds  int64 = 30 * 60
+	PriceStatusQuoted             = "quoted"
+	PriceStatusUnavailable        = "unavailable"
 
 	webRequestMaxBytes    = 16 * 1024
 	webResponseMaxBytes   = 64 * 1024
@@ -47,8 +49,9 @@ const (
 )
 
 var (
-	errInvalidRequest = errors.New("invalid migration request")
-	errManualReview   = errors.New("migration requires manual inspection")
+	errInvalidRequest      = errors.New("invalid migration request")
+	errManualReview        = errors.New("migration requires manual inspection")
+	errLegacyPriceApproval = errors.New("legacy migration price approval fields are unsupported")
 )
 
 // Request is the non-secret migration request. The legacy approved price
@@ -91,14 +94,18 @@ type PriceLocation struct {
 
 // PriceEstimate is safe for the model and owner conversation. It is sourced
 // from the read-only provider pricing API, not from the GoAsterWeb machine API.
+// LocationPolicy and RequestedLocations preserve the exact location intent;
+// Locations contains only locations for which a current estimate is present.
 // Pricing is informational only; LowestHourlyGross is retained for decoding
 // older results but is no longer populated or used for approval.
 type PriceEstimate struct {
-	Status            string          `json:"status"`
-	ServerType        string          `json:"server_type"`
-	Currency          string          `json:"currency,omitempty"`
-	LowestHourlyGross string          `json:"lowest_hourly_gross,omitempty"`
-	Locations         []PriceLocation `json:"locations,omitempty"`
+	Status             string          `json:"status"`
+	ServerType         string          `json:"server_type"`
+	LocationPolicy     string          `json:"location_policy"`
+	RequestedLocations []string        `json:"requested_locations,omitempty"`
+	Currency           string          `json:"currency,omitempty"`
+	LowestHourlyGross  string          `json:"lowest_hourly_gross,omitempty"`
+	Locations          []PriceLocation `json:"locations,omitempty"`
 }
 
 // QuoteResult is an alias-friendly name for the public estimate result.
@@ -218,7 +225,7 @@ func availabilityWithToken(ctx context.Context, serverType string, locations []s
 // GoAster temporary task directory, and delivers that handoff directly to the
 // configured paired Telegram user. It never retries.
 func Create(ctx context.Context, request Request, options Options) (CreateResult, error) {
-	if err := validateMachineRequest(request.ServerType, request.Locations); err != nil {
+	if err := validateBillableRequest(request); err != nil {
 		return CreateResult{}, err
 	}
 	options = completeOptions(options)
@@ -236,6 +243,9 @@ func Create(ctx context.Context, request Request, options Options) (CreateResult
 }
 
 func createWithToken(ctx context.Context, request Request, token string, options Options) (CreateResult, error) {
+	if err := validateBillableRequest(request); err != nil {
+		return CreateResult{}, err
+	}
 	if options.DeliverHandoff == nil {
 		return CreateResult{}, errors.New("migration handoff delivery is unavailable")
 	}
@@ -339,6 +349,20 @@ func validateMachineRequest(serverType string, locations []string) error {
 			return errInvalidRequest
 		}
 		seen[location] = struct{}{}
+	}
+	return nil
+}
+
+func validateBillableRequest(request Request) error {
+	if err := validateMachineRequest(request.ServerType, request.Locations); err != nil {
+		return err
+	}
+	return rejectLegacyPriceApproval(request)
+}
+
+func rejectLegacyPriceApproval(request Request) error {
+	if request.ApprovedHourlyGross != "" || request.ApprovedCurrency != "" {
+		return errLegacyPriceApproval
 	}
 	return nil
 }

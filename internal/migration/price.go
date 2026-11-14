@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"goaster/internal/diagnostics"
 )
 
 const providerResponseMaxBytes = 256 * 1024
@@ -81,7 +83,8 @@ func EstimatePrice(ctx context.Context, request PriceRequest, options Options) (
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	result := PriceEstimate{ServerType: request.ServerType, Currency: pricing.Currency}
+	result := priceEstimateFor(request)
+	result.Currency = pricing.Currency
 	for _, name := range names {
 		serverGross, ok := serverPrices[name]
 		if !ok {
@@ -97,11 +100,45 @@ func EstimatePrice(ctx context.Context, request PriceRequest, options Options) (
 		result.Locations = append(result.Locations, PriceLocation{Location: name, HourlyGross: decimalString(total)})
 	}
 	if len(result.Locations) == 0 {
-		result.Status = "unavailable"
+		result.Status = PriceStatusUnavailable
 		return result, nil
 	}
-	result.Status = "quoted"
+	result.Status = PriceStatusQuoted
 	return result, nil
+}
+
+// EstimatePriceOptional performs the same bounded read-only lookup as
+// EstimatePrice, but treats provider-side pricing failure as an unavailable
+// informational estimate. Invalid caller input and cancellation remain errors.
+// The provider cause is recorded through the safe diagnostics boundary; an
+// unavailable estimate never authorizes a billable operation.
+func EstimatePriceOptional(ctx context.Context, request PriceRequest, options Options) (PriceEstimate, error) {
+	if err := validateMachineRequest(request.ServerType, request.Locations); err != nil {
+		return PriceEstimate{}, err
+	}
+	result, err := EstimatePrice(ctx, request, options)
+	if err == nil {
+		return result, nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return PriceEstimate{}, err
+	}
+	diagnostics.Error("migration.price_estimate", err)
+	unavailable := priceEstimateFor(request)
+	unavailable.Status = PriceStatusUnavailable
+	return unavailable, nil
+}
+
+func priceEstimateFor(request PriceRequest) PriceEstimate {
+	policy := LocationPolicyAnyEligible
+	if len(request.Locations) > 0 {
+		policy = LocationPolicyAllowlist
+	}
+	return PriceEstimate{
+		ServerType:         request.ServerType,
+		LocationPolicy:     policy,
+		RequestedLocations: append([]string(nil), request.Locations...),
+	}
 }
 
 // Quote is a concise compatibility name for EstimatePrice.
@@ -248,9 +285,21 @@ func providerGET(ctx context.Context, options Options, token, path string) ([]by
 	}
 	if response.StatusCode != http.StatusOK {
 		clear(body)
-		return nil, fmt.Errorf("provider returned HTTP %d", response.StatusCode)
+		return nil, providerHTTPError{Status: response.StatusCode}
 	}
 	return body, nil
+}
+
+type providerHTTPError struct {
+	Status int
+}
+
+func (err providerHTTPError) Error() string {
+	return fmt.Sprintf("provider returned HTTP %d", err.Status)
+}
+
+func (err providerHTTPError) DiagnosticFields() []diagnostics.Field {
+	return []diagnostics.Field{{Key: "status", Value: strconv.Itoa(err.Status)}}
 }
 
 func providerEndpoint(origin, path string, allowInsecure bool) (string, error) {

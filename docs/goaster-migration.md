@@ -117,10 +117,14 @@ that fragment only for the protected Telegram handoff.
 
 The source’s `estimate`/`quote` operation uses read-only provider pricing data
 to show a current public gross estimate, including public IPv4, for the exact
-type and requested locations. It may omit locations not currently available;
-those locations remain eligible if allowed by the request. This is a
-source-side estimate and is not sent to or returned by GoAsterWeb. Present the
-exact server type, strict locations, currency, per-location gross prices, and
+type and requested locations. The result repeats whether the request allows
+any eligible location or uses a strict allow-list. It may omit locations not
+currently available; those locations remain eligible if allowed by the
+request. This is a source-side estimate and is not sent to or returned by
+GoAsterWeb. Public pricing is best-effort and informational: a provider,
+credential, or pricing-response failure is reported as unavailable and does
+not authorize or block the request. Present the exact server type, strict
+locations, currency, per-location gross prices (when available), and
 one-create statement to the owner in a private conversation. Before any
 billable operation, obtain ordinary explicit approval for those terms (or the
 fact that pricing is unavailable) and exactly one create. Do not treat a group

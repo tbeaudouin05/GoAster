@@ -359,6 +359,52 @@ func TestInvalidTokenAndNoDeliveryStopBeforeCreate(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsLegacyPriceApprovalBeforeProviderCreate(t *testing.T) {
+	for _, request := range []Request{
+		{ServerType: "cx22", ApprovedHourlyGross: "0.10"},
+		{ServerType: "cx22", ApprovedCurrency: "EUR"},
+	} {
+		fixture := newMachineFixture(t)
+		options := fixture.options(t.TempDir())
+		options.DeliverHandoff = func(context.Context, []byte) error { return nil }
+		if _, err := Create(t.Context(), request, options); !errors.Is(err, errLegacyPriceApproval) {
+			t.Fatalf("legacy create request = %v; want rejection", err)
+		}
+		if fixture.creates.Load() != 0 {
+			t.Fatalf("legacy create request reached provider: %d", fixture.creates.Load())
+		}
+	}
+}
+
+func TestAvailabilityDefaultsToAnyEligibleLocation(t *testing.T) {
+	fixture := newMachineFixture(t)
+	fixture.available.Store(true)
+	result, err := Availability(t.Context(), PriceRequest{ServerType: "cx22"}, fixture.options(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Locations == nil || len(result.Locations) != 1 || result.Locations[0] != "fsn1" {
+		t.Fatalf("default availability result = %#v", result)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(fixture.requestBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := body["locations"]; present {
+		t.Fatalf("default location policy was not omitted from request: %s", fixture.requestBody)
+	}
+}
+
+func TestAvailabilityRejectsLocationOutsideStrictAllowlist(t *testing.T) {
+	fixture := newMachineFixture(t)
+	fixture.server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writeJSONStatus(writer, http.StatusOK, map[string]any{"version": "v1", "server_type": "cx22", "locations": []string{"nbg1"}})
+	})
+	if _, err := Availability(t.Context(), PriceRequest{ServerType: "cx22", Locations: []string{"fsn1"}}, fixture.options(t.TempDir())); err == nil {
+		t.Fatal("availability widened a strict location allow-list")
+	}
+}
+
 func TestPriceEstimateUsesReadOnlyProviderPricingAndStrictLocations(t *testing.T) {
 	var sawQuery atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -401,7 +447,7 @@ func TestPriceEstimateUsesReadOnlyProviderPricingAndStrictLocations(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sawQuery.Load() || result.Status != "quoted" || result.Currency != "EUR" || result.LowestHourlyGross != "" || len(result.Locations) != 2 || result.Locations[0].Location != "fsn1" || result.Locations[1].Location != "nbg1" {
+	if !sawQuery.Load() || result.Status != PriceStatusQuoted || result.ServerType != "cx22" || result.LocationPolicy != LocationPolicyAllowlist || len(result.RequestedLocations) != 2 || result.RequestedLocations[0] != "fsn1" || result.RequestedLocations[1] != "nbg1" || result.Currency != "EUR" || result.LowestHourlyGross != "" || len(result.Locations) != 2 || result.Locations[0].Location != "fsn1" || result.Locations[1].Location != "nbg1" {
 		t.Fatalf("price estimate = %#v; query = %v", result, sawQuery.Load())
 	}
 	encoded, err := json.Marshal(result)
@@ -410,5 +456,27 @@ func TestPriceEstimateUsesReadOnlyProviderPricingAndStrictLocations(t *testing.T
 	}
 	if strings.Contains(string(encoded), "lowest_hourly_gross") {
 		t.Fatalf("price estimate exposed a ranking field: %s", encoded)
+	}
+	anyLocation, err := EstimatePrice(t.Context(), PriceRequest{ServerType: "cx22"}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anyLocation.Status != PriceStatusQuoted || anyLocation.LocationPolicy != LocationPolicyAnyEligible || len(anyLocation.RequestedLocations) != 0 || len(anyLocation.Locations) != 2 {
+		t.Fatalf("any-location price estimate = %#v", anyLocation)
+	}
+}
+
+func TestOptionalPriceEstimateReportsUnavailableWithoutAuthorizingCreate(t *testing.T) {
+	options := Options{
+		ProviderEndpoint: "https://pricing.invalid/v1",
+		HTTPClient:       offlineDoer(func(*http.Request) (*http.Response, error) { return nil, errors.New("synthetic pricing outage") }),
+		LoadHetznerToken: func() (string, error) { return "synthetic-token", nil },
+	}
+	result, err := EstimatePriceOptional(t.Context(), PriceRequest{ServerType: "cx22", Locations: []string{"fsn1"}}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != PriceStatusUnavailable || result.ServerType != "cx22" || result.LocationPolicy != LocationPolicyAllowlist || len(result.RequestedLocations) != 1 || result.RequestedLocations[0] != "fsn1" || len(result.Locations) != 0 {
+		t.Fatalf("optional price estimate = %#v", result)
 	}
 }

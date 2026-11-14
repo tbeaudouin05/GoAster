@@ -59,11 +59,8 @@ func StartMonitor(ctx context.Context, request Request, options Options, jobs Mo
 	if jobs == nil {
 		return Result{}, errors.New("migration scheduler is unavailable")
 	}
-	if err := validateMachineRequest(request.ServerType, request.Locations); err != nil {
+	if err := validateBillableRequest(request); err != nil {
 		return Result{}, err
-	}
-	if request.ApprovedHourlyGross != "" || request.ApprovedCurrency != "" {
-		return Result{}, errors.New("legacy migration price approval fields are unsupported")
 	}
 	options = completeOptions(options)
 	if options.DeliverHandoff == nil {
@@ -289,8 +286,8 @@ func parseSchedulerMessage(message string) (scheduledMigration, error) {
 	if scheduled.Version != "v1" || !safeJobID(scheduled.JobID) || scheduled.Request.JobID != scheduled.JobID || validateMachineRequest(scheduled.Request.ServerType, scheduled.Request.Locations) != nil {
 		return scheduledMigration{}, errors.New("migration scheduler message is invalid")
 	}
-	if scheduled.Request.ApprovedHourlyGross != "" || scheduled.Request.ApprovedCurrency != "" {
-		return scheduledMigration{}, errors.New("legacy migration price approval fields are unsupported")
+	if err := rejectLegacyPriceApproval(scheduled.Request); err != nil {
+		return scheduledMigration{}, err
 	}
 	return scheduled, nil
 }

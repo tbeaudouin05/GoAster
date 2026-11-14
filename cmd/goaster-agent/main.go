@@ -241,7 +241,7 @@ type migrationSchedulerRuntime interface {
 func migrationOperations(options migration.Options, jobs migrationSchedulerRuntime, ready bool) chat.MigrationToolOperations {
 	return chat.MigrationToolOperations{
 		Estimate: func(ctx context.Context, request migration.PriceRequest) (migration.PriceEstimate, error) {
-			return migration.EstimatePrice(ctx, request, options)
+			return migration.EstimatePriceOptional(ctx, request, options)
 		},
 		Availability: func(ctx context.Context, request migration.PriceRequest) (migration.AvailabilityResult, error) {
 			return migration.Availability(ctx, request, options)

@@ -38,6 +38,7 @@ func TestMigrationToolKeepsSecretsAndModelApprovalOutOfSchema(t *testing.T) {
 	}
 	for _, required := range []string{
 		"may omit locations not currently available",
+		"Pricing is informational only",
 		"ordinary explicit user approval",
 		"private conversation",
 		"not a trusted cryptographic binding",
