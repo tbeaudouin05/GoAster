@@ -145,7 +145,7 @@ func TestAvailabilityUsesOnlyTheV1ContractAndNoOriginHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Version != "v1" || result.ServerType != "cx22" || len(result.Locations) != 0 || fixture.availability.Load() != 1 {
+	if result.Version != "v1" || result.ServerType != "cx22" || result.LocationPolicy != LocationPolicyAllowlist || len(result.RequestedLocations) != 2 || result.RequestedLocations[0] != "fsn1" || result.RequestedLocations[1] != "nbg1" || len(result.Locations) != 0 || fixture.availability.Load() != 1 {
 		t.Fatalf("availability result = %#v; calls = %d", result, fixture.availability.Load())
 	}
 	var body map[string]json.RawMessage
@@ -383,7 +383,7 @@ func TestAvailabilityDefaultsToAnyEligibleLocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Locations == nil || len(result.Locations) != 1 || result.Locations[0] != "fsn1" {
+	if result.Locations == nil || len(result.Locations) != 1 || result.Locations[0] != "fsn1" || result.LocationPolicy != LocationPolicyAnyEligible || len(result.RequestedLocations) != 0 {
 		t.Fatalf("default availability result = %#v", result)
 	}
 	var body map[string]json.RawMessage
@@ -402,6 +402,19 @@ func TestAvailabilityRejectsLocationOutsideStrictAllowlist(t *testing.T) {
 	})
 	if _, err := Availability(t.Context(), PriceRequest{ServerType: "cx22", Locations: []string{"fsn1"}}, fixture.options(t.TempDir())); err == nil {
 		t.Fatal("availability widened a strict location allow-list")
+	}
+}
+
+func TestAvailabilityDoesNotAcceptSourceOnlyPolicyFieldsFromWeb(t *testing.T) {
+	fixture := newMachineFixture(t)
+	fixture.server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writeJSONStatus(writer, http.StatusOK, map[string]any{
+			"version": "v1", "server_type": "cx22", "locations": []string{},
+			"location_policy": LocationPolicyAllowlist,
+		})
+	})
+	if _, err := Availability(t.Context(), PriceRequest{ServerType: "cx22", Locations: []string{"fsn1"}}, fixture.options(t.TempDir())); err == nil {
+		t.Fatal("availability accepted source-only policy fields from the Web response")
 	}
 }
 

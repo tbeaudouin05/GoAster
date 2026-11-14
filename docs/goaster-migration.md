@@ -92,6 +92,12 @@ allow-list and is never widened by the source. The v1 response contains only
 `version`, `server_type`, and eligible `locations`; it never contains a price.
 GoAsterWeb does not call Hetzner pricing for this endpoint.
 
+The model-facing read-only `availability` result adds the source-side
+`location_policy` (`any_eligible` when the request omits locations, otherwise
+`allowlist`) and the exact `requested_locations` when present. These fields
+are presentation metadata; they are not accepted from or sent to GoAsterWeb,
+and the result contains no price, cap, approval, or credential fields.
+
 Creation adds the locally generated authorized-key public value and the
 lower-case SHA-256 hex digest of the locally generated 32-byte unpadded
 base64url owner secret:

@@ -24,7 +24,18 @@ func TestMigrationToolKeepsSecretsAndModelApprovalOutOfSchema(t *testing.T) {
 	registrar := &migrationToolTestRegistrar{}
 	var starts atomic.Int32
 	var received migration.Request
+	var availabilityRequest migration.PriceRequest
 	if err := RegisterMigrationTool(registrar, MigrationToolOperations{
+		Availability: func(_ context.Context, request migration.PriceRequest) (migration.AvailabilityResult, error) {
+			availabilityRequest = request
+			return migration.AvailabilityResult{
+				Version:            "v1",
+				ServerType:         request.ServerType,
+				LocationPolicy:     migration.LocationPolicyAllowlist,
+				RequestedLocations: append([]string(nil), request.Locations...),
+				Locations:          []string{"fsn1"},
+			}, nil
+		},
 		Start: func(_ context.Context, request migration.Request) (migration.Result, error) {
 			starts.Add(1)
 			received = request
@@ -38,6 +49,8 @@ func TestMigrationToolKeepsSecretsAndModelApprovalOutOfSchema(t *testing.T) {
 	}
 	for _, required := range []string{
 		"may omit locations not currently available",
+		"read-only",
+		"repeats the requested location policy",
 		"Pricing is informational only",
 		"ordinary explicit user approval",
 		"private conversation",
@@ -86,6 +99,13 @@ func TestMigrationToolKeepsSecretsAndModelApprovalOutOfSchema(t *testing.T) {
 	}
 	if received.ServerType != "cx22" || received.ApprovedHourlyGross != "" || received.ApprovedCurrency != "" || received.JobID != "" {
 		t.Fatalf("model-controlled approval fields reached start operation: %#v", received)
+	}
+	result, err = registrar.tool.Handler(context.Background(), `{"action":"availability","server_type":"cx22","locations":["fsn1"]}`)
+	if err != nil || !strings.Contains(result, `"location_policy":"allowlist"`) || !strings.Contains(result, `"requested_locations":["fsn1"]`) {
+		t.Fatalf("availability action = %q, %v", result, err)
+	}
+	if availabilityRequest.ServerType != "cx22" || len(availabilityRequest.Locations) != 1 || availabilityRequest.Locations[0] != "fsn1" {
+		t.Fatalf("availability request = %#v", availabilityRequest)
 	}
 }
 

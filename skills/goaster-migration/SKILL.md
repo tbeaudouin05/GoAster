@@ -51,6 +51,11 @@ type. A non-empty list is never widened. GoAsterWeb returns only `version`,
 `server_type`, and eligible `locations`; this endpoint does not return prices
 and does not call the Hetzner pricing API.
 
+Use the read-only `availability` action when a current eligibility check is
+needed. Its source-side result repeats the exact location policy and requested
+locations for presentation, while keeping those fields out of the Web wire
+contract. It contains no price cap, approval, credential, or private material.
+
 Creation sends only the authorized-key public value, the lower-case SHA-256
 owner-secret digest of the locally generated 32-byte owner secret, the exact server
 type/location request, and the request-scoped token. It does not send the

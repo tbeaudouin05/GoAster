@@ -130,13 +130,9 @@ func EstimatePriceOptional(ctx context.Context, request PriceRequest, options Op
 }
 
 func priceEstimateFor(request PriceRequest) PriceEstimate {
-	policy := LocationPolicyAnyEligible
-	if len(request.Locations) > 0 {
-		policy = LocationPolicyAllowlist
-	}
 	return PriceEstimate{
 		ServerType:         request.ServerType,
-		LocationPolicy:     policy,
+		LocationPolicy:     locationPolicyFor(request.Locations),
 		RequestedLocations: append([]string(nil), request.Locations...),
 	}
 }

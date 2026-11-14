@@ -34,7 +34,7 @@ func RegisterMigrationTool(registrar ToolRegistrar, operations MigrationToolOper
 	}
 	return registrar.RegisterTool(Tool{
 		Name:        migrationToolName,
-		Description: "Estimate the current public gross price, when available, for an exact Hetzner server type and optional location allow-list. Pricing is informational only; an unavailable estimate does not authorize or block a future operation. Estimates may omit locations not currently available, which remain eligible if allowed. Before any future billable operation, obtain ordinary explicit user approval for the exact terms in a private conversation. Conversational approval is not a trusted cryptographic binding, and migration execution is currently disabled. No provider token, private key, or owner link is accepted or returned here.",
+		Description: "Estimate the current public gross price, when available, or inspect current eligible locations for an exact Hetzner server type and optional strict location allow-list. Availability is read-only and repeats the requested location policy. Pricing is informational only; an unavailable estimate does not authorize or block a future operation. Estimates may omit locations not currently available, which remain eligible if allowed. Before any future billable operation, obtain ordinary explicit user approval for the exact terms in a private conversation. Conversational approval is not a trusted cryptographic binding, and migration execution is currently disabled. No provider token, private key, or owner link is accepted or returned here.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

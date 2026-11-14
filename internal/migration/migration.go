@@ -68,11 +68,16 @@ type Request struct {
 }
 
 // AvailabilityResult contains only public availability information returned by
-// GoAsterWeb. It never contains prices or credentials.
+// GoAsterWeb plus the source-side location intent used for presentation. The
+// location policy fields are not part of the GoAsterWeb v1 response or
+// request; they make the exact optional-location choice explicit to callers.
+// It never contains prices or credentials.
 type AvailabilityResult struct {
-	Version    string   `json:"version"`
-	ServerType string   `json:"server_type"`
-	Locations  []string `json:"locations"`
+	Version            string   `json:"version"`
+	ServerType         string   `json:"server_type"`
+	LocationPolicy     string   `json:"location_policy"`
+	RequestedLocations []string `json:"requested_locations,omitempty"`
+	Locations          []string `json:"locations"`
 }
 
 // PriceRequest identifies the exact server type and optional strict location
@@ -143,6 +148,12 @@ type httpDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+type availabilityResponse struct {
+	Version    string   `json:"version"`
+	ServerType string   `json:"server_type"`
+	Locations  []string `json:"locations"`
+}
+
 // Options contains test seams and the protected handoff delivery callback.
 // Production callers should use DefaultOptions and replace only the delivery
 // callback. TempDirectory is a pre-created private task directory for tests;
@@ -209,9 +220,16 @@ func availabilityWithToken(ctx context.Context, serverType string, locations []s
 	defer clear(body)
 	// A sentinel distinguishes a required missing field from a valid empty
 	// array after JSON decoding. A JSON null is rejected by the same check.
-	result := AvailabilityResult{Locations: []string{"\x00missing"}}
-	if err := webJSON(ctx, options, "/migration/v1/machines/availability", body, http.StatusOK, &result); err != nil {
+	response := availabilityResponse{Locations: []string{"\x00missing"}}
+	if err := webJSON(ctx, options, "/migration/v1/machines/availability", body, http.StatusOK, &response); err != nil {
 		return AvailabilityResult{}, fmt.Errorf("migration availability request: %w", err)
+	}
+	result := AvailabilityResult{
+		Version:            response.Version,
+		ServerType:         response.ServerType,
+		LocationPolicy:     locationPolicyFor(locations),
+		RequestedLocations: append([]string(nil), locations...),
+		Locations:          response.Locations,
 	}
 	if err := validateAvailabilityResult(result, serverType, locations); err != nil {
 		return AvailabilityResult{}, fmt.Errorf("migration availability response: %w", err)
@@ -351,6 +369,13 @@ func validateMachineRequest(serverType string, locations []string) error {
 		seen[location] = struct{}{}
 	}
 	return nil
+}
+
+func locationPolicyFor(locations []string) string {
+	if len(locations) == 0 {
+		return LocationPolicyAnyEligible
+	}
+	return LocationPolicyAllowlist
 }
 
 func validateBillableRequest(request Request) error {
