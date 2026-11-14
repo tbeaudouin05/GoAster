@@ -1,11 +1,6 @@
 # GoAster central migration
 
-**Migration execution is currently disabled:** read-only estimates and
-availability checks may be inspected, but monitor startup, provider creation,
-and automatic monitor resumption are disabled. Before any future billable
-operation, require ordinary explicit user approval in a private conversation.
-That conversational approval is not a trusted cryptographic binding or a
-substitute for a future trusted authorization design.
+Migration execution and scheduler resumption are disabled pending full cross-service acceptance. Read-only estimates and availability remain available. Before any future billable operation, obtain ordinary explicit approval in a private conversation; no separate approval record is required. Conversational approval is not a trusted cryptographic binding.
 
 Use the source-side `goaster_migration` tool to inspect one proposed migration
 against the existing GoAsterWeb service. The GoAster source implementation owns
@@ -95,14 +90,14 @@ or dedicated approval record. Ordinary conversational approval is a workflow
 requirement only; it does not provide a trusted cryptographic binding between
 the user, the terms, and the future provider request.
 
-The current runtime is disabled, so an approval in conversation cannot start
-the monitor or provider create path. Do not retry `start` expecting a billable
-operation until a future release explicitly enables execution with a trusted
-authorization design.
+The runtime relies on that private-conversation workflow; it does not accept
+or create a separate approval mechanism. When execution is enabled after acceptance, call `start` only after the owner has
+approved the exact terms conversationally. The source preflights the protected
+paired-Telegram delivery path before the create request.
 
-## Monitor and one create (future execution only)
+## Monitor and one create
 
-After the required future authorization gate, the source checks availability
+After the required conversational approval, the source checks availability
 immediately. If no eligible
 location is returned, it leaves one non-secret scheduler job enabled at
 exactly 30-minute intervals. The token is loaded only when a check runs; it is

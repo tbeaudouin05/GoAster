@@ -55,7 +55,7 @@ func TestMigrationToolKeepsSecretsAndModelApprovalOutOfSchema(t *testing.T) {
 		"ordinary explicit user approval",
 		"private conversation",
 		"not a trusted cryptographic binding",
-		"migration execution is currently disabled",
+		"not recorded by a separate approval mechanism",
 	} {
 		if !strings.Contains(registrar.tool.Description, required) {
 			t.Fatalf("tool description missing %q: %s", required, registrar.tool.Description)
@@ -81,19 +81,19 @@ func TestMigrationToolKeepsSecretsAndModelApprovalOutOfSchema(t *testing.T) {
 		}
 	}
 
-	result, err := registrar.tool.Handler(context.Background(), `{"action":"start","server_type":"cx22","approved":true}`)
+	result, err := registrar.tool.Handler(WithConversationType(context.Background(), "private"), `{"action":"start","server_type":"cx22","approved":true}`)
 	if err != nil || !strings.Contains(result, `"rejected"`) || starts.Load() != 0 {
 		t.Fatalf("model approval forgery = %q, %v; starts=%d", result, err, starts.Load())
 	}
-	result, err = registrar.tool.Handler(context.Background(), `{"action":"start","server_type":"cx22","approved_hourly_gross":"0.10","approved_currency":"EUR","approved":true,"hetzner_token":"secret"}`)
+	result, err = registrar.tool.Handler(WithConversationType(context.Background(), "private"), `{"action":"start","server_type":"cx22","approved_hourly_gross":"0.10","approved_currency":"EUR","approved":true,"hetzner_token":"secret"}`)
 	if err != nil || !strings.Contains(result, `"rejected"`) || starts.Load() != 0 {
 		t.Fatalf("secret-bearing or model-approved start = %q, %v; starts=%d", result, err, starts.Load())
 	}
-	result, err = registrar.tool.Handler(context.Background(), `{"action":"start","server_type":"cx22","job_id":"migration-forged"}`)
+	result, err = registrar.tool.Handler(WithConversationType(context.Background(), "private"), `{"action":"start","server_type":"cx22","job_id":"migration-forged"}`)
 	if err != nil || !strings.Contains(result, `"rejected"`) || starts.Load() != 0 {
 		t.Fatalf("model-selected monitor ID = %q, %v; starts=%d", result, err, starts.Load())
 	}
-	result, err = registrar.tool.Handler(context.Background(), `{"action":"start","server_type":"cx22"}`)
+	result, err = registrar.tool.Handler(WithConversationType(context.Background(), "private"), `{"action":"start","server_type":"cx22"}`)
 	if err != nil || !strings.Contains(result, `"created"`) || starts.Load() != 1 {
 		t.Fatalf("trusted start delegation = %q, %v; starts=%d", result, err, starts.Load())
 	}
@@ -116,8 +116,20 @@ func TestMigrationToolReportsUnconfirmedStop(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := registrar.tool.Handler(context.Background(), `{"action":"start","server_type":"cx22"}`)
+	result, err := registrar.tool.Handler(WithConversationType(context.Background(), "private"), `{"action":"start","server_type":"cx22"}`)
 	if err != nil || !strings.Contains(result, `"stop_unconfirmed"`) || !strings.Contains(result, `"migration-test"`) {
 		t.Fatalf("result = %s, %v", result, err)
 	}
+	calls := 0
+	ops := MigrationToolOperations{Start: func(context.Context, migration.Request) (migration.Result, error) {
+		calls++
+		return migration.Result{}, nil
+	}}
+	for _, kind := range []string{"", "group", "supergroup", "forged"} {
+		result, err := executeMigrationTool(WithConversationType(context.Background(), kind), `{"action":"start","server_type":"cx22"}`, ops)
+		if err != nil || !strings.Contains(result, `"rejected"`) || calls != 0 {
+			t.Fatalf("kind %q: %s %v calls=%d", kind, result, err, calls)
+		}
+	}
+
 }

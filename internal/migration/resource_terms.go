@@ -91,7 +91,7 @@ type BillableCreateAcknowledgement struct {
 // ResourceTerms is the versioned local representation of all non-price
 // resource terms that can currently be carried safely without asserting a Web
 // contract. It is deliberately not used by the current v1 Web requests,
-// scheduler message, model tool schema, or disabled runtime.
+// scheduler message, model tool schema, or migration runtime.
 type ResourceTerms struct {
 	Version        string                        `json:"version"`
 	ServerType     ServerTypeTerms               `json:"server_type"`

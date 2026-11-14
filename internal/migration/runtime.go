@@ -2,8 +2,6 @@ package migration
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,15 +61,9 @@ func StartMonitor(ctx context.Context, request Request, options Options, jobs Mo
 		return Result{}, err
 	}
 	options = completeOptions(options)
-	if options.DeliverHandoff == nil {
-		return Result{}, errors.New("migration handoff delivery is unavailable")
-	}
 	if request.JobID == "" {
-		jobID, err := newJobID()
-		if err != nil {
-			return Result{}, err
-		}
-		request.JobID = jobID
+		// A single durable slot makes repeated model start calls converge.
+		request.JobID = "migration-singleton"
 	}
 	if !safeJobID(request.JobID) {
 		return Result{}, errors.New("migration monitor ID is invalid")
@@ -92,6 +84,12 @@ func StartMonitor(ctx context.Context, request Request, options Options, jobs Mo
 			return Result{Status: "monitoring", ServerType: request.ServerType, MonitorID: request.JobID}, nil
 		}
 		return Result{Status: "manual_review", ServerType: request.ServerType, MonitorID: request.JobID, ManualReview: true}, nil
+	}
+	if options.DeliverHandoff == nil && options.PrepareHandoff == nil {
+		return Result{}, errors.New("migration handoff delivery is unavailable")
+	}
+	if err := checkHandoffDelivery(options); err != nil {
+		return Result{Status: "manual_review", ServerType: request.ServerType, ManualReview: true}, errors.Join(errManualReview, err)
 	}
 	coordinator, err := monitorExecutionCoordinatorFor(jobs)
 	if err != nil {
@@ -156,8 +154,8 @@ func executeMonitor(ctx context.Context, request Request, options Options, coord
 			}
 		}()
 	}
-	if options.DeliverHandoff == nil {
-		return Result{Status: "manual_review", ServerType: request.ServerType, ManualReview: true}, errors.New("migration handoff delivery is unavailable")
+	if err := checkHandoffDelivery(options); err != nil {
+		return Result{Status: "manual_review", ServerType: request.ServerType, ManualReview: true}, errors.Join(errManualReview, err)
 	}
 	token, err := options.LoadHetznerToken()
 	if err != nil {
@@ -186,26 +184,30 @@ func executeMonitor(ctx context.Context, request Request, options Options, coord
 // read-only unavailable result keeps the job enabled; every other result or
 // error leaves it disabled and requires manual review.
 func ScheduledExecutor(ctx context.Context, message string, jobs MonitorScheduler, options Options) error {
+	review := func(cause error) error {
+		diagnostics.Error("migration.monitor.scheduled", cause, diagnostics.Field{Key: "reason", Value: "migration monitor requires manual review"})
+		return scheduler.ReviewRequiredError{Message: "migration monitor requires manual review", Cause: cause}
+	}
 	if jobs == nil {
-		return scheduler.ReviewRequiredError{Message: "migration monitor requires manual review", Cause: errors.New("migration scheduler is unavailable")}
+		return review(errors.New("migration scheduler is unavailable"))
 	}
 	scheduled, err := parseSchedulerMessage(message)
 	if err != nil {
-		return scheduler.ReviewRequiredError{Message: "migration monitor requires manual review", Cause: err}
+		return review(err)
 	}
 	job, ok := jobs.Get(scheduled.JobID)
 	if !ok || !job.Enabled || job.ReviewRequired || job.Message != message || job.Kind != scheduler.ScheduleEvery || job.EverySeconds != MonitorIntervalSeconds {
-		return scheduler.ReviewRequiredError{Message: "migration monitor requires manual review", Cause: errors.New("migration scheduler job is not the approved monitor")}
+		return review(errors.New("migration scheduler job is not the approved monitor"))
 	}
 	coordinator, err := monitorExecutionCoordinatorFor(jobs)
 	if err != nil {
-		return scheduler.ReviewRequiredError{Message: "migration monitor requires manual review", Cause: err}
+		return review(err)
 	}
 	runOptions := completeOptions(options)
 	result, runErr := executeMonitor(ctx, scheduled.Request, runOptions, coordinator, scheduled.JobID)
 	if runErr != nil {
 		disableErr := stopAndVerifyMonitor(coordinator, scheduled.JobID)
-		return scheduler.ReviewRequiredError{Message: "migration monitor requires manual review", Cause: errors.Join(runErr, disableErr)}
+		return review(errors.Join(runErr, disableErr))
 	}
 	if result.Status == "monitoring" {
 		return scheduler.ErrRetry
@@ -290,14 +292,6 @@ func parseSchedulerMessage(message string) (scheduledMigration, error) {
 		return scheduledMigration{}, err
 	}
 	return scheduled, nil
-}
-
-func newJobID() (string, error) {
-	var random [8]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return "", fmt.Errorf("generate migration monitor ID: %w", err)
-	}
-	return "migration-" + hex.EncodeToString(random[:]), nil
 }
 
 func safeJobID(value string) bool {

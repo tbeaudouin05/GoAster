@@ -154,20 +154,24 @@ type availabilityResponse struct {
 	Locations  []string `json:"locations"`
 }
 
-// Options contains test seams and the protected handoff delivery callback.
-// Production callers should use DefaultOptions and replace only the delivery
-// callback. TempDirectory is a pre-created private task directory for tests;
-// production leaves it empty so the GoAster temporary policy is resolved here.
+// Options contains test seams, the protected handoff delivery callback, and an
+// optional local preflight for that delivery path. Production callers should
+// use DefaultOptions and provide both callbacks from the paired Telegram
+// implementation. TempDirectory is a pre-created private task directory for
+// tests; production leaves it empty so the GoAster temporary policy is
+// resolved here.
 type Options struct {
-	WebOrigin         string
-	ProviderEndpoint  string
-	HTTPClient        httpDoer
-	Now               func() time.Time
-	LoadHetznerToken  func() (string, error)
-	DeliverHandoff    func(context.Context, []byte) error
-	DisableMonitor    func() error
-	TempDirectory     string
-	AllowInsecureHTTP bool
+	WebOrigin            string
+	ProviderEndpoint     string
+	HTTPClient           httpDoer
+	Now                  func() time.Time
+	LoadHetznerToken     func() (string, error)
+	PrepareHandoff       func() (func(context.Context, []byte) error, error)
+	CheckHandoffDelivery func() error
+	DeliverHandoff       func(context.Context, []byte) error
+	DisableMonitor       func() error
+	TempDirectory        string
+	AllowInsecureHTTP    bool
 }
 
 // DefaultOptions returns fixed HTTPS endpoints and a client that neither uses
@@ -260,12 +264,33 @@ func Create(ctx context.Context, request Request, options Options) (CreateResult
 	return createWithToken(ctx, request, token, options)
 }
 
+func checkHandoffDelivery(options Options) error {
+	if options.DeliverHandoff == nil && options.PrepareHandoff == nil {
+		return errors.New("migration handoff delivery is unavailable")
+	}
+	if options.CheckHandoffDelivery == nil {
+		return nil
+	}
+	if err := options.CheckHandoffDelivery(); err != nil {
+		return fmt.Errorf("check migration handoff delivery: %w", err)
+	}
+	return nil
+}
+
 func createWithToken(ctx context.Context, request Request, token string, options Options) (CreateResult, error) {
 	if err := validateBillableRequest(request); err != nil {
 		return CreateResult{}, err
 	}
-	if options.DeliverHandoff == nil {
-		return CreateResult{}, errors.New("migration handoff delivery is unavailable")
+	if err := checkHandoffDelivery(options); err != nil {
+		return CreateResult{Status: "manual_review", ServerType: request.ServerType, ManualReview: true}, errors.Join(errManualReview, err)
+	}
+	deliver := options.DeliverHandoff
+	if options.PrepareHandoff != nil {
+		var err error
+		deliver, err = options.PrepareHandoff()
+		if err != nil || deliver == nil {
+			return CreateResult{Status: "manual_review", ServerType: request.ServerType, ManualReview: true}, errors.Join(errManualReview, errors.New("prepare migration handoff delivery"), err)
+		}
 	}
 	publicKey, privateKey, ownerSecret, ownerDigest, err := generateLoginMaterial()
 	if err != nil {
@@ -321,10 +346,10 @@ func createWithToken(ctx context.Context, request Request, token string, options
 		return CreateResult{Status: "manual_review", ServerType: request.ServerType, Attempt: response.Attempt, ServerID: response.ServerID, IP: response.IP, Expires: response.Expires, ManualReview: true, TaskDirectory: taskDirectory}, errors.Join(errManualReview, fmt.Errorf("store migration handoff: %w", err))
 	}
 	defer clear(handoff)
-	if options.DeliverHandoff == nil {
+	if deliver == nil {
 		return CreateResult{Status: "manual_review", ServerType: request.ServerType, Attempt: response.Attempt, ServerID: response.ServerID, IP: response.IP, Expires: response.Expires, ManualReview: true, TaskDirectory: taskDirectory, HandoffPath: handoffPath}, errors.Join(errManualReview, errors.New("migration handoff delivery is unavailable"))
 	}
-	if err := options.DeliverHandoff(ctx, handoff); err != nil {
+	if err := deliver(ctx, handoff); err != nil {
 		return CreateResult{Status: "manual_review", ServerType: request.ServerType, Attempt: response.Attempt, ServerID: response.ServerID, IP: response.IP, Expires: response.Expires, ManualReview: true, TaskDirectory: taskDirectory, HandoffPath: handoffPath}, errors.Join(errManualReview, fmt.Errorf("deliver migration handoff: %w", err))
 	}
 	return CreateResult{

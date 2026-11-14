@@ -13,6 +13,18 @@ import (
 
 const migrationToolName = "goaster_migration"
 
+type conversationTypeKey struct{}
+
+// WithConversationType carries transport-provided conversation context.
+func WithConversationType(ctx context.Context, kind string) context.Context {
+	switch kind {
+	case "private", "group", "supergroup":
+	default:
+		kind = "unknown"
+	}
+	return context.WithValue(ctx, conversationTypeKey{}, kind)
+}
+
 // MigrationToolOperations keeps the model-facing control plane separate from
 // the privileged migration executor. No operation accepts a token, key,
 // owner URL, chat ID, or callback secret.
@@ -26,15 +38,15 @@ type MigrationToolOperations struct {
 }
 
 // RegisterMigrationTool exposes the source-side migration control plane. The
-// handoff itself is delivered directly by the paired Telegram implementation
-// after a future execution path is explicitly enabled.
+// handoff is delivered directly by the paired Telegram implementation after
+// ordinary explicit approval in a private conversation.
 func RegisterMigrationTool(registrar ToolRegistrar, operations MigrationToolOperations) error {
 	if registrar == nil {
 		return errors.New("migration tool registrar is nil")
 	}
 	return registrar.RegisterTool(Tool{
 		Name:        migrationToolName,
-		Description: "Estimate the current public gross price, when available, or inspect current eligible locations for an exact Hetzner server type and optional strict location allow-list. Availability is read-only and repeats the requested location policy. Pricing is informational only; an unavailable estimate does not authorize or block a future operation. Estimates may omit locations not currently available, which remain eligible if allowed. Before any future billable operation, obtain ordinary explicit user approval for the exact terms in a private conversation. Conversational approval is not a trusted cryptographic binding, and migration execution is currently disabled. No provider token, private key, or owner link is accepted or returned here.",
+		Description: "Estimate the current public gross price, when available, or inspect current eligible locations for an exact Hetzner server type and optional strict location allow-list. Availability is read-only and repeats the requested location policy. Pricing is informational only; an unavailable estimate does not authorize or block a billable operation. Estimates may omit locations not currently available, which remain eligible if allowed. Migration execution is disabled pending cross-service acceptance. Before any future billable operation, obtain ordinary explicit user approval for the exact terms in a private conversation. Conversational approval is not a trusted cryptographic binding and is not recorded by a separate approval mechanism. No provider token, private key, or owner link is accepted or returned here.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -53,7 +65,7 @@ func RegisterMigrationTool(registrar ToolRegistrar, operations MigrationToolOper
 				},
 				"job_id": map[string]any{
 					"type":        "string",
-					"description": "Non-secret monitor ID for status or stop only; start is currently disabled",
+					"description": "Non-secret monitor ID for status or stop only; start generates its own monitor ID",
 				},
 			},
 			"required":             []string{"action"},
@@ -105,6 +117,9 @@ func executeMigrationTool(ctx context.Context, arguments string, operations Migr
 		}
 		return encodeMigrationToolResult(result)
 	case "start":
+		if kind, _ := ctx.Value(conversationTypeKey{}).(string); kind != "private" {
+			return migrationToolRejected(errors.New("migration start requires a private conversation")), nil
+		}
 		if operations.Start == nil {
 			return migrationToolUnavailable(errors.New("migration start capability is unavailable")), nil
 		}

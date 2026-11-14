@@ -3,6 +3,7 @@ package telegram
 import (
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,7 +34,14 @@ func TestMigrationHandoffUsesOnlyStoredPairedUser(t *testing.T) {
 		}, nil
 	})
 	data := []byte("GoAster migration setup: https://web.example/migration#attempt=abc&owner=secret\nprivate key material")
-	if err := sendMigrationHandoffWith(t.Context(), paths, client, "https://telegram.synthetic", data); err != nil {
+	deliver, err := prepareMigrationHandoffWith(paths, client, "https://telegram.synthetic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.UserID, []byte("99"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := deliver(t.Context(), data); err != nil {
 		t.Fatal(err)
 	}
 	if requestPath != "/bot"+testToken+"/sendDocument" {
@@ -43,7 +51,7 @@ func TestMigrationHandoffUsesOnlyStoredPairedUser(t *testing.T) {
 	if !strings.Contains(bodyText, "name=\"chat_id\"") || !strings.Contains(bodyText, "42") || !strings.Contains(bodyText, "private key material") {
 		t.Fatalf("paired-user document body = %q", bodyText)
 	}
-	if strings.Contains(bodyText, "-100") || strings.Contains(bodyText, "model-supplied") {
+	if strings.Contains(bodyText, "\r\n\r\n99\r\n") || strings.Contains(bodyText, "-100") || strings.Contains(bodyText, "model-supplied") {
 		t.Fatalf("document delivery leaked a group or model destination: %q", bodyText)
 	}
 }

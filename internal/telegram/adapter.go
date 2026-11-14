@@ -908,7 +908,7 @@ func (a *adapter) handle(ctx context.Context, m *message) {
 		sendFinal("The Telegram attachment could not be downloaded safely.")
 		return
 	}
-	reply, err := a.askAgent(ctx, text, m.Chat.ID, attachments, showToolCall)
+	reply, err := a.askAgent(context.WithValue(ctx, agentChatTypeKey{}, m.Chat.Type), text, m.Chat.ID, attachments, showToolCall)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -1121,6 +1121,8 @@ func (a *adapter) askAgent(ctx context.Context, text string, chatID int64, attac
 	return askAgentWithUser(ctx, text, chatID, 0, attachments, onToolCall, a.agent, a.controlSecret)
 }
 
+type agentChatTypeKey struct{}
+
 func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, attachments []attachment.Incoming, onToolCall func(string, string), agent httpDoer, controlSecret string) (string, error) {
 	if agent == nil {
 		return "", telegramAgentFailure(errors.New("remote agent client is unavailable"), "", 0, "")
@@ -1128,9 +1130,10 @@ func askAgentWithUser(ctx context.Context, text string, chatID, userID int64, at
 	body, err := json.Marshal(struct {
 		Message     string                `json:"message"`
 		ChatID      int64                 `json:"chat_id"`
+		ChatType    string                `json:"chat_type,omitempty"`
 		UserID      int64                 `json:"user_id,omitempty"`
 		Attachments []attachment.Incoming `json:"attachments,omitempty"`
-	}{Message: text, ChatID: chatID, UserID: userID, Attachments: attachments})
+	}{Message: text, ChatID: chatID, ChatType: agentChatType(ctx), UserID: userID, Attachments: attachments})
 	if err != nil {
 		return "", telegramAgentFailure(fmt.Errorf("encode agent request: %w", err), "", 0, "")
 	}
@@ -1503,4 +1506,14 @@ func telegramFileURL(apiBase, token, filePath string) (string, error) {
 		return "", fmt.Errorf("invalid Telegram file path")
 	}
 	return strings.TrimRight(apiBase, "/") + "/file/bot" + token + "/" + filePath, nil
+}
+
+func agentChatType(ctx context.Context) string {
+	kind, _ := ctx.Value(agentChatTypeKey{}).(string)
+	switch kind {
+	case "private", "group", "supergroup":
+		return kind
+	default:
+		return ""
+	}
 }

@@ -1206,11 +1206,15 @@ func TestToolFeedbackTruncatesArgumentsByRune(t *testing.T) {
 }
 
 func TestAgentRejectsUntypedLegacyResponse(t *testing.T) {
-	a := &adapter{agent: doerFunc(func(*http.Request) (*http.Response, error) {
+	a := &adapter{agent: doerFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil || !strings.Contains(string(body), `"chat_type":"group"`) {
+			t.Fatalf("conversation type missing from request: %v", err)
+		}
 		return response(http.StatusOK, `{"reply":"legacy reply"}`), nil
 	})}
 
-	reply, err := a.askAgent(context.Background(), "hello", 42, nil, nil)
+	reply, err := a.askAgent(context.WithValue(context.Background(), agentChatTypeKey{}, "group"), "hello", 42, nil, nil)
 	if err == nil || reply != "" {
 		t.Fatalf("untyped legacy response = %q, %v; want an error with no reply", reply, err)
 	}

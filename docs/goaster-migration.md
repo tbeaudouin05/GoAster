@@ -1,10 +1,6 @@
 # GoAster central migration
 
-**Migration execution is currently disabled:** read-only estimates and
-availability checks may be inspected, but monitor startup, provider creation,
-and automatic monitor resumption are disabled. Before any future billable
-operation, require ordinary explicit user approval in a private conversation.
-That conversational approval is not a trusted cryptographic binding.
+Migration execution and scheduler resumption are disabled pending full cross-service acceptance. Read-only estimates and availability remain available. Ordinary explicit approval in a private conversation is required before any future billable operation; there is no separate approval record.
 
 GoAster implements the source side of the versioned central migration machine
 API. It uses the existing scheduler and paired Telegram delivery path; it does
@@ -20,9 +16,8 @@ The source workflow is deliberately small:
 3. Before any billable operation, the owner gives ordinary explicit approval
    for the exact terms in that private conversation. This is a conversational
    workflow requirement, not a trusted cryptographic binding.
-4. If a future trusted authorization design enables execution, GoAster checks
-   central availability immediately and schedules the same check every 30
-   minutes while no eligible location exists.
+4. GoAster checks central availability immediately and schedules the same check
+   every 30 minutes while no eligible location exists.
 5. When availability is returned, GoAster disables and verifies the exact
    monitor, generates the login key and owner-link secret locally, and sends
    exactly one creation request.
@@ -31,9 +26,7 @@ The source workflow is deliberately small:
    private key directly to the locally paired Telegram user. The model sees
    only safe status and provider identity fields.
 
-The current runtime stops before the future execution steps above. The
-monitor, create-once, stop, and uncertain-outcome safeguards remain documented
-requirements for any later enabled implementation.
+The scheduler and creation workflow below describe intended behavior, not enabled runtime behavior. Scheduler state is model-writable and must not be trusted as authority to create. A trusted execution boundary and cross-service acceptance are required before enabling it.
 
 The task directory and handoff are intentionally retained for the owner’s
 manual cleanup. There is no automatic cleanup implementation.
@@ -56,9 +49,9 @@ contract must explicitly define and validate how these local terms map before
 any live execution can use the binding.
 
 This representation is intentionally not added to the current v1 Web request
-payloads, scheduler messages, or model-facing tool schema. The production
-runtime still registers migration with execution disabled, so this increment
-does not start a monitor or make a Web/provider request.
+payloads, scheduler messages, or model-facing tool schema. It remains a local
+terms utility and does not start a monitor or make a Web/provider request by
+itself.
 
 ## Central machine API
 
@@ -141,15 +134,15 @@ callback, or dedicated approval record. Ordinary conversational approval
 expresses user intent but does not provide a trusted cryptographic binding
 between the user, terms, and provider request. The model-facing operation
 does not accept an approval flag, quoted price, currency, monitor ID, chat ID,
-or private material. The current runtime remains disabled, so conversational
-approval cannot start the monitor or provider create path.
+or private material. The runtime relies on this private-conversation workflow
+and does not add a separate approval mechanism.
 
-For any future execution, the first availability request runs immediately. If
-its `locations` result is empty, the existing scheduler stores one non-secret
-30-minute monitor. If a location becomes available, GoAster disables and
-verifies that job before calling creation. No HTTP retry, provider delete,
-automatic rollback, or second create exists. A timeout, lost response, missing
-details, malformed response, or Redis/provider binding uncertainty is a
+The first availability request runs immediately. If its `locations` result is
+empty, the existing scheduler stores one non-secret 30-minute monitor. If a
+location becomes available, GoAster claims and verifies that exact job is
+disabled before calling creation. No HTTP retry, provider delete, automatic
+rollback, or second create exists. A timeout, lost response, missing details,
+malformed response, or Redis/provider binding uncertainty is a
 manual-reconciliation condition. Inspect the token-scoped Hetzner project and
 GoAsterWeb owner/status page before any fresh owner-approved attempt.
 
@@ -169,8 +162,10 @@ model context, log, or shared temporary directory.
 
 The handoff is sent as a document to the positive user ID already stored in
 protected Telegram pairing state. No model-selected chat or group is used.
-If delivery fails, the monitor remains stopped and the protected handoff is
-left for manual inspection; it is not resent automatically.
+The runtime preflights that protected local delivery state before the create
+request. If the Telegram delivery itself fails, the monitor remains stopped
+and the protected handoff is left for manual inspection; it is not resent
+automatically.
 
 The owner then uses the normal GoAsterWeb migration page for exact provider
 verification, private-key upload/match, callback host-key pinning, destination

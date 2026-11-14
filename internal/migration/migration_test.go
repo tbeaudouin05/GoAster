@@ -226,6 +226,21 @@ func TestCreateLostResponseIsOneRequestAndSchedulerDisablesMonitor(t *testing.T)
 	if runs := jobs.RunDue(t.Context()); runs != 0 || fixture.creates.Load() != 1 {
 		t.Fatalf("disabled monitor reran: runs=%d creates=%d", runs, fixture.creates.Load())
 	}
+	// Model-facing starts omit the ID and must converge on one durable slot.
+	singletonJobs, err := scheduler.New(scheduler.Options{Path: filepath.Join(t.TempDir(), "singleton.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.TempDirectory = t.TempDir()
+	first, err := StartMonitor(t.Context(), Request{ServerType: "cx22"}, options, singletonJobs)
+	if err != nil || !first.ManualReview {
+		t.Fatalf("first singleton start: %#v %v", first, err)
+	}
+	second, err := StartMonitor(t.Context(), Request{ServerType: "cx22"}, options, singletonJobs)
+	if err != nil || !second.ManualReview || first.MonitorID != second.MonitorID || fixture.creates.Load() != 2 {
+		t.Fatalf("repeat: %#v %v creates=%d", second, err, fixture.creates.Load())
+	}
+
 }
 
 func TestUnavailableMonitorRemainsEnabledUntilAvailability(t *testing.T) {
@@ -356,6 +371,31 @@ func TestInvalidTokenAndNoDeliveryStopBeforeCreate(t *testing.T) {
 	options.LoadHetznerToken = func() (string, error) { return "", errors.New("synthetic token failure") }
 	if _, err := Create(t.Context(), Request{ServerType: "cx22"}, options); err == nil || fixture.creates.Load() != 0 {
 		t.Fatalf("invalid token create = %v; creates=%d", err, fixture.creates.Load())
+	}
+
+	fixture = newMachineFixture(t)
+	checked := false
+	options = fixture.options(t.TempDir())
+	options.DeliverHandoff = func(context.Context, []byte) error { return nil }
+	options.CheckHandoffDelivery = func() error {
+		checked = true
+		return errors.New("synthetic paired delivery unavailable")
+	}
+	result, err := Create(t.Context(), Request{ServerType: "cx22"}, options)
+	if err == nil || !errors.Is(err, errManualReview) || !result.ManualReview || !checked || fixture.creates.Load() != 0 {
+		t.Fatalf("handoff preflight = %#v, %v; checked=%v creates=%d", result, err, checked, fixture.creates.Load())
+	}
+
+	jobs, err := scheduler.New(scheduler.Options{Path: filepath.Join(t.TempDir(), "jobs.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = StartMonitor(t.Context(), Request{ServerType: "cx22", JobID: "migration-preflight"}, options, jobs)
+	if err == nil || !errors.Is(err, errManualReview) || !result.ManualReview {
+		t.Fatalf("monitor handoff preflight = %#v, %v", result, err)
+	}
+	if _, ok := jobs.Get("migration-preflight"); ok {
+		t.Fatal("handoff preflight left a monitor behind")
 	}
 }
 

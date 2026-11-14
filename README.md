@@ -1,10 +1,6 @@
 # GoAster
 
-**Migration execution is currently disabled:** read-only estimates and
-availability checks may be inspected, but monitor startup, provider creation,
-and automatic monitor resumption are disabled. Before any future billable
-operation, require ordinary explicit user approval in a private conversation;
-that conversational approval is not a trusted cryptographic binding.
+Migration execution and scheduler resumption are disabled pending full cross-service acceptance. Read-only estimates and availability remain available. Before any future billable operation, obtain ordinary explicit approval in a private conversation; no separate approval record is required.
 
 GoAster provides an agent runtime and a Telegram adapter with a subscription-backed OpenAI provider, tools, memory, and scheduling.
 
@@ -125,8 +121,9 @@ For a central migration, use a private conversation and obtain ordinary
 explicit user approval for the exact server type, strict location preference,
 current estimate/currency (or unavailable pricing), and exactly one create
 before any billable operation. This is a conversational workflow requirement,
-not a trusted cryptographic binding; migration execution is currently
-disabled, so approval cannot start a monitor or provider create.
+not a trusted cryptographic binding or a separate approval mechanism. The
+runtime starts the existing 30-minute monitor and keeps terminal or uncertain
+outcomes stopped for manual review.
 
 ## Models
 

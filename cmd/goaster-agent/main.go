@@ -29,6 +29,7 @@ import (
 	"goaster/internal/diagnostics"
 	"goaster/internal/localenv"
 	"goaster/internal/migration"
+	"goaster/internal/scheduler"
 )
 
 const maxChatEnvelopeBytes int64 = 1 << 20
@@ -238,6 +239,25 @@ type migrationSchedulerRuntime interface {
 	Stop()
 }
 
+func newMigrationScheduler(options migration.Options) (migrationSchedulerRuntime, error) {
+	path, err := migration.SchedulerPath()
+	if err != nil {
+		return nil, fmt.Errorf("find migration scheduler path: %w", err)
+	}
+	var jobs migrationSchedulerRuntime
+	created, err := scheduler.New(scheduler.Options{
+		Path: path,
+		Executor: func(ctx context.Context, message string) error {
+			return migration.ScheduledExecutor(ctx, message, jobs, options)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize migration scheduler: %w", err)
+	}
+	jobs = created
+	return jobs, nil
+}
+
 func migrationOperations(options migration.Options, jobs migrationSchedulerRuntime, ready bool) chat.MigrationToolOperations {
 	return chat.MigrationToolOperations{
 		Estimate: func(ctx context.Context, request migration.PriceRequest) (migration.PriceEstimate, error) {
@@ -246,8 +266,11 @@ func migrationOperations(options migration.Options, jobs migrationSchedulerRunti
 		Availability: func(ctx context.Context, request migration.PriceRequest) (migration.AvailabilityResult, error) {
 			return migration.Availability(ctx, request, options)
 		},
-		Start: func(_ context.Context, request migration.Request) (migration.Result, error) {
-			return migration.Result{Status: "unavailable", ServerType: request.ServerType}, errors.New("migration execution is disabled")
+		Start: func(ctx context.Context, request migration.Request) (migration.Result, error) {
+			if !ready || jobs == nil {
+				return migration.Result{Status: "unavailable", ServerType: request.ServerType}, errors.New("migration scheduler capability is unavailable")
+			}
+			return migration.StartMonitor(ctx, request, options, jobs)
 		},
 		Status: func(_ context.Context, jobID string) (migration.StatusResult, error) {
 			if !ready || jobs == nil {
@@ -281,10 +304,7 @@ func serve(store chat.CredentialStore) (serveErr error) {
 	}
 	defer func() { serveErr = errors.Join(serveErr, backgroundManager.Close()) }()
 	migrationOptions := migration.DefaultOptions()
-	// Migration execution remains disabled. Ordinary conversational approval in
-	// a private chat is workflow guidance only, not a trusted cryptographic
-	// binding; do not resume previously stored scheduler jobs through this
-	// runtime.
+	// Execution and scheduler resumption remain disabled pending cross-service acceptance.
 	if err := chat.RegisterMigrationTool(provider, migrationOperations(migrationOptions, nil, false)); err != nil {
 		return fmt.Errorf("register migration tool: %w", err)
 	}
@@ -398,6 +418,7 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 		var request struct {
 			Message     string                `json:"message"`
 			ChatID      int64                 `json:"chat_id"`
+			ChatType    string                `json:"chat_type,omitempty"`
 			UserID      int64                 `json:"user_id,omitempty"`
 			Attachments []attachment.Incoming `json:"attachments,omitempty"`
 		}
@@ -679,7 +700,8 @@ func handlerWithMemoryAndRegistryWithSecret(provider chat.Provider, memory *chat
 				}{"model_recovery", notice})
 			}
 		}
-		requestContext := chat.WithToolCallObserver(r.Context(), observer)
+		requestContext := chat.WithConversationType(r.Context(), request.ChatType)
+		requestContext = chat.WithToolCallObserver(requestContext, observer)
 		requestContext = chat.WithRuntimeFailureOperation(requestContext, "agent.chat")
 		values, environmentErr := runtimeEnvironment()
 		if environmentErr != nil {
