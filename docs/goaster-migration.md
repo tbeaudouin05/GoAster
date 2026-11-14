@@ -27,6 +27,28 @@ The source workflow is deliberately small:
 The task directory and handoff are intentionally retained for the owner’s
 manual cleanup. There is no automatic cleanup implementation.
 
+## Local-only resource-term binding
+
+The source now has a local `ResourceTerms` v1 representation for the complete
+non-price terms that can be carried safely without changing the current Web
+contract: server type ID/name, image ID/name, architecture, network IDs and
+public-network settings, explicit location policy, local operation identity,
+and an acknowledgement of exactly one uncapped billable create. A canonical
+JSON form sorts only the set-like network and location lists; an unkeyed
+SHA-256 digest covers every included non-price term. Price is intentionally
+not represented or bound here, and the digest is not authentication,
+authorization, or owner approval.
+
+This local digest does not establish who produced the terms or that an owner
+approved them. Compatibility with GoAsterWeb remains unverified: a future Web
+contract must explicitly define and validate how these local terms map before
+any live execution can use the binding.
+
+This representation is intentionally not added to the current v1 Web request
+payloads, scheduler messages, or model-facing tool schema. The production
+runtime still registers migration with execution disabled, so this increment
+does not start a monitor or make a Web/provider request.
+
 ## Central machine API
 
 The fixed public origin is `https://goasterweb-thomas.fly.dev` with no trailing
